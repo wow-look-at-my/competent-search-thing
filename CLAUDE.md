@@ -259,15 +259,25 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 
 - After the build, `.github/scripts/screenshots.ts` (run via
   `wow-look-at-my/actions@typescript#latest`, `file:` input) boots the
-  freshly built binary under Xvfb and captures three PNGs into
-  `screenshots/` at the workspace root: `01-summoned.png` (empty bar),
-  `02-results.png` (query "rep" with highlighted matches),
-  `03-selection.png` (selection moved down two rows). They upload as
-  the `screenshots-<sha>` artifact (`if: always()`) for visual
+  freshly built binary under Xvfb and captures three PNGs PER BUILTIN
+  THEME into `screenshots/<theme>/` (dark, light) at the workspace
+  root: `01-summoned.png` (empty bar), `02-results.png` (query "rep"
+  with highlighted matches), `03-selection.png` (selection moved down
+  two rows). Each theme gets a FRESH app process reading a temp
+  config.json with that `theme` set (no hot-reload reliance);
+  Xvfb/openbox stay up across themes. Everything uploads as the
+  `screenshots-<sha>` artifact (`if: always()`; upload-artifact walks
+  `screenshots/` recursively, so no per-theme path config) for visual
   comparison between runs. The step FAILS the job -- and with it the
   required `all-builds` status -- when the window never maps, a capture
   is blank/tiny, the hotkey grab is refused, or Escape does not hide
   the bar; treat that as a real UI regression, not flakiness to mute.
+  Blank detection is PER-THEME (dark mean band 500..60000, light
+  30000..64000 -- the light UI averages ~61k/65535, above dark's old
+  ceiling -- plus per-shot size floors); the bounds were derived from
+  real local captures recorded in the script comment. If the UI or a
+  builtin theme changes deliberately, RE-DERIVE them from a local run
+  (CLAUDE.md "To capture locally" below); never guess.
 - Mechanics (mirrors what was verified manually): deterministic
   ~200-file fixture tree + `config.json` in a temp dir
   (`COMPETENT_SEARCH_CONFIG_DIR`), `Xvfb :99` at 1280x800x24, openbox

@@ -247,8 +247,11 @@ last write. Note that only the `theme` field of `config.json` is
 re-read live -- roots, excludes, hotkey, and the other fields still
 require a restart.
 
-Per-theme CI screenshots will land in this README once the
-screenshot-capture pipeline (a parallel PR) is merged.
+Per-theme CI screenshots are active: every push captures the full
+summoned/results/selection shot set once per builtin theme into
+`screenshots/dark/` and `screenshots/light/`, uploaded as the
+`screenshots-<sha>` artifact and asserted against per-theme
+brightness bands and size floors (see `.github/scripts/screenshots.ts`).
 
 ## Wails v2 vs v3
 
