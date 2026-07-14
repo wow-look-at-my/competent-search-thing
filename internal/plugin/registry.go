@@ -241,10 +241,10 @@ type builtinBase struct {
 	bangs []string
 }
 
-func (b *builtinBase) id() string                            { return b.pid }
-func (b *builtinBase) displayName() string                   { return b.name }
-func (b *builtinBase) bangNames() []string                   { return b.bangs }
-func (b *builtinBase) debounce() time.Duration               { return 0 }
+func (b *builtinBase) id() string                                 { return b.pid }
+func (b *builtinBase) displayName() string                        { return b.name }
+func (b *builtinBase) bangNames() []string                        { return b.bangs }
+func (b *builtinBase) debounce() time.Duration                    { return 0 }
 func (b *builtinBase) match(string, *AppInfo) (string, int, bool) { return "", 0, false }
 
 // addBuiltins registers the builtin providers (bang suggestions, app
