@@ -10,3 +10,6 @@ profile.json
 # run `cd frontend && npm install && npm run build` before any Go build.
 frontend/dist/
 frontend/node_modules/
+
+# Agent worktrees created by the Claude Code harness (parallel workers).
+.claude/worktrees/
