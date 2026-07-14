@@ -1,6 +1,8 @@
 // CI screenshot capture: boots the real app under Xvfb, summons it with the
-// real Alt+Space X11 grab, types a query, and captures three PNGs into
-// screenshots/ at the workspace root. Any failure (window never maps, blank
+// real Alt+Space X11 grab, types a query, and captures three PNGs PER THEME
+// (dark, light) into screenshots/<theme>/ at the workspace root. Each theme
+// gets a fresh app process reading a config.json with that theme set; Xvfb
+// and openbox stay up across themes. Any failure (window never maps, blank
 // webview, hotkey grab refused, Escape does not hide) fails the step -- a
 // missing or blank bar is a real UI regression signal.
 //
@@ -128,20 +130,23 @@ for (const f of files) fs.writeFileSync(path.join(fixture, f), "");
 
 const cfgDir = path.join(work, "cfg");
 fs.mkdirSync(cfgDir, { recursive: true });
-fs.writeFileSync(
-  path.join(cfgDir, "config.json"),
-  JSON.stringify(
-    {
-      roots: [fixture],
-      excludes: [".git", "node_modules", ".cache"],
-      hotkey: "alt+space",
-      rescanIntervalMinutes: 0,
-      maxResults: 50,
-    },
-    null,
-    2,
-  ),
-);
+function writeConfig(theme: string): void {
+  fs.writeFileSync(
+    path.join(cfgDir, "config.json"),
+    JSON.stringify(
+      {
+        roots: [fixture],
+        excludes: [".git", "node_modules", ".cache"],
+        hotkey: "alt+space",
+        rescanIntervalMinutes: 0,
+        maxResults: 50,
+        theme,
+      },
+      null,
+      2,
+    ),
+  );
+}
 
 // ---- openbox config: strip the default A-space binding ----------------------
 // Stock openbox binds Alt+Space to the client menu; that grab wins the race
@@ -184,8 +189,36 @@ async function stop(p: Proc): Promise<void> {
   if (!gone) p.child.kill("SIGKILL");
 }
 
-const shotDir = path.join(workspace, "screenshots");
-fs.mkdirSync(shotDir, { recursive: true });
+// Per-theme assertion bounds, derived from real local captures on the same
+// fixture (do not guess -- re-derive if the UI changes). Measured values:
+//   dark  01/02/03 = 3556/37898/37912 bytes, means  6712/ 8354/ 8342
+//   light 01/02/03 = 7357/38363/38335 bytes, means 62146/61033/61039
+// A dead/black webview captures near mean 0; solid white near 65535. The
+// light theme sits ~61k, so its band must clear 60k yet still reject a
+// blank-white window; the size floors do the rest (a flat rectangle
+// compresses to a few hundred bytes).
+interface ThemeSpec {
+  name: string;
+  meanMin: number;
+  meanMax: number;
+  floors: Record<string, number>;
+}
+const themes: ThemeSpec[] = [
+  {
+    name: "dark",
+    meanMin: 500,
+    meanMax: 60000,
+    floors: { "01-summoned.png": 2500, "02-results.png": 10000, "03-selection.png": 10000 },
+  },
+  {
+    name: "light",
+    meanMin: 30000,
+    meanMax: 64000,
+    floors: { "01-summoned.png": 4000, "02-results.png": 12000, "03-selection.png": 12000 },
+  },
+];
+
+const shotRoot = path.join(workspace, "screenshots");
 
 async function findBarWindow(): Promise<string | undefined> {
   const out = await $`xwininfo -root -tree`.silent().nothrow();
@@ -199,17 +232,17 @@ async function mapState(wid: string): Promise<string> {
   return m?.[1] ?? "unknown";
 }
 
-async function capture(wid: string, name: string, minBytes: number): Promise<void> {
-  const file = path.join(shotDir, name);
+async function capture(wid: string, theme: ThemeSpec, name: string): Promise<void> {
+  const file = path.join(shotRoot, theme.name, name);
   await $`import -window ${wid} ${file}`.silent();
   const size = fs.statSync(file).size;
   const mean = parseFloat((await $`identify -format %[mean] ${file}`.silent()).stdout.trim());
-  core.info(`captured ${name}: ${size} bytes, mean ${mean.toFixed(0)}`);
-  // A dead/black webview captures near mean 0; solid white near 65535. The
-  // real dark UI sits well inside (500, 60000), and text rows push the PNG
-  // over minBytes (a flat blank rectangle compresses far smaller).
-  if (!(mean > 500 && mean < 60000)) throw new Error(`${name} looks blank (mean ${mean})`);
-  if (size < minBytes) throw new Error(`${name} suspiciously small (${size} bytes < ${minBytes})`);
+  core.info(`captured ${theme.name}/${name}: ${size} bytes, mean ${mean.toFixed(0)}`);
+  const minBytes = theme.floors[name] ?? 2500;
+  if (!(mean > theme.meanMin && mean < theme.meanMax))
+    throw new Error(`${theme.name}/${name} looks blank (mean ${mean}, want ${theme.meanMin}..${theme.meanMax})`);
+  if (size < minBytes)
+    throw new Error(`${theme.name}/${name} suspiciously small (${size} bytes < ${minBytes})`);
 }
 
 async function launchApp(extraEnv: Record<string, string>): Promise<Proc> {
@@ -224,7 +257,8 @@ async function launchApp(extraEnv: Record<string, string>): Promise<Proc> {
   return app;
 }
 
-async function summonAndCapture(): Promise<void> {
+async function summonAndCapture(theme: ThemeSpec): Promise<void> {
+  fs.mkdirSync(path.join(shotRoot, theme.name), { recursive: true });
   // Park the cursor over where the query row will be, so it does not
   // hover-select a result row (and the bar opens on this display).
   await $`xdotool mousemove 640 140`.silent();
@@ -234,17 +268,17 @@ async function summonAndCapture(): Promise<void> {
     return w !== undefined && (await mapState(w)) === "IsViewable" ? w : undefined;
   });
   await sleep(1000); // let the webview paint
-  await capture(wid, "01-summoned.png", 2500);
+  await capture(wid, theme, "01-summoned.png");
 
   await $`xdotool windowactivate ${wid}`.silent().nothrow();
   await sleep(400);
   await $`xdotool type --delay 60 rep`.silent();
   await sleep(700);
-  await capture(wid, "02-results.png", 10000);
+  await capture(wid, theme, "02-results.png");
 
   await $`xdotool key Down Down`.silent();
   await sleep(400);
-  await capture(wid, "03-selection.png", 10000);
+  await capture(wid, theme, "03-selection.png");
 
   // Escape must hide the bar -- a real behavior assertion, not just a shot.
   await $`xdotool key Escape`.silent();
@@ -262,18 +296,27 @@ try {
   spawnLogged("openbox", "openbox", ["--config-file", rcPath], {});
   await sleep(500);
 
-  let app = await launchApp({});
-  try {
-    await summonAndCapture();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    core.warning(`first capture attempt failed (${msg}); retrying with WEBKIT_DISABLE_DMABUF_RENDERER=1`);
-    core.info(`app log so far:\n${app.log}`);
-    await stop(app);
-    app = await launchApp({ WEBKIT_DISABLE_DMABUF_RENDERER: "1" });
-    await summonAndCapture();
+  for (const theme of themes) {
+    writeConfig(theme.name);
+    let app = await launchApp({});
+    try {
+      try {
+        await summonAndCapture(theme);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        core.warning(
+          `${theme.name}: first capture attempt failed (${msg}); retrying with WEBKIT_DISABLE_DMABUF_RENDERER=1`,
+        );
+        core.info(`app log so far:\n${app.log}`);
+        await stop(app);
+        app = await launchApp({ WEBKIT_DISABLE_DMABUF_RENDERER: "1" });
+        await summonAndCapture(theme);
+      }
+    } finally {
+      await stop(app); // fresh process per theme; Xvfb/openbox stay up
+    }
   }
-  core.info(`screenshots written to ${shotDir}`);
+  core.info(`screenshots written to ${shotRoot}`);
 } catch (err) {
   const msg = err instanceof Error ? err.message : String(err);
   for (const p of procs) {
