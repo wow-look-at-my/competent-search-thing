@@ -56,6 +56,9 @@ func naiveQuery(entries []refEntry, q string, limit int) []Result {
 		}
 		return a.path < b.path
 	})
+	if len(matches) == 0 {
+		return nil // Store.Query returns nil for no matches
+	}
 	if len(matches) > limit {
 		matches = matches[:limit]
 	}
@@ -227,7 +230,8 @@ func TestCompareJoined(t *testing.T) {
 		{"/a", "x", "/a", "x", 0},
 		{"/a", "x", "/a", "y", -1},
 		{"/a", "y", "/a", "x", 1},
-		{"/a", "x", "/a/b", "x", -1}, // shorter total path
+		{"/a", "x", "/a/x", "y", -1}, // "/a/x" is a prefix of "/a/x/y": shorter first
+		{"/a", "x", "/a/b", "x", 1},  // pure lexicographic: "/a/x" > "/a/b/x" at byte 3
 		{"/", "x", "/x", "y", -1},    // root dir: "/x" vs "/x/y", no doubled separator
 		{"/ab", "c", "/a", "bc", 1},  // "/ab/c" > "/a/bc" at byte 2
 	}

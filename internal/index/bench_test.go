@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,19 +130,16 @@ func walkFixture() (string, int, error) {
 
 func BenchmarkWalk(b *testing.B) {
 	root, want, err := walkFixture()
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.Nil(b, err)
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		st := NewStore()
 		stats, err := Walk(context.Background(), st, []string{root}, nil, nil)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if stats.Indexed != want {
-			b.Fatalf("indexed %d entries, want %d", stats.Indexed, want)
-		}
+		require.Nil(b, err)
+
+		require.Equal(b, want, stats.Indexed)
+
 	}
 	b.ReportMetric(float64(want)*float64(b.N)/b.Elapsed().Seconds(), "entries/s")
 }
