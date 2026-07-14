@@ -33,6 +33,7 @@ type BangQuery struct {
 // concurrent use.
 type BangSet struct {
 	sigils  map[rune]struct{}
+	primary string            // first valid configured sigil
 	bangs   map[string]string // bang name -> provider id
 	aliases map[string]string // alias -> bang name
 	errs    []error
@@ -61,12 +62,16 @@ func NewBangSet(sigils []string, aliases map[string]string) *BangSet {
 			continue
 		}
 		s.sigils[r] = struct{}{}
+		if s.primary == "" {
+			s.primary = sig
+		}
 	}
 	if len(s.sigils) == 0 {
 		for _, sig := range defaultSigils {
 			r, _ := utf8.DecodeRuneInString(sig)
 			s.sigils[r] = struct{}{}
 		}
+		s.primary = defaultSigils[0]
 	}
 	for alias, bang := range aliases {
 		s.aliases[strings.ToLower(alias)] = strings.ToLower(bang)
@@ -77,6 +82,10 @@ func NewBangSet(sigils []string, aliases map[string]string) *BangSet {
 // Errors returns the sigil-validation problems NewBangSet recorded,
 // for logging. A BangSet with errors is still fully usable.
 func (s *BangSet) Errors() []error { return s.errs }
+
+// Primary returns the first (valid) configured sigil -- the one used
+// when synthesizing bang text, e.g. bang-suggestion titles.
+func (s *BangSet) Primary() string { return s.primary }
 
 // Register maps a bang name (lowercased) to a provider. Duplicate
 // registrations fail: the first registration wins.

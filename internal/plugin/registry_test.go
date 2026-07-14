@@ -297,7 +297,7 @@ func TestNewBuildsProvidersAndCollectsErrors(t *testing.T) {
 
 	require.Contains(t, r.byID, "alpha")
 	require.Contains(t, r.byID, "beta")
-	require.Len(t, r.providers, 2)
+	require.Len(t, r.providers, 4, "two manifests + the app and apps builtins")
 
 	joined := errors.Join(r.Errors()...).Error()
 	require.Contains(t, joined, "plugins/broken/manifest.json")
@@ -357,7 +357,7 @@ func TestNewDuplicateManifestIDSkipped(t *testing.T) {
 		Logf:      func(string, ...any) {},
 	})
 	defer r.Close()
-	require.Len(t, r.providers, 1)
+	require.Len(t, r.providers, 3, "one manifest survives beside the two builtins")
 	require.ErrorContains(t, errors.Join(r.Errors()...), "already taken")
 }
 
@@ -381,6 +381,54 @@ func TestNewUnknownTypeRecorded(t *testing.T) {
 	m := &Manifest{ID: "weird", Type: "carrier-pigeon"}
 	r := New(Options{Manifests: []*Manifest{m}, Logf: func(string, ...any) {}})
 	defer r.Close()
-	require.Empty(t, r.providers)
+	require.NotContains(t, r.byID, "weird")
 	require.ErrorContains(t, errors.Join(r.Errors()...), "unknown type")
+}
+
+func TestNewRegistersBuiltins(t *testing.T) {
+	r := New(Options{Logf: func(string, ...any) {}})
+	defer r.Close()
+	require.NotNil(t, r.suggest)
+	require.Contains(t, r.byID, "bangs")
+	require.Contains(t, r.byID, "app")
+	require.Contains(t, r.byID, "apps")
+	require.Len(t, r.providers, 2, "the suggestions provider stays out of the normal fan-out")
+	require.Empty(t, r.Errors())
+
+	pid, bang, ok := r.bangs.Resolve("launch")
+	require.True(t, ok)
+	require.Equal(t, "apps", pid)
+	require.Equal(t, "launch", bang)
+	pid, _, ok = r.bangs.Resolve("quit")
+	require.True(t, ok)
+	require.Equal(t, "app", pid)
+}
+
+func TestNewDisablesBuiltinsPerID(t *testing.T) {
+	r := New(Options{
+		Entries: map[string]Entry{"bangs": {Disabled: true}, "apps": {Disabled: true}},
+		Logf:    func(string, ...any) {},
+	})
+	defer r.Close()
+	require.Nil(t, r.suggest)
+	require.NotContains(t, r.byID, "apps")
+	require.Contains(t, r.byID, "app")
+	_, _, ok := r.bangs.Resolve("launch")
+	require.False(t, ok, "disabled builtins register no bangs")
+}
+
+func TestNewManifestCannotShadowBuiltin(t *testing.T) {
+	evil := manifestFor("evil", "quit") // wants the builtin quit bang
+	poser := manifestFor("app")         // wants a builtin id
+	r := New(Options{Manifests: []*Manifest{evil, poser}, Logf: func(string, ...any) {}})
+	defer r.Close()
+
+	joined := errors.Join(r.Errors()...).Error()
+	require.Contains(t, joined, `bang "quit" already registered`)
+	require.Contains(t, joined, "already taken")
+
+	pid, _, ok := r.bangs.Resolve("quit")
+	require.True(t, ok)
+	require.Equal(t, "app", pid, "the builtin keeps its bang")
+	require.IsType(t, &appCommandProvider{}, r.byID["app"], "the builtin keeps its id")
 }

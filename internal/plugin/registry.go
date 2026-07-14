@@ -231,12 +231,40 @@ func New(opts Options) *Registry {
 	return r
 }
 
+// builtinBase supplies the boring provider methods shared by the
+// builtin providers: fixed id/name/bangs, no debounce, and -- because
+// builtins are bang-targeted or registry-special-cased only -- no
+// non-targeted matching.
+type builtinBase struct {
+	pid   string
+	name  string
+	bangs []string
+}
+
+func (b *builtinBase) id() string                            { return b.pid }
+func (b *builtinBase) displayName() string                   { return b.name }
+func (b *builtinBase) bangNames() []string                   { return b.bangs }
+func (b *builtinBase) debounce() time.Duration               { return 0 }
+func (b *builtinBase) match(string, *AppInfo) (string, int, bool) { return "", 0, false }
+
 // addBuiltins registers the builtin providers (bang suggestions, app
 // commands, installed-app launcher) unless individually disabled.
 // Builtins register BEFORE external plugins so a manifest can never
-// shadow an app bang. The provider implementations live in
-// builtin_*.go (next increment); nothing to register yet.
+// shadow an app bang or claim a builtin id.
 func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
+	if !disabled(builtinSuggestID) {
+		s := newBangSuggestProvider(r)
+		// Special-cased by Dispatch, never part of the normal fan-out:
+		// present in byID (so the id stays reserved) but not providers.
+		r.suggest = s
+		r.byID[builtinSuggestID] = s
+	}
+	if !disabled(builtinAppID) {
+		r.register(newAppCommandProvider(opts.Version))
+	}
+	if !disabled(builtinAppsID) {
+		r.register(newAppsProvider(opts.InstalledApps))
+	}
 }
 
 // register adds a provider to the dispatch list and claims its bangs.
