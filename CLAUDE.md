@@ -10,15 +10,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   hide-on-close, fixed 680x460), binds the App object. Deliberately has
   NO test file and stays minimal (see coverage note below).
 - `internal/app` -- the Wails-bound App object and its methods
-  (Search/Open/Reveal/Hide/Startup/Shutdown). Bound methods appear in
-  JS as `window.go.app.App.<Method>`. Holds the `index.Manager`;
-  `Startup` saves the runtime ctx, registers the global hotkey (once;
-  parse or register failure = log once, run on without it), and kicks
-  the initial disk walk in a goroutine; when the walk finishes,
-  `startWatch` brings up a `watch.Watcher` + `watch.Rescanner` pair;
-  `Shutdown` (wired to Wails OnShutdown) releases the hotkey and stops
-  them cleanly, and also flags a still-running initial build to skip
-  starting them. The hotkey callback `toggle` (rate-limited 250ms
+  (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/Shutdown).
+  Bound methods appear in JS as `window.go.app.App.<Method>`. Holds
+  the `index.Manager`; `Startup` saves the runtime ctx, registers the
+  global hotkey (once; parse or register failure = log once, run on
+  without it), starts theme hot reload (theme.go: a dedicated
+  fsnotify watcher on the config dir + its themes/ subdir, events
+  debounced 300ms into "theme:changed"; any failure = log + run on
+  without live reload), and kicks the initial disk walk in a
+  goroutine; when the walk finishes, `startWatch` brings up a
+  `watch.Watcher` + `watch.Rescanner` pair; `Shutdown` (wired to
+  Wails OnShutdown) releases the hotkey and stops them plus the theme
+  watcher cleanly, and also flags a still-running initial build to
+  skip starting them. GetTheme re-loads config.json (ONLY the theme
+  field is consumed live) and returns theme.Resolve's token map --
+  errors are logged once per distinct message and fall back to dark;
+  GetCustomCSS returns <configDir>/themes/custom.css verbatim when
+  <= 64KB (the unvalidated escape hatch), else "". The hotkey callback `toggle` (rate-limited 250ms
   against key autorepeat) hides the bar when visible, else
   `showOnCursorDisplay`: platform.CursorDisplays -> PickDisplay ->
   BarPosition (absolute coords), then darwin = native.MoveWindow,
@@ -28,7 +36,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   absolute; verified in the v2.13.0 sources), any failure -> WindowCenter;
   then WindowShow + "app:shown". Events emitted (all guarded so a nil
   ctx no-ops): "index:progress" {indexed,done,seconds},
-  "watch:degraded" {watched,dropped,overflows}, "app:shown". ALL Wails
+  "watch:degraded" {watched,dropped,overflows}, "app:shown",
+  "theme:changed" (no payload; frontend refetches
+  GetTheme/GetCustomCSS). ALL Wails
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams`/`platformSeams` in window.go, defaults in New); unit
   tests MUST replace them (see newTestApp) -- real runtime funcs abort
@@ -53,10 +63,35 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   thread-safe. Benchmarks build synthetic 100k/1M-entry stores in
   memory (see bench_test.go) and a ~50k-entry disk tree.
 - `internal/config` -- config.json load/save (roots, excludes, hotkey,
-  rescanIntervalMinutes, maxResults). Lives under os.UserConfigDir();
-  the `COMPETENT_SEARCH_CONFIG_DIR` env var overrides the directory
-  (tests rely on this). `Load` never crashes: missing file -> defaults
-  written, corrupt file -> defaults + error returned for logging.
+  rescanIntervalMinutes, maxResults, theme). Lives under
+  os.UserConfigDir(); the `COMPETENT_SEARCH_CONFIG_DIR` env var
+  overrides the directory (tests rely on this). `Load` never crashes:
+  missing file -> defaults written, corrupt file -> defaults + error
+  returned for logging. `Dir()` exposes the directory holding
+  config.json (also the parent of themes/).
+- `internal/theme` -- design-token resolution. WARNING: the 22
+  `TokenNames` (bg, bg-elevated, fg, fg-dim, accent, accent-fg,
+  selection-bg, selection-fg, border, highlight, warning, badge-bg,
+  badge-fg, scrollbar, font-family, font-size, font-size-small,
+  radius, gap, padding, bg-opacity, blur) are a STABLE PUBLIC
+  CONTRACT -- the frontend exposes each as `--sb-<token>`, the README
+  documents the table, and the plugin workstream styles plugin
+  accents/badges against them (accent/accent-fg primary,
+  badge-bg/badge-fg reserved for result badges); never rename or
+  remove one. Builtins dark.json (the original palette) + light.json
+  (extends dark) are embedded via go:embed. `Resolve(name,
+  configDir)`: builtin lookup first (not shadowable), else
+  `<configDir>/themes/<name>.json`; merges over the extends chain
+  (builtin-or-user, depth cap 4, cycle detection), gap-fills from
+  dark so the result always covers every token; validates strictly
+  (unknown keys -> error naming them; values whitelisted to hex /
+  rgb()/rgba()/hsl()/hsla() / px|em|rem|% lengths / bare numbers,
+  font-family to a tight charset; url(, expression(, @import, `;`,
+  `{`, `}` hard-rejected). ANY error returns the dark builtin
+  ALONGSIDE the error (caller logs; never crash). sync_test.go is the
+  drift guard: it parses frontend/src/style.css's :root --sb-* block
+  and requires it token-for-token identical to dark.json -- edit both
+  together or the build fails.
 - `internal/watch` -- keeps the index live after the initial walk.
   `Watcher` (watch.go + events.go): one fsnotify watch per live indexed
   directory plus the roots -- fsnotify is used uniformly on ALL
@@ -138,11 +173,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   -> Hide; runtime events: "app:shown" -> focus+select+refresh,
   "index:progress" -> status text, "watch:degraded" -> warning chip)
   + `src/render.ts` (row DOM: icon, name with highlighted match, dim
-  parent dir; pure text nodes, no innerHTML) + `src/style.css` (dark
-  Spotlight-ish bar; dir ellipsizes before the name; thin scrollbar)
-  + `src/wails.d.ts` (ambient types for the Wails-injected `window.go`
-  / `window.runtime` incl. EventsOn and the event payload shapes --
-  keep in sync with internal/app's payload structs).
+  parent dir; pure text nodes, no innerHTML) + `src/theme.ts`
+  (initTheme called first in wire(): fetches GetTheme and sets each
+  token as `--sb-<k>` on <html>, injects GetCustomCSS as the text of
+  the single managed `<style id="sb-custom-css">`, refetches on
+  "theme:changed") + `src/style.css` (Spotlight-ish bar, dark by
+  default; dir ellipsizes before the name; thin scrollbar; ALL
+  colors/sizes/effects flow through var(--sb-*) -- the :root block
+  holds the dark fallbacks and MUST stay identical to
+  internal/theme/builtin/dark.json, enforced by
+  internal/theme/sync_test.go) + `src/wails.d.ts` (ambient types for
+  the Wails-injected `window.go` / `window.runtime` incl. EventsOn
+  and the event payload shapes -- keep in sync with internal/app's
+  payload structs).
 
 ## Build / test
 
