@@ -63,9 +63,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   values (nil plugin entries/bang aliases -> empty maps, empty sigils
   -> the ! / @ defaults); entry settings are opaque json.RawMessage
   forwarded verbatim to that plugin.
-- `internal/plugin` -- the plugin system's pure core (transports,
-  registry/dispatch, and app wiring land in later increments; see the
-  headers of each file). schema.go: versioned JSON wire protocol
+- `internal/plugin` -- the plugin system, pure and headless-testable
+  (only the app wiring lands in a later increment). schema.go:
+  versioned JSON wire protocol
   (Request/Response/Result/Action, v=1) and `SanitizeResponse`, which
   clamps/validates everything an external plugin returns: 20-result
   cap, rune caps (title 200/subtitle 300/badge 24/field 40+200, max 8
@@ -93,7 +93,47 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   defaults ! / @), Register (dup = error, first wins), Parse (sigil +
   [a-zA-Z0-9_-]* name lowercased + end-or-space + raw rest), Resolve
   (exact > alias > unique prefix, canonical bang returned), sorted
-  Candidates(partial). Exhaustively unit-tested, table-driven.
+  Candidates(partial), Primary() = first configured sigil.
+  command.go/http.go: the transports behind the tiny `transport` seam
+  -- command = one shell-free subprocess per query (request JSON to
+  stdin then closed, cwd = Manifest.Dir, argv[0] with a separator
+  resolved against it, stdout capped 1 MiB, stderr capped 8 KiB and
+  quoted in errors, ctx timeout hard-kills with 250ms WaitDelay);
+  http = POST to the manifest url (ONE shared keep-alive client per
+  Registry, max 3 http(s)-only redirect hops, 2xx required, body
+  capped 1 MiB). Both error on invalid JSON and v != 1. registry.go:
+  `New(Options) *Registry` wraps manifests in providers (settings
+  default "{}", request context filtered to the manifest-declared
+  parts, `SanitizeResponse` applied HERE so trusted builtins bypass
+  it), registers builtins FIRST (a manifest can never shadow a
+  builtin bang or id; dup bang/id = recorded error, first wins),
+  honors the global kill switch + per-id disable entries, and
+  collects every setup problem for `Errors()`. `Dispatch(ctx, query,
+  gen, appCtx, emit)` returns `TargetInfo` synchronously and fans out
+  one goroutine per matching provider: ctx-abortable debounce
+  (clamped 0..2s here -- DebounceMS arrives unclamped), per-plugin
+  timeout ctx (manifest timeout_ms; builtins 1.5s), panic recovery,
+  per-provider 5s-throttled logging (throttle.go), focused boost
+  added and clamped at 100, emit only with results and only while ctx
+  is live -- emit runs on provider goroutines and MUST be
+  goroutine-safe. Routing: resolved bang (exact/alias/unique-prefix)
+  + space => ONLY that provider, all trigger gating bypassed;
+  bare/partial/ambiguous or resolved-without-space sigil => ONLY the
+  builtin suggestions provider; bang-shaped text with zero candidates
+  => normal trigger fan-out on the raw query. `Close()` drops idle
+  HTTP connections; reload = build a new Registry, swap atomically,
+  Close the old. Builtins (targeted-only, in-process, no sanitizer):
+  builtin_bangs.go "bangs"/Commands -- bang completions (resolved
+  bang first, primary-sigil titles, typed-sigil set_query preserving
+  the query rest, cap 12); builtin_app.go "app"/App Commands --
+  !rescan/!reload/!config/!version/!quit, one run_builtin result each
+  (version subtitle from Options.Version); builtin_apps.go
+  "apps"/Launch -- !app/!launch over the Options.InstalledApps
+  snapshot (empty query = first 15 alphabetical, prefix 100 /
+  substring 80, cap 15, run_command argv via `parseDesktopExec`:
+  quotes, backslash escapes, %-field codes stripped). Exhaustively
+  unit-tested, table-driven, plus an end-to-end manifest ->
+  registry -> /bin/sh transport dispatch test.
 - `internal/watch` -- keeps the index live after the initial walk.
   `Watcher` (watch.go + events.go): one fsnotify watch per live indexed
   directory plus the roots -- fsnotify is used uniformly on ALL

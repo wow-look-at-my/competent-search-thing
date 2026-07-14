@@ -13,10 +13,20 @@
 //     paths plus an optional focused-app gate and score boost;
 //   - manifest loading and validation (manifest.go);
 //   - the bang registry (bangs.go): "!name" style targeting parsed
-//     from the query and resolved to a single provider.
+//     from the query and resolved to a single provider;
+//   - the transports (command.go: one subprocess per query; http.go:
+//     POST with a shared keep-alive client), both capped and killed
+//     by the per-plugin timeout;
+//   - the provider registry and async dispatch pipeline
+//     (registry.go): New(Options) -> Registry, Dispatch fanning each
+//     query out to matching providers on their own goroutines;
+//   - the builtin providers (builtin_bangs.go bang suggestions,
+//     builtin_app.go app commands, builtin_apps.go installed-app
+//     launcher) -- trusted in-process providers that may emit the
+//     internal-only actions.
 //
-// Transports, the provider registry, and the dispatch pipeline build
-// on these types in later files. File search never waits on plugins:
-// plugin results arrive asynchronously and render below the instant
-// file results.
+// The Wails app wiring (bound methods, events, cancellation by query
+// generation) lands in internal/app. File search never waits on
+// plugins: plugin results arrive asynchronously and render below the
+// instant file results.
 package plugin
