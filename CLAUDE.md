@@ -53,10 +53,47 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   thread-safe. Benchmarks build synthetic 100k/1M-entry stores in
   memory (see bench_test.go) and a ~50k-entry disk tree.
 - `internal/config` -- config.json load/save (roots, excludes, hotkey,
-  rescanIntervalMinutes, maxResults). Lives under os.UserConfigDir();
-  the `COMPETENT_SEARCH_CONFIG_DIR` env var overrides the directory
-  (tests rely on this). `Load` never crashes: missing file -> defaults
-  written, corrupt file -> defaults + error returned for logging.
+  rescanIntervalMinutes, maxResults, plugins {disabled, entries
+  {<id>: {disabled, settings}}}, bangs {sigils, aliases}). Lives under
+  os.UserConfigDir(); the `COMPETENT_SEARCH_CONFIG_DIR` env var
+  overrides the directory (tests rely on this); `Dir()` exposes that
+  directory (the plugins/ dir lives inside it, next to config.json).
+  `Load` never crashes: missing file -> defaults written, corrupt file
+  -> defaults + error returned for logging. `Normalize` repairs zero
+  values (nil plugin entries/bang aliases -> empty maps, empty sigils
+  -> the ! / @ defaults); entry settings are opaque json.RawMessage
+  forwarded verbatim to that plugin.
+- `internal/plugin` -- the plugin system's pure core (transports,
+  registry/dispatch, and app wiring land in later increments; see the
+  headers of each file). schema.go: versioned JSON wire protocol
+  (Request/Response/Result/Action, v=1) and `SanitizeResponse`, which
+  clamps/validates everything an external plugin returns: 20-result
+  cap, rune caps (title 200/subtitle 300/badge 24/field 40+200, max 8
+  fields), control chars -> spaces everywhere, icon = builtin name or
+  <=32-byte glyph, accent_color regex, score default 50 clamp 0..100,
+  action validation (open_path abs path, open_url http(s)+host,
+  copy_text <=8 KiB, run_command 1..16 argv <=1024 B each and the
+  whole RESULT is dropped unless the manifest sets allow_run_command;
+  internal-only set_query/run_builtin always stripped; anything
+  removed gets a human-readable reason for logging). trigger.go:
+  `Trigger` Compile/Match/Boost -- prefix (case-insensitive,
+  rune-folded) / regex (ci RE2 on the RAW query) / all_queries paths
+  (first match wins the stripped value), min_query_len in runes of
+  the STRIPPED query gating all paths (defaults 2 when all_queries),
+  optional focused-app gate (name/exe ci RE2, both-empty rejected at
+  Compile, fail-closed) + focused_boost clamped 0..100. manifest.go:
+  `LoadDir(<configDir>/plugins)` -- one error per broken manifest
+  (path-prefixed), missing dir = no plugins no error, duplicate id ->
+  first alphabetical dir wins, defaults (v=1, name=id, timeout_ms
+  1500 clamp 100..10000, bangs=[id]), bangs lowercased+deduped,
+  context subset of {focused,running,installed}, empty bangs + nil
+  trigger rejected as unreachable, trigger compiled on load.
+  bangs.go: `BangSet` -- config-driven sigils (must be one non-letter/
+  digit/space rune; invalid ones recorded via Errors(), all-invalid ->
+  defaults ! / @), Register (dup = error, first wins), Parse (sigil +
+  [a-zA-Z0-9_-]* name lowercased + end-or-space + raw rest), Resolve
+  (exact > alias > unique prefix, canonical bang returned), sorted
+  Candidates(partial). Exhaustively unit-tested, table-driven.
 - `internal/watch` -- keeps the index live after the initial walk.
   `Watcher` (watch.go + events.go): one fsnotify watch per live indexed
   directory plus the roots -- fsnotify is used uniformly on ALL

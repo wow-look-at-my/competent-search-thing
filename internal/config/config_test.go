@@ -160,3 +160,112 @@ func TestDefaultFallsBackWithoutHome(t *testing.T) {
 	require.Len(t, c.Roots, 1)
 	require.True(t, filepath.IsAbs(c.Roots[0]), "fallback root is absolutized cwd")
 }
+
+func TestDirUsesEnvOverride(t *testing.T) {
+	dir := setConfigDir(t)
+	got, err := Dir()
+	require.NoError(t, err)
+	require.Equal(t, dir, got)
+
+	// Path stays consistent with Dir.
+	p, err := Path()
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(got, "config.json"), p)
+}
+
+func TestDirDefaultsToUserConfigDir(t *testing.T) {
+	t.Setenv(EnvConfigDir, "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	got, err := Dir()
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(os.Getenv("XDG_CONFIG_HOME"), appDirName), got)
+
+	p, err := Path()
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(got, "config.json"), p)
+}
+
+func TestDirErrorWhenUnresolvable(t *testing.T) {
+	t.Setenv(EnvConfigDir, "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	_, err := Dir()
+	require.Error(t, err)
+}
+
+func TestPluginsAndBangsRoundTrip(t *testing.T) {
+	setConfigDir(t)
+	in := Default()
+	in.Plugins = PluginsConfig{
+		Disabled: true,
+		Entries: map[string]PluginEntry{
+			"calc": {Disabled: true, Settings: json.RawMessage(`{"precision": 2, "mode": "deg"}`)},
+			"ps":   {},
+		},
+	}
+	in.Bangs = BangsConfig{
+		Sigils:  []string{"!", "$"},
+		Aliases: map[string]string{"add": "calc"},
+	}
+	require.NoError(t, Save(in))
+
+	got, err := Load()
+	require.NoError(t, err)
+	require.True(t, got.Plugins.Disabled)
+	require.Len(t, got.Plugins.Entries, 2)
+	require.True(t, got.Plugins.Entries["calc"].Disabled)
+	require.JSONEq(t, `{"precision": 2, "mode": "deg"}`, string(got.Plugins.Entries["calc"].Settings),
+		"settings round-trip as an opaque JSON object")
+	require.False(t, got.Plugins.Entries["ps"].Disabled)
+	require.Nil(t, got.Plugins.Entries["ps"].Settings)
+	require.Equal(t, []string{"!", "$"}, got.Bangs.Sigils)
+	require.Equal(t, map[string]string{"add": "calc"}, got.Bangs.Aliases)
+}
+
+func TestLoadOldConfigWithoutNewSections(t *testing.T) {
+	dir := setConfigDir(t)
+	old := `{
+		"roots": ["/data"],
+		"excludes": [".git"],
+		"hotkey": "alt+space",
+		"rescanIntervalMinutes": 0,
+		"maxResults": 50
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte(old), 0o644))
+
+	c, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, []string{"/data"}, c.Roots, "old fields still load")
+	require.False(t, c.Plugins.Disabled)
+	require.NotNil(t, c.Plugins.Entries, "missing plugins section normalized")
+	require.Empty(t, c.Plugins.Entries)
+	require.Equal(t, DefaultBangSigils(), c.Bangs.Sigils, "missing bangs section gets default sigils")
+	require.NotNil(t, c.Bangs.Aliases)
+	require.Empty(t, c.Bangs.Aliases)
+}
+
+func TestNormalizePluginsAndBangs(t *testing.T) {
+	var c Config
+	c.Normalize()
+	require.NotNil(t, c.Plugins.Entries)
+	require.Empty(t, c.Plugins.Entries)
+	require.Equal(t, DefaultBangSigils(), c.Bangs.Sigils)
+	require.NotNil(t, c.Bangs.Aliases)
+	require.Empty(t, c.Bangs.Aliases)
+
+	// Existing values survive normalization untouched.
+	c2 := Config{
+		Plugins: PluginsConfig{Entries: map[string]PluginEntry{"x": {Disabled: true}}},
+		Bangs:   BangsConfig{Sigils: []string{"$"}, Aliases: map[string]string{"a": "b"}},
+	}
+	c2.Normalize()
+	require.Equal(t, map[string]PluginEntry{"x": {Disabled: true}}, c2.Plugins.Entries)
+	require.Equal(t, []string{"$"}, c2.Bangs.Sigils)
+	require.Equal(t, map[string]string{"a": "b"}, c2.Bangs.Aliases)
+}
+
+func TestDefaultBangSigilsReturnsFreshSlice(t *testing.T) {
+	a := DefaultBangSigils()
+	a[0] = "X"
+	require.Equal(t, []string{"!", "/", "@"}, DefaultBangSigils())
+}
