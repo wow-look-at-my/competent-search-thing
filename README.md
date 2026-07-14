@@ -66,13 +66,17 @@ wails build -tags webkit2_41   # production build (tag needed on webkit-4.1 dist
 
 ```
 cd frontend && npm install && npm run build && cd ..
-GOFLAGS=-tags=webkit2_41 go-toolchain --cgo
+GOFLAGS=-tags=webkit2_41,desktop,production go-toolchain --cgo
 ```
 
 `go-toolchain` (this org's build tool) tidies modules, runs tests with
 coverage, and builds into `build/`. CGO must be enabled (`--cgo`)
-because the Linux webview binds gtk3/webkit via cgo. On macOS and
-Windows the `GOFLAGS` tag is unnecessary.
+because the Linux webview binds gtk3/webkit via cgo. `desktop` and
+`production` are Wails v2's standard manual-build tags -- without them
+the binary compiles but exits immediately with "Wails applications
+will not build without the correct build tags". On macOS and Windows
+the `webkit2_41` tag is unnecessary (but `desktop,production` still
+apply).
 
 ### macOS
 
