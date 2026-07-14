@@ -37,7 +37,7 @@ func testDisplays() []platform.Display {
 }
 
 func TestStartupRegistersHotkeyOnce(t *testing.T) {
-	a, r := newTestApp(nil, Options{Hotkey: "alt+space"})
+	a, r := newTestApp(t, nil, Options{Hotkey: "alt+space"})
 	a.Startup(context.Background())
 	a.Startup(context.Background()) // context refresh must not double-register
 	require.Equal(t, []string{"startHotkey"}, r.callNames())
@@ -48,13 +48,13 @@ func TestStartupRegistersHotkeyOnce(t *testing.T) {
 }
 
 func TestStartupSkipsEmptyHotkey(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.Startup(context.Background())
 	require.False(t, r.has("startHotkey"))
 }
 
 func TestStartupToleratesBadHotkeySpec(t *testing.T) {
-	a, r := newTestApp(nil, Options{Hotkey: "hyper+q"})
+	a, r := newTestApp(t, nil, Options{Hotkey: "hyper+q"})
 	a.Startup(context.Background())
 	require.False(t, r.has("startHotkey"), "unparseable spec never reaches registration")
 	a.Shutdown(context.Background())
@@ -62,7 +62,7 @@ func TestStartupToleratesBadHotkeySpec(t *testing.T) {
 }
 
 func TestStartupToleratesRegistrationFailure(t *testing.T) {
-	a, r := newTestApp(nil, Options{Hotkey: "alt+space"})
+	a, r := newTestApp(t, nil, Options{Hotkey: "alt+space"})
 	a.plat.startHotkey = func(platform.Hotkey, func()) (func(), error) {
 		return nil, errors.New("no X server")
 	}
@@ -72,7 +72,7 @@ func TestStartupToleratesRegistrationFailure(t *testing.T) {
 }
 
 func TestHotkeyToggleShowsThenHides(t *testing.T) {
-	a, r := newTestApp(nil, Options{Hotkey: "ctrl+shift+k"})
+	a, r := newTestApp(t, nil, Options{Hotkey: "ctrl+shift+k"})
 	a.plat.now = (&fakeClock{step: time.Second}).now
 	var onDown func()
 	a.plat.startHotkey = func(hk platform.Hotkey, cb func()) (func(), error) {
@@ -93,7 +93,7 @@ func TestHotkeyToggleShowsThenHides(t *testing.T) {
 }
 
 func TestToggleRateLimitSwallowsAutorepeat(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	// Every call sees the same (nonzero) instant, so only the first
 	// press clears the gap against the zero-valued lastToggle.
 	a.plat.now = (&fakeClock{t: time.Unix(1000, 0), step: 0}).now
@@ -107,7 +107,7 @@ func TestToggleRateLimitSwallowsAutorepeat(t *testing.T) {
 }
 
 func TestShowPositionsOnCursorDisplay(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.plat.goos = "linux"
 	r.cursorOK = true
 	r.cursorX, r.cursorY = -1000, 500 // cursor on the left monitor
@@ -128,7 +128,7 @@ func TestShowPositionsOnCursorDisplay(t *testing.T) {
 }
 
 func TestShowTranslatesAgainstCurrentMonitor(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.plat.goos = "linux"
 	r.cursorOK = true
 	r.cursorX, r.cursorY = 960, 540 // cursor on the primary
@@ -147,7 +147,7 @@ func TestShowTranslatesAgainstCurrentMonitor(t *testing.T) {
 }
 
 func TestShowUsesWorkAreaOriginOnWindows(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.plat.goos = "windows"
 	r.cursorOK = true
 	r.cursorX, r.cursorY = 960, 540
@@ -162,7 +162,7 @@ func TestShowUsesWorkAreaOriginOnWindows(t *testing.T) {
 }
 
 func TestShowCentersWhenCursorUnknown(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.Startup(context.Background())
 	a.showOnCursorDisplay() // cursorOK defaults to false
 
@@ -173,7 +173,7 @@ func TestShowCentersWhenCursorUnknown(t *testing.T) {
 }
 
 func TestShowCentersOnEmptyDisplayList(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	r.cursorOK = true // cursor known but no display data
 	a.Startup(context.Background())
 	a.showOnCursorDisplay()
@@ -182,7 +182,7 @@ func TestShowCentersOnEmptyDisplayList(t *testing.T) {
 }
 
 func TestShowDarwinMovesNatively(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.plat.goos = "darwin"
 	r.cursorOK = true
 	r.cursorX, r.cursorY = 960, 540
@@ -202,14 +202,14 @@ func TestShowDarwinMovesNatively(t *testing.T) {
 }
 
 func TestShowBeforeStartupIsNoOp(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.showOnCursorDisplay()
 	require.Empty(t, r.callNames())
 	require.Empty(t, r.emits)
 }
 
 func TestHideTracksVisibility(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.plat.now = (&fakeClock{step: time.Second}).now
 	a.Startup(context.Background())
 

@@ -24,6 +24,19 @@ func TestPathUsesEnvOverride(t *testing.T) {
 	require.Equal(t, filepath.Join(dir, "config.json"), p)
 }
 
+func TestDirIsParentOfConfigFile(t *testing.T) {
+	dir := setConfigDir(t)
+	got, err := Dir()
+	require.NoError(t, err)
+	require.Equal(t, dir, got)
+
+	t.Setenv(EnvConfigDir, "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	_, err = Dir()
+	require.Error(t, err, "Dir surfaces Path failures")
+}
+
 func TestPathDefaultsToUserConfigDir(t *testing.T) {
 	t.Setenv(EnvConfigDir, "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -54,6 +67,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		Hotkey:                "ctrl+shift+p",
 		RescanIntervalMinutes: 30,
 		MaxResults:            120,
+		Theme:                 "light",
 	}
 	require.NoError(t, Save(in))
 
@@ -63,6 +77,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	require.Equal(t, in.Hotkey, got.Hotkey)
 	require.Equal(t, in.RescanIntervalMinutes, got.RescanIntervalMinutes)
 	require.Equal(t, in.MaxResults, got.MaxResults)
+	require.Equal(t, in.Theme, got.Theme)
 	// Roots are normalized on load: absolute stays, relative becomes
 	// absolute.
 	require.Equal(t, "/data/projects", got.Roots[0])
@@ -143,7 +158,12 @@ func TestNormalize(t *testing.T) {
 	require.Equal(t, DefaultHotkey, c.Hotkey)
 	require.Equal(t, 0, c.RescanIntervalMinutes)
 	require.Equal(t, DefaultMaxResults, c.MaxResults)
+	require.Equal(t, DefaultTheme, c.Theme, "empty theme falls back to dark")
 	require.Nil(t, c.Excludes, "excludes are not defaulted on normalize")
+
+	keep := Config{Theme: "light"}
+	keep.Normalize()
+	require.Equal(t, "light", keep.Theme, "a configured theme is preserved")
 
 	var empty Config
 	empty.Normalize()
