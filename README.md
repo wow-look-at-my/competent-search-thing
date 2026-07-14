@@ -7,6 +7,15 @@ Spotlight-style presentation with voidtools-Everything-style speed.
 Built with Go and [Wails v2](https://wails.io), with a tiny vanilla
 TypeScript + Vite frontend.
 
+## Screenshot
+
+![The searchbar showing ranked, highlighted results for the query "rep"](docs/screenshot.png)
+
+The real Linux webview, summoned with Alt+Space and captured under Xvfb
+against the deterministic fixture tree CI uses (see `.github/scripts/`).
+CI re-captures three screenshots like this on every push and uploads
+them as run artifacts for visual comparison.
+
 ## Status
 
 Feature-complete for v1 (release packaging still pending):
