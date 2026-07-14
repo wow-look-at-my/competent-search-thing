@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  all-builds:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux webview build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - uses: wow-look-at-my/go-toolchain@v1
+        env:
+          GOFLAGS: "-tags=webkit2_41"
+        with:
+          targets: linux/amd64
+          cgo: 'true'
+          autorelease: 'false'
+          timeout: '20'

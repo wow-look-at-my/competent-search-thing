@@ -1,0 +1,12 @@
+# Go build outputs (go-toolchain builds into build/)
+build/
+/competent-search-thing
+coverage.out
+coverage.html
+profile.json
+
+# Frontend build outputs and dependencies.
+# frontend/dist is embedded into the Go binary but stays untracked:
+# run `cd frontend && npm install && npm run build` before any Go build.
+frontend/dist/
+frontend/node_modules/

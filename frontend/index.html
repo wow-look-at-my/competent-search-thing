@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>competent-search-thing</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="bar">
+      <div id="query-row">
+        <svg
+          id="magnifier"
+          viewBox="0 0 24 24"
+          width="20"
+          height="20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          aria-hidden="true"
+        >
+          <circle cx="11" cy="11" r="7" />
+          <line x1="16.5" y1="16.5" x2="21" y2="21" />
+        </svg>
+        <input
+          id="query"
+          type="text"
+          placeholder="Search files and folders..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+      <div id="results" role="listbox"></div>
+      <div id="status">
+        <span id="status-text">starting...</span>
+        <span id="degraded-chip" hidden
+          >index may be stale -- periodic rescan advised</span
+        >
+      </div>
+    </div>
+
+    <template id="tpl-icon-folder">
+      <svg
+        class="icon"
+        viewBox="0 0 24 24"
+        width="16"
+        height="16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      </svg>
+    </template>
+    <template id="tpl-icon-file">
+      <svg
+        class="icon"
+        viewBox="0 0 24 24"
+        width="16"
+        height="16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M6 2h8l4 4v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z" />
+        <path d="M14 2v4h4" />
+      </svg>
+    </template>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
