@@ -22,15 +22,21 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/app"
+	"github.com/wow-look-at-my/competent-search-thing/internal/config"
+	"github.com/wow-look-at-my/competent-search-thing/internal/index"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
-	a := app.New()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Printf("config: %v (continuing with defaults)", err)
+	}
+	a := app.New(index.NewManager(cfg.Roots, cfg.Excludes, cfg.MaxResults))
 
-	err := wails.Run(&options.App{
+	err = wails.Run(&options.App{
 		Title:             "competent-search-thing",
 		Width:             680,
 		Height:            460,
