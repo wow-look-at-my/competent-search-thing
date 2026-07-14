@@ -435,10 +435,10 @@ func TestSanitizeActionUnknownType(t *testing.T) {
 
 func TestSanitizeMultipleReasonsAggregate(t *testing.T) {
 	resp := &Response{Results: []Result{
-		{Title: ""},                                                     // dropped: empty title
-		{Title: "ok", Action: &Action{Type: ActionSetQuery}},            // action stripped
-		{Title: "run", Action: &Action{Type: ActionRunCommand}},         // dropped: gate
-		{Title: "fine"},                                                 // clean
+		{Title: ""}, // dropped: empty title
+		{Title: "ok", Action: &Action{Type: ActionSetQuery}},    // action stripped
+		{Title: "run", Action: &Action{Type: ActionRunCommand}}, // dropped: gate
+		{Title: "fine"}, // clean
 		{Title: "bad url", Action: &Action{Type: ActionOpenURL, Value: "nope"}}, // action stripped
 	}}
 	results, dropped := SanitizeResponse(resp, false)
