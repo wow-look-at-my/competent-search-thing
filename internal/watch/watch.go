@@ -45,6 +45,12 @@ type Options struct {
 	MaxAge time.Duration
 	// MaxPending flushes immediately at this batch size (default 4096).
 	MaxPending int
+	// OnDegraded, when set, is called exactly once, from a watcher
+	// goroutine, at the moment the watcher first becomes degraded (the
+	// flag is sticky, so there is no second transition). The Stats
+	// snapshot carries the trigger. Implementations must not call back
+	// into the Watcher's Stop.
+	OnDegraded func(Stats)
 }
 
 // Stats is a snapshot of the watcher's health for logs and the UI.
@@ -177,6 +183,12 @@ func (w *Watcher) setRescanRequester(fn func()) {
 // logged, and later ones stay silent so an exhausted limit cannot spam
 // the log.
 func (w *Watcher) addWatch(dir string) {
+	var notify func()
+	defer func() { // runs AFTER the unlock below; never under w.mu
+		if notify != nil {
+			notify()
+		}
+	}()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.n == nil || w.lc.stopping() {
@@ -189,8 +201,8 @@ func (w *Watcher) addWatch(dir string) {
 		if errors.Is(err, fsnotify.ErrClosed) {
 			return // racing Stop, not a degradation
 		}
+		notify = w.degradeLocked()
 		w.stats.DroppedWatches++
-		w.stats.Degraded = true
 		if !w.loggedDrop {
 			w.loggedDrop = true
 			log.Printf("watch: adding watch for %s failed: %v (degraded; further drops are counted silently)", dir, err)
@@ -199,6 +211,19 @@ func (w *Watcher) addWatch(dir string) {
 	}
 	w.watched[dir] = struct{}{}
 	w.stats.WatchedDirs = len(w.watched)
+}
+
+// degradeLocked flips the sticky Degraded flag and, on the first flip
+// only, returns a closure that reports the transition to the
+// OnDegraded callback. Callers hold w.mu, mutate the stats counters
+// while still holding it, and invoke the closure only after unlocking.
+func (w *Watcher) degradeLocked() func() {
+	first := !w.stats.Degraded
+	w.stats.Degraded = true
+	if !first || w.opt.OnDegraded == nil {
+		return nil
+	}
+	return func() { w.opt.OnDegraded(w.Stats()) }
 }
 
 // dropWatchesUnder forgets the watch on path and on every watched

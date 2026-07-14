@@ -4,9 +4,10 @@
 //
 // The Go side embeds the built frontend (frontend/dist) and hosts the
 // Wails runtime; the bound application object lives in internal/app and
-// owns the index engine (internal/index) plus the live-update layer
-// (internal/watch: fsnotify watcher + periodic rescanner). A later
-// phase adds internal/platform (hotkey, displays, open/reveal).
+// owns the index engine (internal/index), the live-update layer
+// (internal/watch: fsnotify watcher + periodic rescanner), and the
+// platform layer (internal/platform: global hotkey, cursor-display
+// positioning, open/reveal).
 //
 // NOTE: frontend/dist must exist before the Go build can succeed
 // (cd frontend && npm install && npm run build), because it is embedded
@@ -35,13 +36,15 @@ func main() {
 	if err != nil {
 		log.Printf("config: %v (continuing with defaults)", err)
 	}
-	a := app.New(index.NewManager(cfg.Roots, cfg.Excludes, cfg.MaxResults),
-		time.Duration(cfg.RescanIntervalMinutes)*time.Minute)
+	a := app.New(index.NewManager(cfg.Roots, cfg.Excludes, cfg.MaxResults), app.Options{
+		RescanEvery: time.Duration(cfg.RescanIntervalMinutes) * time.Minute,
+		Hotkey:      cfg.Hotkey,
+	})
 
 	err = wails.Run(&options.App{
 		Title:             "competent-search-thing",
-		Width:             680,
-		Height:            460,
+		Width:             app.WindowWidth,
+		Height:            app.WindowHeight,
 		Frameless:         true,
 		AlwaysOnTop:       true,
 		StartHidden:       true,

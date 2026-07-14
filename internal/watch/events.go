@@ -187,14 +187,17 @@ func (w *Watcher) handleError(err error) {
 		return
 	}
 	w.mu.Lock()
+	notify := w.degradeLocked()
 	w.stats.Overflows++
-	w.stats.Degraded = true
 	fn := w.requestRescan
 	first := !w.loggedOverf
 	w.loggedOverf = true
 	w.mu.Unlock()
 	if first {
 		log.Printf("watch: event queue overflow, events lost (degraded); requesting reconcile rescan")
+	}
+	if notify != nil {
+		notify()
 	}
 	if fn != nil {
 		fn()
