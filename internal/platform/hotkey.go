@@ -108,12 +108,16 @@ func ParseHotkey(s string) (Hotkey, error) {
 		return Hotkey{}, errors.New("hotkey: empty spec")
 	}
 	parts := strings.Split(norm, "+")
+	for _, p := range parts {
+		if p == "" {
+			// Report dangling/duplicate "+" before any token errors: in
+			// "alt+space+" the trailing separator is the real mistake.
+			return Hotkey{}, fmt.Errorf("hotkey: empty token in %q", s)
+		}
+	}
 	var hk Hotkey
 	seen := map[Mod]bool{}
 	for i, p := range parts {
-		if p == "" {
-			return Hotkey{}, fmt.Errorf("hotkey: empty token in %q", s)
-		}
 		if i == len(parts)-1 {
 			key, ok := keyAliases[p]
 			if !ok {

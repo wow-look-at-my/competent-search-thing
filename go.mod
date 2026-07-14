@@ -4,8 +4,10 @@ go 1.25.0
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/jezek/xgb v1.3.1
 	github.com/stretchr/testify v1.11.1
 	github.com/wailsapp/wails/v2 v2.13.0
+	golang.design/x/hotkey v0.6.1
 )
 
 require (
