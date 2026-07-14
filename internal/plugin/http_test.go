@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -79,6 +80,10 @@ func TestHTTPTransportNon2xx(t *testing.T) {
 
 func TestHTTPTransportContextTimeout(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Drain the body so the server arms its connection-close
+		// detection; the aborted request then cancels r.Context()
+		// and unblocks the handler (keeps srv.Close fast).
+		_, _ = io.Copy(io.Discard, r.Body)
 		select {
 		case <-r.Context().Done(): // client gave up: unblock the server
 		case <-time.After(5 * time.Second):
