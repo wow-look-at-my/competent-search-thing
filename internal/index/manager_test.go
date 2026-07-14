@@ -53,6 +53,31 @@ func TestManagerAddRemoveAndRatio(t *testing.T) {
 	require.Equal(t, 0, m.Remove("/w/missing"))
 }
 
+func TestManagerForEachLiveDir(t *testing.T) {
+	m := NewManager(nil, nil, 0)
+	require.NoError(t, m.Add("/w", "docs", true))
+	require.NoError(t, m.Add("/w", "readme.txt", false))
+	require.NoError(t, m.Add("/w/docs", "img", true))
+	require.NoError(t, m.Add("/w", "gone", true))
+	m.Remove("/w/gone")
+
+	var dirs []string
+	m.ForEachLiveDir(func(path string) bool {
+		dirs = append(dirs, path)
+		return true
+	})
+	require.Equal(t, []string{"/w/docs", "/w/docs/img"}, dirs,
+		"live directory entries only: no files, no tombstones")
+
+	// Early stop after the first hit.
+	var first []string
+	m.ForEachLiveDir(func(path string) bool {
+		first = append(first, path)
+		return false
+	})
+	require.Equal(t, []string{"/w/docs"}, first)
+}
+
 func TestManagerConfigAccessors(t *testing.T) {
 	roots := []string{"/data"}
 	excludes := []string{".git"}

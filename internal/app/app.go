@@ -14,6 +14,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/index"
+	"github.com/wow-look-at-my/competent-search-thing/internal/watch"
 )
 
 // ErrNotImplemented marks bound methods whose real implementation
@@ -26,17 +27,26 @@ var ErrNotImplemented = errors.New("not implemented yet")
 type Result = index.Result
 
 // App is the Wails-bound application object. It carries the Wails
-// runtime context after Startup has run and owns the index manager.
+// runtime context after Startup has run and owns the index manager plus
+// the live-update layer (watcher + rescanner) built on top of it.
 type App struct {
-	ctx       context.Context
-	manager   *index.Manager
-	buildOnce sync.Once
+	ctx         context.Context
+	manager     *index.Manager
+	buildOnce   sync.Once
+	rescanEvery time.Duration
+
+	watchMu      sync.Mutex
+	watcher      *watch.Watcher
+	rescanner    *watch.Rescanner
+	shuttingDown bool
 }
 
 // New creates an App around an index manager (nil is tolerated: Search
 // then returns no results and Startup skips the index build).
-func New(m *index.Manager) *App {
-	return &App{manager: m}
+// rescanEvery > 0 enables periodic full rescans at that interval (wire
+// config.RescanIntervalMinutes here); 0 disables them.
+func New(m *index.Manager, rescanEvery time.Duration) *App {
+	return &App{manager: m, rescanEvery: rescanEvery}
 }
 
 // Startup is wired to the Wails OnStartup hook: it saves the runtime
@@ -52,8 +62,9 @@ func (a *App) Startup(ctx context.Context) {
 	})
 }
 
-// buildIndex runs the full disk walk. Progress goes to the log for now;
-// a later phase forwards it to the frontend as Wails events.
+// buildIndex runs the full disk walk, then brings the live-update layer
+// up. Progress goes to the log for now; a later phase forwards it to
+// the frontend as Wails events.
 func (a *App) buildIndex() {
 	count, dur, err := a.manager.BuildFromDisk(context.Background(), logProgress)
 	if err != nil {
@@ -61,6 +72,57 @@ func (a *App) buildIndex() {
 		return
 	}
 	log.Printf("index: %d entries in %s", count, dur.Round(time.Millisecond))
+	a.startWatch()
+}
+
+// startWatch starts the fsnotify Watcher over the manager's roots --
+// filtering events through the same Excluder semantics the walks use --
+// and the Rescanner for periodic and degradation-triggered rebuilds. It
+// is skipped when Shutdown already ran.
+func (a *App) startWatch() {
+	ex, err := index.NewExcluder(a.manager.Excludes())
+	if err != nil {
+		// The initial build would have failed on the same patterns and
+		// returned before reaching here; a nil Excluder (matches
+		// nothing) still keeps this path safe.
+		log.Printf("watch: bad exclude patterns: %v", err)
+		ex = nil
+	}
+	w := watch.New(a.manager, a.manager.Roots(), ex, watch.Options{})
+	r := watch.NewRescanner(a.manager, w, watch.RescanOptions{Interval: a.rescanEvery})
+
+	a.watchMu.Lock()
+	defer a.watchMu.Unlock()
+	if a.shuttingDown {
+		return
+	}
+	if err := w.Start(); err != nil {
+		log.Printf("watch: live updates unavailable (rescans still work): %v", err)
+	}
+	if err := r.Start(); err != nil {
+		log.Printf("watch: rescanner failed to start: %v", err)
+	}
+	a.watcher, a.rescanner = w, r
+	log.Printf("watch: live index updates started (periodic rescan every %v; 0s means off)", a.rescanEvery)
+}
+
+// Shutdown is wired to the Wails OnShutdown hook. It stops the
+// rescanner first (it may be mid-rescan and calls back into the watcher
+// to resync watches), then the watcher. Safe to call at any point, even
+// before the watch layer came up; a still-running initial build then
+// skips starting it.
+func (a *App) Shutdown(_ context.Context) {
+	a.watchMu.Lock()
+	a.shuttingDown = true
+	w, r := a.watcher, a.rescanner
+	a.watcher, a.rescanner = nil, nil
+	a.watchMu.Unlock()
+	if r != nil {
+		r.Stop()
+	}
+	if w != nil {
+		w.Stop()
+	}
 }
 
 func logProgress(indexed int, done bool) {

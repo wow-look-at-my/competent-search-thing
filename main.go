@@ -3,10 +3,10 @@
 // and Wails v2.
 //
 // The Go side embeds the built frontend (frontend/dist) and hosts the
-// Wails runtime; the bound application object lives in internal/app, and
-// later phases add internal/index (walker + store + search),
-// internal/watch (fsnotify), and internal/platform (hotkey, displays,
-// open/reveal).
+// Wails runtime; the bound application object lives in internal/app and
+// owns the index engine (internal/index) plus the live-update layer
+// (internal/watch: fsnotify watcher + periodic rescanner). A later
+// phase adds internal/platform (hotkey, displays, open/reveal).
 //
 // NOTE: frontend/dist must exist before the Go build can succeed
 // (cd frontend && npm install && npm run build), because it is embedded
@@ -16,6 +16,7 @@ package main
 import (
 	"embed"
 	"log"
+	"time"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -34,7 +35,8 @@ func main() {
 	if err != nil {
 		log.Printf("config: %v (continuing with defaults)", err)
 	}
-	a := app.New(index.NewManager(cfg.Roots, cfg.Excludes, cfg.MaxResults))
+	a := app.New(index.NewManager(cfg.Roots, cfg.Excludes, cfg.MaxResults),
+		time.Duration(cfg.RescanIntervalMinutes)*time.Minute)
 
 	err = wails.Run(&options.App{
 		Title:             "competent-search-thing",
@@ -47,6 +49,7 @@ func main() {
 		DisableResize:     true,
 		AssetServer:       &assetserver.Options{Assets: assets},
 		OnStartup:         a.Startup,
+		OnShutdown:        a.Shutdown,
 		Bind:              []interface{}{a},
 	})
 	if err != nil {

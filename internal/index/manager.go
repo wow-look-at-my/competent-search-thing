@@ -112,6 +112,22 @@ func (m *Manager) TombstoneRatio() float64 {
 	return float64(total-m.store.LiveCount()) / float64(total)
 }
 
+// ForEachLiveDir calls fn, under the read lock, with the absolute path
+// of every live directory entry until fn returns false. The watcher
+// uses it to enumerate the directories that need an fsnotify watch. fn
+// must be fast and must not call back into the Manager (the read lock
+// is held for the whole iteration).
+func (m *Manager) ForEachLiveDir(fn func(path string) bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	m.store.ForEachLive(func(id int32) bool {
+		if !m.store.IsDir(id) {
+			return true
+		}
+		return fn(m.store.EntryPath(id))
+	})
+}
+
 // Roots returns a copy of the configured walk roots.
 func (m *Manager) Roots() []string { return copyStrings(m.roots) }
 

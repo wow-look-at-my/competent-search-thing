@@ -9,11 +9,14 @@ TypeScript + Vite frontend.
 
 ## Status
 
-Work in progress. The window shell, CI, and the index engine (compact
+Work in progress. The window shell, CI, the index engine (compact
 in-memory store, parallel walker, parallel substring search with
-ranking, JSON config) are in place; typing in the bar searches the
-index. Filesystem watchers, the platform layer (hotkey/open/reveal),
-and the polished UI land in later phases.
+ranking, JSON config), and live index updates (per-directory fsnotify
+watchers with event debouncing, graceful watch-limit/overflow
+degradation, and optional periodic rescans) are in place; typing in
+the bar searches the index and results track filesystem changes. The
+platform layer (hotkey/open/reveal) and the polished UI land in later
+phases.
 
 ## Planned v1 features
 
@@ -96,9 +99,14 @@ Exclude patterns without a path separator are matched against each
 entry's base name (`node_modules`, `*.tmp`); matching directories are
 pruned, matching files skipped. Patterns containing a separator are
 matched against the full path (`/home/*/secret`); `*` never crosses a
-separator and there is no `**`. `rescanIntervalMinutes: 0` disables
-periodic rescans. The `hotkey` and rescan settings are read today but
-take effect when the platform/watcher phases land.
+separator and there is no `**`. The same exclude semantics apply to
+the initial walk, to live filesystem events, and to rescans.
+`rescanIntervalMinutes` sets an optional periodic full re-index (a
+safety net on top of the live fsnotify updates; also triggered
+automatically when the watcher degrades, e.g. on inotify watch-limit
+or event-queue overflow); `0` disables the periodic timer. The
+`hotkey` setting is read today but takes effect when the platform
+phase lands.
 
 ## Wails v2 vs v3
 
