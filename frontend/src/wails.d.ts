@@ -2,8 +2,7 @@
 // injects into the page. window.go carries the bound Go methods
 // (window.go.<package>.<Struct>.<Method>); window.runtime carries the
 // Wails runtime API. Both appear shortly after page load, so code must
-// tolerate them being briefly undefined. Kept minimal for the scaffold
-// phase; extend in later phases as more methods are bound.
+// tolerate them being briefly undefined.
 
 interface WailsSearchResult {
   path: string;
@@ -18,6 +17,30 @@ interface WailsAppBindings {
   Hide(): Promise<void>;
 }
 
+// The subset of the Wails runtime API this app uses (see the wails v2
+// runtime.d.ts). EventsOn returns an unsubscribe function.
+interface WailsRuntime {
+  EventsOn(
+    eventName: string,
+    callback: (...data: unknown[]) => void,
+  ): () => void;
+  EventsOff(eventName: string, ...additionalEventNames: string[]): void;
+}
+
+// Payload of the "index:progress" event (internal/app indexProgress).
+interface IndexProgressEvent {
+  indexed: number;
+  done: boolean;
+  seconds: number;
+}
+
+// Payload of the "watch:degraded" event (internal/app watchDegraded).
+interface WatchDegradedEvent {
+  watched: number;
+  dropped: number;
+  overflows: number;
+}
+
 interface WailsGo {
   app: {
     App: WailsAppBindings;
@@ -26,5 +49,5 @@ interface WailsGo {
 
 interface Window {
   go?: WailsGo;
-  runtime?: Record<string, unknown>;
+  runtime?: WailsRuntime;
 }

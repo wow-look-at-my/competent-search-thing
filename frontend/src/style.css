@@ -13,6 +13,7 @@ body {
   height: 100%;
   background: transparent;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  user-select: none;
 }
 
 #bar {
@@ -25,43 +26,144 @@ body {
   overflow: hidden;
 }
 
-#query {
+/* --- query row --------------------------------------------------- */
+
+#query-row {
   flex: 0 0 auto;
-  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid #2c2c33;
+}
+
+#magnifier {
+  flex: 0 0 auto;
+  color: #6c6c76;
+}
+
+#query {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 14px 0;
   font-size: 20px;
   color: #f2f2f5;
   background: transparent;
   border: none;
   outline: none;
-  border-bottom: 1px solid #2c2c33;
 }
 
 #query::placeholder {
   color: #6c6c76;
 }
 
+/* --- results ------------------------------------------------------ */
+
 #results {
   flex: 1 1 auto;
   overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+}
+
+#results::-webkit-scrollbar {
+  width: 8px;
+}
+
+#results::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+}
+
+#results::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .result {
-  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 16px;
   font-size: 14px;
   color: #d4d4dc;
   white-space: nowrap;
+  cursor: default;
+}
+
+.result .icon {
+  flex: 0 0 auto;
+  color: #8a8a94;
+}
+
+.result .name {
+  /* The name yields only after the dir is fully gone. */
+  flex: 0 1 auto;
+  max-width: 60%;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.result:hover {
-  background: #2a2a31;
+.result .name .hl {
+  color: #8db8ff;
+  font-weight: 600;
 }
+
+.result .dir {
+  /* The dir part shrinks (ellipsizes) first. */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: #77777f;
+}
+
+.result.selected {
+  background: #2b3f66;
+  color: #f2f2f5;
+}
+
+.result.selected .icon {
+  color: #b8c6e8;
+}
+
+.result.selected .dir {
+  color: #9aa7c4;
+}
+
+.empty {
+  padding: 18px 16px;
+  font-size: 13px;
+  color: #6c6c76;
+  text-align: center;
+}
+
+/* --- status bar --------------------------------------------------- */
 
 #status {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   padding: 6px 16px;
   font-size: 11px;
   color: #8a8a94;
   border-top: 1px solid #2c2c33;
+}
+
+#status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#degraded-chip {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  font-size: 10px;
+  color: #d9a13d;
+  border: 1px solid rgba(217, 161, 61, 0.45);
+  border-radius: 8px;
+  white-space: nowrap;
 }
