@@ -9,25 +9,25 @@ TypeScript + Vite frontend.
 
 ## Status
 
-Work in progress. The window shell, CI, the index engine (compact
-in-memory store, parallel walker, parallel substring search with
-ranking, JSON config), and live index updates (per-directory fsnotify
-watchers with event debouncing, graceful watch-limit/overflow
-degradation, and optional periodic rescans) are in place; typing in
-the bar searches the index and results track filesystem changes. The
-platform layer (hotkey/open/reveal) and the polished UI land in later
-phases.
+Feature-complete for v1 (docs and release polish pending):
 
-## Planned v1 features
-
-- Global hotkey (default Alt+Space) to summon/dismiss the bar
-- Frameless, always-on-top searchbar positioned on the display the
-  cursor is currently on
-- Instant substring search over indexed file and directory names
-- Enter opens the selected entry, Ctrl+Enter reveals it in the file
-  manager
-- Live index updates via fsnotify
-- Optional periodic full rescan as a safety net
+- [x] Window shell (frameless, always-on-top, hidden until summoned) + CI
+- [x] Index engine: compact in-memory store, parallel walker, parallel
+      ranked substring search, JSON config
+- [x] Live index updates: per-directory fsnotify watchers, event
+      debouncing, graceful watch-limit/overflow degradation, optional
+      periodic rescans
+- [x] Global hotkey (default Alt+Space) to summon/dismiss the bar
+      (X11 mechanism on Linux -- see caveats; RegisterHotKey on
+      Windows; CGEventTap on macOS, needs the Accessibility permission)
+- [x] Bar positions itself on the display the cursor is on (falls back
+      to centering when the platform cannot say, e.g. Wayland)
+- [x] Open / Reveal: Enter opens the selection with the OS default
+      handler, Ctrl+Enter (Cmd+Enter on macOS) reveals it in the file
+      manager; both hide the bar on success
+- [x] Search UI: as-you-type results with match highlighting, dimmed
+      parent paths, folder/file glyphs, keyboard + mouse selection,
+      live index status bar and a staleness warning chip
 
 ## Building
 
@@ -104,9 +104,13 @@ the initial walk, to live filesystem events, and to rescans.
 `rescanIntervalMinutes` sets an optional periodic full re-index (a
 safety net on top of the live fsnotify updates; also triggered
 automatically when the watcher degrades, e.g. on inotify watch-limit
-or event-queue overflow); `0` disables the periodic timer. The
-`hotkey` setting is read today but takes effect when the platform
-phase lands.
+or event-queue overflow); `0` disables the periodic timer. `hotkey`
+is the global summon shortcut: "+"-separated, case- and
+whitespace-insensitive; modifiers `ctrl`/`control`, `shift`,
+`alt`/`option`, `super`/`win`/`cmd`/`meta`; key `space`, `tab`,
+`enter`/`return`, `esc`/`escape`, `a`-`z`, `0`-`9`, `f1`-`f12`, or an
+arrow (`up`/`down`/`left`/`right`). An invalid or unregistrable hotkey
+is logged and the app runs on without one.
 
 ## Wails v2 vs v3
 
@@ -117,11 +121,29 @@ so v2 it is. Revisit once v3 ships a stable release.
 
 ## Known caveats
 
-- **Wayland**: global hotkeys and explicit window positioning are
-  restricted under Wayland; the hotkey layer will use X11 APIs
-  (works under XWayland for many compositors, but not guaranteed) and
-  cursor-display positioning may fall back to the compositor's default
-  placement.
-- **macOS**: CI runs Linux only; macOS builds are expected to work with
-  Wails v2 but are untested in CI.
-- **Windows**: also untested in CI for now.
+- **Wayland**: the hotkey and cursor layers speak X11 (pure-Go, via
+  XWayland when available). On a Wayland-only session without an
+  XWayland `DISPLAY` there is no global hotkey (the failure is logged
+  once and the app keeps running) and the cursor position cannot be
+  read, so the bar centers on the current monitor instead of following
+  the cursor. Under XWayland the hotkey works for X11 clients, but
+  some compositors do not forward keys grabbed this way from native
+  Wayland windows.
+- **Linux HiDPI**: with a GDK scale factor > 1 the X11 pixel
+  coordinates and GTK's logical coordinates disagree, which can offset
+  the bar's position on scaled multi-monitor setups.
+- **macOS**: positioning uses a best-effort native Cocoa move of the
+  app's first window (Wails' WindowSetPosition is relative to the
+  window's current screen and cannot target another display); it falls
+  back to centering. The global hotkey needs the app to be trusted
+  under System Settings > Privacy & Security > Accessibility.
+  Compile-checked only on macOS -- CI builds linux/amd64 only, so the
+  macOS paths are untested in CI.
+- **Windows**: hotkey via RegisterHotKey and monitors via user32; the
+  bar positions against the current monitor's work area. Like macOS,
+  Windows code is compile-checked only on Windows and untested in CI
+  (linux/amd64 only).
+- **Reveal on Linux**: prefers the freedesktop `FileManager1` D-Bus
+  interface and falls back to opening the parent directory with
+  xdg-open when `dbus-send` is missing; a dbus-send that starts but
+  finds no file manager is not detected (launches are fire-and-forget).

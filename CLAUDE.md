@@ -12,11 +12,28 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/app` -- the Wails-bound App object and its methods
   (Search/Open/Reveal/Hide/Startup/Shutdown). Bound methods appear in
   JS as `window.go.app.App.<Method>`. Holds the `index.Manager`;
-  `Startup` kicks off the initial disk walk in a goroutine and, when
-  the walk finishes, starts the watch layer (`startWatch`: a
-  `watch.Watcher` + `watch.Rescanner` pair); `Shutdown` (wired to
-  Wails OnShutdown) stops them cleanly and also flags a still-running
-  initial build to skip starting them. `app.Result` is a type alias of
+  `Startup` saves the runtime ctx, registers the global hotkey (once;
+  parse or register failure = log once, run on without it), and kicks
+  the initial disk walk in a goroutine; when the walk finishes,
+  `startWatch` brings up a `watch.Watcher` + `watch.Rescanner` pair;
+  `Shutdown` (wired to Wails OnShutdown) releases the hotkey and stops
+  them cleanly, and also flags a still-running initial build to skip
+  starting them. The hotkey callback `toggle` (rate-limited 250ms
+  against key autorepeat) hides the bar when visible, else
+  `showOnCursorDisplay`: platform.CursorDisplays -> PickDisplay ->
+  BarPosition (absolute coords), then darwin = native.MoveWindow,
+  linux/windows = translate via DisplayForWindow + WailsPosition (Wails
+  WindowSetPosition is RELATIVE to the window's current monitor -- and
+  to the WORK AREA origin on Windows -- while WindowGetPosition is
+  absolute; verified in the v2.13.0 sources), any failure -> WindowCenter;
+  then WindowShow + "app:shown". Events emitted (all guarded so a nil
+  ctx no-ops): "index:progress" {indexed,done,seconds},
+  "watch:degraded" {watched,dropped,overflows}, "app:shown". ALL Wails
+  runtime calls and platform hooks sit behind seam structs
+  (`runtimeSeams`/`platformSeams` in window.go, defaults in New); unit
+  tests MUST replace them (see newTestApp) -- real runtime funcs abort
+  the process without a Wails context. Open/Reveal call the platform
+  launcher and hide the bar on success. `app.Result` is a type alias of
   `index.Result` (the JSON tags path/name/isDir live in
   internal/index). Unit-tested.
 - `internal/index` -- the index engine. `Store`: compact
@@ -63,7 +80,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   and skipped; an event-queue overflow means lost events, so the
   watcher asks the Rescanner for a reconcile rescan; `Degraded()` /
   `Stats()` (watched/dropped/overflow counts) expose the state for the
-  UI. `Rescanner` (rescan.go): serialized full rebuilds --
+  UI, and `Options.OnDegraded` (edge-triggered, called at most once --
+  the flag is sticky) pushes the first transition to the app, which
+  forwards it as the "watch:degraded" event. `Rescanner` (rescan.go):
+  serialized full rebuilds --
   `Manager.BuildFromDisk` (fresh-store swap; queries never block) then
   `syncWatches` to re-add/drop watches -- triggered by an optional
   interval ticker (config `rescanIntervalMinutes`) and by one-shot
@@ -72,11 +92,54 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   back-to-back walks. Both loops share the lifecycle.go Start/Stop
   plumbing: idempotent Stop, safe before/during Start, no goroutine
   leaks.
-- `internal/platform` (later phase) -- global hotkey, display/cursor
-  queries, open/reveal implementations per OS.
+- `internal/platform` -- the PURE half of the platform layer, fully
+  unit-tested headlessly: `ParseHotkey` ("alt+space", "ctrl+shift+k";
+  modifiers ctrl/control, shift, alt/option, super/win/cmd/meta; keys
+  space/tab/enter/return/esc/escape/a-z/0-9/f1-f12/arrows; unknown
+  token -> error naming it) into an OS-neutral `Hotkey{Mods,Key}`;
+  geometry (`Rect`, `Display{Rect,Work,Primary}`, `PickDisplay`,
+  `BarPosition` = centered, top at H/3 - winH/3, clamped;
+  `DisplayForWindow` by window center; `WailsPosition` translating
+  absolute coords to Wails' current-monitor-relative
+  WindowSetPosition); open/reveal argv construction (`OpenCommands` /
+  `RevealCommands`: linux xdg-open / dbus-send FileManager1.ShowItems
+  with xdg-open-parent fallback, darwin open / open -R, windows
+  rundll32 FileProtocolHandler / explorer /select,) and `Launcher`
+  (injectable `Run` seam; default starts detached and reaps).
+- `internal/platform/native` -- the thin OS glue, DELIBERATELY NO test
+  files (go-toolchain skips coverage for packages without tests; the
+  code needs a live display server). Keep it minimal and defensive;
+  logic worth testing belongs in internal/platform. Per OS: linux =
+  pure-Go X11 via jezek/xgb (StartHotkey: XGrabKey on the root window
+  incl. CapsLock/NumLock variants + KeyPress loop; CursorDisplays:
+  QueryPointer + Xinerama with root-geometry fallback; no X server ->
+  error/ok=false, the app degrades). golang.design/x/hotkey is NOT
+  used on linux: its x11 init() PANICS the process when no display is
+  reachable (verified v0.6.1) -- do not "simplify" back to it. windows
+  = golang.design/x/hotkey (RegisterHotKey) + user32 syscalls
+  (GetCursorPos, EnumDisplayMonitors with a package-level
+  syscall.NewCallback, GetMonitorInfoW -> rcMonitor + rcWork).
+  darwin = golang.design/x/hotkey (CGEventTap; needs Accessibility,
+  register best-effort from a goroutine) + a small Cocoa shim
+  (platform_darwin.h/.m: cursor via CGEventCreate, screens via
+  NSScreen with bottom-left->top-left conversion, MoveWindow via
+  setFrameOrigin on the first NSWindow, all on the main thread).
+  windows/darwin files compile only on their OSes -- CI is linux/amd64
+  -- so keep them boring and conventional.
 - `frontend/` -- vanilla TypeScript + Vite. No framework. `index.html`
-  + `src/main.ts` + `src/style.css` + `src/wails.d.ts` (ambient types
-  for the Wails-injected `window.go` / `window.runtime`).
+  (query row with inline SVG magnifier, results list, status bar +
+  degraded chip, <template> folder/file icons) + `src/main.ts` (search
+  as-you-type: 15ms debounce + sequence-number stale-response drop;
+  selection: ArrowUp/Down wrap, Home/End, hover; Enter=Open,
+  Ctrl/Cmd+Enter=Reveal, click/ctrl-click likewise, Esc + window blur
+  -> Hide; runtime events: "app:shown" -> focus+select+refresh,
+  "index:progress" -> status text, "watch:degraded" -> warning chip)
+  + `src/render.ts` (row DOM: icon, name with highlighted match, dim
+  parent dir; pure text nodes, no innerHTML) + `src/style.css` (dark
+  Spotlight-ish bar; dir ellipsizes before the name; thin scrollbar)
+  + `src/wails.d.ts` (ambient types for the Wails-injected `window.go`
+  / `window.runtime` incl. EventsOn and the event payload shapes --
+  keep in sync with internal/app's payload structs).
 
 ## Build / test
 
