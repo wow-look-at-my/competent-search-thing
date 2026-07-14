@@ -9,7 +9,7 @@ TypeScript + Vite frontend.
 
 ## Status
 
-Feature-complete for v1 (docs and release polish pending):
+Feature-complete for v1 (release packaging still pending):
 
 - [x] Window shell (frameless, always-on-top, hidden until summoned) + CI
 - [x] Index engine: compact in-memory store, parallel walker, parallel
@@ -95,22 +95,35 @@ The file is created with defaults on first run:
 }
 ```
 
-Exclude patterns without a path separator are matched against each
-entry's base name (`node_modules`, `*.tmp`); matching directories are
-pruned, matching files skipped. Patterns containing a separator are
-matched against the full path (`/home/*/secret`); `*` never crosses a
-separator and there is no `**`. The same exclude semantics apply to
-the initial walk, to live filesystem events, and to rescans.
-`rescanIntervalMinutes` sets an optional periodic full re-index (a
-safety net on top of the live fsnotify updates; also triggered
-automatically when the watcher degrades, e.g. on inotify watch-limit
-or event-queue overflow); `0` disables the periodic timer. `hotkey`
-is the global summon shortcut: "+"-separated, case- and
-whitespace-insensitive; modifiers `ctrl`/`control`, `shift`,
-`alt`/`option`, `super`/`win`/`cmd`/`meta`; key `space`, `tab`,
-`enter`/`return`, `esc`/`escape`, `a`-`z`, `0`-`9`, `f1`-`f12`, or an
-arrow (`up`/`down`/`left`/`right`). An invalid or unregistrable hotkey
-is logged and the app runs on without one.
+Field reference:
+
+- `roots` -- the directories to index (default: your home directory).
+  Relative paths are made absolute; an empty list falls back to the
+  default. Symlinks are indexed as entries but never descended.
+- `excludes` -- patterns pruned from indexing (default `.git`,
+  `node_modules`, `.cache`). A pattern without a path separator is
+  matched against each entry's base name (`node_modules`, `*.tmp`):
+  matching directories are pruned, matching files skipped. A pattern
+  containing a separator is matched against the full path
+  (`/home/*/secret`). `*` never crosses a separator and there is no
+  `**`. The same exclude semantics apply to the initial walk, to live
+  filesystem events, and to rescans.
+- `hotkey` -- the global summon shortcut (default `alt+space`):
+  "+"-separated, case- and whitespace-insensitive; modifiers
+  `ctrl`/`control`, `shift`, `alt`/`option`, `super`/`win`/`cmd`/`meta`;
+  key `space`, `tab`, `enter`/`return`, `esc`/`escape`, `a`-`z`,
+  `0`-`9`, `f1`-`f12`, or an arrow (`up`/`down`/`left`/`right`).
+  Examples: `alt+space`, `ctrl+shift+k`, `super+space`. An invalid or
+  unregistrable hotkey is logged and the app runs on without one.
+  Holding the hotkey down does not flicker the bar: OS key autorepeat
+  re-fires the shortcut, so toggles are rate-limited to one per ~250ms.
+- `rescanIntervalMinutes` -- optional periodic full re-index, a safety
+  net on top of the live fsnotify updates; `0` (the default) disables
+  the timer. Independent of this timer, a reconcile rescan runs
+  automatically when the kernel event queue overflows (see the watcher
+  degradation caveat below).
+- `maxResults` -- the maximum number of results one query returns
+  (default 50; zero or negative values are reset to the default).
 
 ## Wails v2 vs v3
 
@@ -118,6 +131,34 @@ This project uses **Wails v2** (latest stable, v2.13.0 at scaffold
 time). Wails v3 was still in alpha as of 2026-07 (v3.0.0-alpha2.114,
 daily alpha releases); v1 of this app wants a stable, documented base,
 so v2 it is. Revisit once v3 ships a stable release.
+
+## Performance
+
+Benchmarks live in `internal/index/bench_test.go` and run on every
+`go-toolchain` build. Reference numbers from a 4-CPU (GOMAXPROCS=4)
+CI-class container (16 GB RAM, Go 1.25), query limit 50 -- "hits" is
+how many indexed entries match; a query still returns only the top 50:
+
+| store | query shape | query    | hits    | ms/query |
+|-------|-------------|----------|---------|----------|
+| 100k  | rare        | `zzqx`   | 3       | 0.11     |
+| 100k  | common      | `data`   | 5,236   | 0.64     |
+| 100k  | prefix      | `re`     | 20,209  | 0.90     |
+| 100k  | single char | `a`      | 45,771  | 1.03     |
+| 100k  | no match    | `qqqqzz` | 0       | 0.10     |
+| 1M    | rare        | `zzqx`   | 26      | 0.74     |
+| 1M    | common      | `data`   | 52,950  | 6.15     |
+| 1M    | prefix      | `re`     | 202,719 | 11.7     |
+| 1M    | single char | `a`      | 459,658 | 16.2     |
+| 1M    | no match    | `qqqqzz` | 0       | 0.69     |
+
+The worst case measured -- a single-character query matching ~46% of
+1,000,000 names -- is 16.2 ms, well inside the 50 ms/keystroke budget;
+typical substring queries run sub-millisecond to ~6 ms. The parallel
+walker indexes a freshly written ~50k-entry on-disk tree at ~4.6M
+entries/s (4 workers, warm page cache -- this measures walker overhead
+rather than cold-disk latency). Numbers wobble up to ~2x with
+container load; the shape holds.
 
 ## Known caveats
 
@@ -137,12 +178,25 @@ so v2 it is. Revisit once v3 ships a stable release.
   window's current screen and cannot target another display); it falls
   back to centering. The global hotkey needs the app to be trusted
   under System Settings > Privacy & Security > Accessibility.
-  Compile-checked only on macOS -- CI builds linux/amd64 only, so the
-  macOS paths are untested in CI.
+  CI builds linux/amd64 only, so the macOS code is never compiled or
+  tested in CI (a cgo Cocoa target cannot be cross-compiled from the
+  Linux runner); treat it as best-effort until exercised on a real Mac.
 - **Windows**: hotkey via RegisterHotKey and monitors via user32; the
   bar positions against the current monitor's work area. Like macOS,
-  Windows code is compile-checked only on Windows and untested in CI
-  (linux/amd64 only).
+  the Windows code is never compiled or tested in CI (linux/amd64
+  only).
+- **Watch limits / event overflow**: every live indexed directory
+  holds one fsnotify watch (inotify on Linux), so very large trees can
+  exhaust `fs.inotify.max_user_watches`. Degradation is graceful and
+  never fatal: a refused watch is counted, logged once, and skipped
+  (that directory simply stops receiving live updates), and a kernel
+  event-queue overflow (lost events) automatically requests a full
+  reconcile rescan (requests are coalesced and spaced >= 30s apart, so
+  an overflow storm cannot cause back-to-back walks). Either condition
+  raises the staleness warning chip in the UI. If it happens
+  routinely, raise the limit (e.g.
+  `sudo sysctl fs.inotify.max_user_watches=524288`) and/or set
+  `rescanIntervalMinutes` as a periodic safety net.
 - **Reveal on Linux**: prefers the freedesktop `FileManager1` D-Bus
   interface and falls back to opening the parent directory with
   xdg-open when `dbus-send` is missing; a dbus-send that starts but

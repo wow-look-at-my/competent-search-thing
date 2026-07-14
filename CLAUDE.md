@@ -126,6 +126,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   setFrameOrigin on the first NSWindow, all on the main thread).
   windows/darwin files compile only on their OSes -- CI is linux/amd64
   -- so keep them boring and conventional.
+- `wails.json` -- Wails CLI project config (app name, frontend
+  install/build commands) read by `wails dev`/`wails build` only; the
+  no-CLI go-toolchain path does not use it.
 - `frontend/` -- vanilla TypeScript + Vite. No framework. `index.html`
   (query row with inline SVG magnifier, results list, status bar +
   degraded chip, <template> folder/file icons) + `src/main.ts` (search
