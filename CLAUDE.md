@@ -11,9 +11,31 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   NO test file and stays minimal (see coverage note below).
 - `internal/app` -- the Wails-bound App object and its methods
   (Search/Open/Reveal/Hide/Startup). Bound methods appear in JS as
-  `window.go.app.App.<Method>`. Unit-tested.
-- `internal/index` (later phase) -- walker + compact store + parallel
-  substring search + benchmarks.
+  `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
+  kicks off the initial disk walk in a goroutine; `app.Result` is a
+  type alias of `index.Result` (the JSON tags path/name/isDir live in
+  internal/index). Unit-tested.
+- `internal/index` -- the index engine. `Store`: compact
+  column-oriented data (interned parent-dir table; lowercased +
+  original-case name blobs with 0x00 separators and offset tables;
+  tombstone removals). `Store.Query`: case-insensitive substring
+  search, sharded across NumCPU goroutines with per-shard bounded
+  top-K heaps; ranking exact > prefix > substring, dirs before files,
+  shorter then lexicographic paths. `Walk`: parallel walker (worker
+  pool + LIFO queue) with exclude patterns (`Excluder`: bare pattern
+  = base name, pattern with separator = full path), symlinks indexed
+  but never descended, permission errors counted not fatal, throttled
+  progress callbacks. `Manager`: owns the RWMutex contract (queries
+  RLock, mutations Lock); `BuildFromDisk` walks into a fresh store and
+  swaps it in, so queries keep working during rebuilds; `Add`/`Remove`
+  are the watcher-phase entry points. A bare `Store` is NOT
+  thread-safe. Benchmarks build synthetic 100k/1M-entry stores in
+  memory (see bench_test.go) and a ~50k-entry disk tree.
+- `internal/config` -- config.json load/save (roots, excludes, hotkey,
+  rescanIntervalMinutes, maxResults). Lives under os.UserConfigDir();
+  the `COMPETENT_SEARCH_CONFIG_DIR` env var overrides the directory
+  (tests rely on this). `Load` never crashes: missing file -> defaults
+  written, corrupt file -> defaults + error returned for logging.
 - `internal/watch` (later phase) -- fsnotify live updates + periodic
   rescan.
 - `internal/platform` (later phase) -- global hotkey, display/cursor

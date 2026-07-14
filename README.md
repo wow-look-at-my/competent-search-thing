@@ -9,10 +9,11 @@ TypeScript + Vite frontend.
 
 ## Status
 
-Work in progress. This is the project scaffold: the window shell, the
-bound API stubs, the frontend skeleton, and CI. The index engine,
-filesystem watchers, platform layer (hotkey/open/reveal), and the real
-UI land in later phases.
+Work in progress. The window shell, CI, and the index engine (compact
+in-memory store, parallel walker, parallel substring search with
+ranking, JSON config) are in place; typing in the bar searches the
+index. Filesystem watchers, the platform layer (hotkey/open/reveal),
+and the polished UI land in later phases.
 
 ## Planned v1 features
 
@@ -69,24 +70,35 @@ Xcode command line tools are required. Untested in CI (see caveats).
 
 WebView2 runtime is required (preinstalled on Windows 11).
 
-## Configuration (planned)
+## Configuration
 
-Config will live at the platform config dir:
+Config lives at the platform config dir (set the
+`COMPETENT_SEARCH_CONFIG_DIR` environment variable to point at a
+different directory):
 
 - Linux: `~/.config/competent-search-thing/config.json`
 - macOS: `~/Library/Application Support/competent-search-thing/config.json`
 - Windows: `%APPDATA%\competent-search-thing\config.json`
 
-Planned format:
+The file is created with defaults on first run:
 
 ```json
 {
-  "roots": ["~"],
-  "exclude": ["node_modules", ".git", ".cache"],
-  "rescanMinutes": 30,
-  "maxResults": 100
+  "roots": ["<your home directory>"],
+  "excludes": [".git", "node_modules", ".cache"],
+  "hotkey": "alt+space",
+  "rescanIntervalMinutes": 0,
+  "maxResults": 50
 }
 ```
+
+Exclude patterns without a path separator are matched against each
+entry's base name (`node_modules`, `*.tmp`); matching directories are
+pruned, matching files skipped. Patterns containing a separator are
+matched against the full path (`/home/*/secret`); `*` never crosses a
+separator and there is no `**`. `rescanIntervalMinutes: 0` disables
+periodic rescans. The `hotkey` and rescan settings are read today but
+take effect when the platform/watcher phases land.
 
 ## Wails v2 vs v3
 
