@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/wow-look-at-my/competent-search-thing/master/schemas/theme.schema.json",
+  "name": "dark",
+  "tokens": {
+    "bg": "#18181c",
+    "bg-elevated": "#2c2c33",
+    "fg": "#f2f2f5",
+    "fg-dim": "#8a8a94",
+    "accent": "#8db8ff",
+    "accent-fg": "#101018",
+    "selection-bg": "#2b3f66",
+    "selection-fg": "#f2f2f5",
+    "border": "#3a3a42",
+    "highlight": "#8db8ff",
+    "warning": "#d9a13d",
+    "badge-bg": "#2b3f66",
+    "badge-fg": "#b8c6e8",
+    "scrollbar": "rgba(255, 255, 255, 0.14)",
+    "font-family": "system-ui, -apple-system, \"Segoe UI\", sans-serif",
+    "font-size": "14px",
+    "font-size-small": "12px",
+    "radius": "10px",
+    "gap": "10px",
+    "padding": "16px",
+    "bg-opacity": "0.97",
+    "blur": "0px"
+  }
+}

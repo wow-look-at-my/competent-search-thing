@@ -7,6 +7,7 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform/native"
 )
@@ -21,27 +22,32 @@ const toggleGap = 250 * time.Millisecond
 // process, so every call site first checks runtimeCtx() != nil, and
 // unit tests replace the whole struct with fakes.
 type runtimeSeams struct {
-	show   func(ctx context.Context)
-	hide   func(ctx context.Context)
-	center func(ctx context.Context)
-	setPos func(ctx context.Context, x, y int)
-	getPos func(ctx context.Context) (int, int)
-	emit   func(ctx context.Context, name string, data ...interface{})
+	show             func(ctx context.Context)
+	hide             func(ctx context.Context)
+	center           func(ctx context.Context)
+	setPos           func(ctx context.Context, x, y int)
+	getPos           func(ctx context.Context) (int, int)
+	emit             func(ctx context.Context, name string, data ...interface{})
+	clipboardSetText func(ctx context.Context, text string) error
+	quit             func(ctx context.Context)
 }
 
 func defaultRuntimeSeams() runtimeSeams {
 	return runtimeSeams{
-		show:   runtime.WindowShow,
-		hide:   runtime.WindowHide,
-		center: runtime.WindowCenter,
-		setPos: runtime.WindowSetPosition,
-		getPos: runtime.WindowGetPosition,
-		emit:   runtime.EventsEmit,
+		show:             runtime.WindowShow,
+		hide:             runtime.WindowHide,
+		center:           runtime.WindowCenter,
+		setPos:           runtime.WindowSetPosition,
+		getPos:           runtime.WindowGetPosition,
+		emit:             runtime.EventsEmit,
+		clipboardSetText: runtime.ClipboardSetText,
+		quit:             runtime.Quit,
 	}
 }
 
 // platformSeams carries the platform-layer hooks (hotkey, displays,
-// open/reveal) plus the ambient bits (GOOS, clock) tests pin down.
+// open/reveal/run, app-context source) plus the ambient bits (GOOS,
+// clock) tests pin down.
 type platformSeams struct {
 	goos        string
 	now         func() time.Time
@@ -50,6 +56,8 @@ type platformSeams struct {
 	moveWindow  func(x, y int) bool
 	open        func(path string) error
 	reveal      func(path string) error
+	run         func(argv []string) error
+	appSource   appctx.Source
 }
 
 func defaultPlatformSeams() platformSeams {
@@ -62,6 +70,8 @@ func defaultPlatformSeams() platformSeams {
 		moveWindow:  native.MoveWindow,
 		open:        launcher.Open,
 		reveal:      launcher.Reveal,
+		run:         launcher.Run,
+		appSource:   native.AppSource(),
 	}
 }
 
@@ -98,7 +108,9 @@ func (a *App) Hide() {
 
 // toggle is the global hotkey callback: hide when visible, summon onto
 // the cursor's display when hidden. Presses within toggleGap of the
-// last accepted one are dropped (key autorepeat).
+// last accepted one are dropped (key autorepeat). On the summon path
+// the app context is captured FIRST: showing the bar steals focus, so
+// the focused app must be read before the window appears.
 func (a *App) toggle() {
 	a.mu.Lock()
 	now := a.plat.now()
@@ -112,6 +124,7 @@ func (a *App) toggle() {
 	if visible {
 		a.Hide()
 	} else {
+		a.captureAppContext()
 		a.showOnCursorDisplay()
 	}
 }

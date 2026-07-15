@@ -23,4 +23,21 @@ int csGetDisplays(csDisplay *out, int max);
 // at (x, y); returns 1 on success, 0 when there is no window.
 int csMoveWindow(double x, double y);
 
+// csAppInfo describes one running application. Strings are UTF-8 and
+// always NUL-terminated (truncated to fit).
+typedef struct {
+	char name[256];  // localizedName
+	char exe[1024];  // executable path (bundle path when unavailable)
+	int pid;
+} csAppInfo;
+
+// csFrontmostApp fills out with the frontmost application; returns 1
+// on success, 0 when there is none.
+int csFrontmostApp(csAppInfo *out);
+
+// csRunningApps fills out with up to max applications that have a
+// regular activation policy (i.e. appear in the Dock and app
+// switcher); returns the count written (0 on failure).
+int csRunningApps(csAppInfo *out, int max);
+
 #endif

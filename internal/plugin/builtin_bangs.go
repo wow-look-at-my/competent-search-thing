@@ -1,0 +1,78 @@
+package plugin
+
+import "context"
+
+// builtinSuggestID is the provider id of the bang-suggestions builtin.
+const builtinSuggestID = "bangs"
+
+// maxBangSuggestions caps one suggestions response.
+const maxBangSuggestions = 12
+
+// bangSuggestProvider answers bare/partial/ambiguous bang queries
+// ("!", "!ca") with the matching bangs as virtual results. It is never
+// trigger-matched or bang-targeted: Dispatch special-cases it. Each
+// suggestion carries an internal set_query action that replaces the
+// input with the completed bang, preserving whatever followed it
+// ("!ca 2+2" suggests "!calc 2+2").
+type bangSuggestProvider struct {
+	builtinBase
+	reg *Registry
+}
+
+func newBangSuggestProvider(reg *Registry) *bangSuggestProvider {
+	return &bangSuggestProvider{
+		builtinBase: builtinBase{pid: builtinSuggestID, name: "Commands"},
+		reg:         reg,
+	}
+}
+
+func (p *bangSuggestProvider) query(_ context.Context, req Request) ([]Result, []string, error) {
+	bq, ok := p.reg.bangs.Parse(req.Query)
+	if !ok {
+		return nil, nil, nil // only dispatched for bang-shaped queries
+	}
+	ordered := p.candidateBangs(bq.Name)
+	if len(ordered) > maxBangSuggestions {
+		ordered = ordered[:maxBangSuggestions]
+	}
+	primary := p.reg.bangs.Primary()
+	results := make([]Result, 0, len(ordered))
+	for i, b := range ordered {
+		subtitle := ""
+		if prov, ok := p.reg.byID[b.ProviderID]; ok {
+			subtitle = prov.displayName()
+		}
+		// Descending by list position keeps the order stable in the UI.
+		score := float64(90 - i)
+		results = append(results, Result{
+			// Titles use the primary sigil; set_query keeps the sigil
+			// the user actually typed.
+			Title:    primary + b.Bang,
+			Subtitle: subtitle,
+			Icon:     "hash",
+			Score:    &score,
+			Action:   &Action{Type: ActionSetQuery, Value: bq.Sigil + b.Bang + " " + bq.Rest},
+		})
+	}
+	return results, nil, nil
+}
+
+// candidateBangs lists the bangs to suggest for a typed partial name:
+// the resolved bang (exact, alias, or unique prefix) first when there
+// is one -- so "!calc" and alias hits surface their canonical bang on
+// top -- followed by the remaining prefix candidates in sorted order.
+func (p *bangSuggestProvider) candidateBangs(partial string) []BangInfo {
+	cands := p.reg.bangs.Candidates(partial)
+	pid, canonical, ok := p.reg.bangs.Resolve(partial)
+	if !ok {
+		return cands
+	}
+	out := make([]BangInfo, 0, len(cands)+1)
+	out = append(out, BangInfo{Bang: canonical, ProviderID: pid})
+	for _, c := range cands {
+		if c.Bang != canonical {
+			out = append(out, c)
+		}
+	}
+	return out
+}

@@ -10,11 +10,66 @@ interface WailsSearchResult {
   isDir: boolean;
 }
 
+// Bang-target info returned by QueryPlugins (internal/plugin
+// TargetInfo). targeted false means the query is not bang-targeted
+// and the other fields are zero values (chip off).
+interface TargetInfo {
+  targeted: boolean;
+  plugin: string; // provider id ("calc")
+  name: string; // display name ("Calculator")
+  bang: string; // canonical bang name ("calc")
+}
+
+// An activation action carried by a plugin result (internal/plugin
+// Action). set_query is frontend-local (replace the input and
+// re-search); every other type is executed by RunPluginAction, which
+// re-validates it Go-side.
+interface PluginAction {
+  type:
+    | "open_path"
+    | "open_url"
+    | "copy_text"
+    | "run_command"
+    | "set_query"
+    | "run_builtin";
+  value?: string; // every type except run_command
+  argv?: string[]; // run_command only
+}
+
+// One virtual result in a "plugin:results" emission (internal/plugin
+// Result, after the Go-side sanitizer).
+interface PluginResult {
+  title: string; // always non-empty
+  subtitle?: string;
+  icon?: string; // builtin icon name [a-z0-9_-]+ OR literal glyph/emoji
+  badge?: string;
+  accent_color?: string; // "#rgb" | "#rrggbb" -- ONLY ever sets --plugin-accent
+  score?: number; // 0..100; in practice always present
+  fields?: { label: string; value: string }[]; // <= 8
+  action?: PluginAction; // absent => Enter/click is a no-op row
+}
+
+// Payload of the "plugin:results" event (internal/plugin Emission).
+// One emission arrives per provider per generation.
+interface PluginEmission {
+  plugin: string; // section key + RunPluginAction pluginId
+  name: string; // section header display name
+  gen: number; // DROP unless === the current frontend seq
+  results: PluginResult[]; // non-empty (empty answers never emit)
+}
+
 interface WailsAppBindings {
   Search(query: string): Promise<WailsSearchResult[]>;
   Open(path: string): Promise<void>;
   Reveal(path: string): Promise<void>;
   Hide(): Promise<void>;
+  QueryPlugins(query: string, gen: number): Promise<TargetInfo>;
+  RunPluginAction(pluginId: string, action: PluginAction): Promise<void>;
+  // Resolved theme tokens: every internal/theme.TokenNames key mapped
+  // to a validated CSS value (theme.ts sets each as --sb-<key>).
+  GetTheme(): Promise<Record<string, string>>;
+  // Contents of <configDir>/themes/custom.css (<= 64KB), else "".
+  GetCustomCSS(): Promise<string>;
 }
 
 // The subset of the Wails runtime API this app uses (see the wails v2

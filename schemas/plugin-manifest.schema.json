@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/wow-look-at-my/competent-search-thing/master/schemas/plugin-manifest.schema.json",
+  "title": "competent-search-thing plugin manifest",
+  "description": "One plugin's manifest.json, loaded from <configDir>/plugins/<dir>/manifest.json. Source of truth: internal/plugin/manifest.go and trigger.go. The loader ignores unknown keys and fills defaults (v=1, name=id, timeout_ms=1500, bangs=[id]); this schema is stricter than the loader on purpose so editors flag mistakes. Reachability rule (described, not encoded): a plugin must be reachable somehow -- omitting 'bangs' defaults it to [id], but an explicitly empty 'bangs' list REQUIRES a 'trigger', otherwise the manifest is rejected as unreachable.",
+  "type": "object",
+  "required": ["id", "type"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional editor hint pointing at this schema. Ignored by the app."
+    },
+    "v": {
+      "type": "integer",
+      "const": 1,
+      "default": 1,
+      "description": "Manifest version; must be 1 (omitting it means 1)."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$",
+      "description": "Unique plugin id: 1-32 chars of [a-z0-9_-], starting with a letter or digit. The built-in ids 'bangs', 'app' and 'apps' are taken. When two manifests declare the same id, the alphabetically-first directory wins."
+    },
+    "name": {
+      "type": "string",
+      "description": "Display name, shown as the section header and in the bang chip. Defaults to the id."
+    },
+    "type": {
+      "type": "string",
+      "enum": ["command", "http"],
+      "description": "The transport: 'command' runs a subprocess per query (request JSON on stdin, response JSON on stdout); 'http' POSTs the request JSON to a URL."
+    },
+    "trigger": { "$ref": "#/$defs/trigger" },
+    "bangs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$",
+        "description": "A bang name (same syntax as a plugin id; lowercase)."
+      },
+      "description": "Bang names targeting this plugin ('!calc 2+2'). Omitted means [id]. Names are lowercased and deduped on load. An explicit [] means 'no bangs' and then 'trigger' is required (a plugin with neither is rejected as unreachable)."
+    },
+    "context": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["focused", "running", "installed"]
+      },
+      "uniqueItems": true,
+      "description": "App-context parts sent with every request. Undeclared parts are never sent; duplicates are deduped by the loader (this schema rejects them)."
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "anyOf": [
+        { "const": 0 },
+        { "minimum": 100, "maximum": 10000 }
+      ],
+      "default": 1500,
+      "description": "Per-query time budget in milliseconds. 0 or omitted means the default 1500. The loader CLAMPS out-of-range values to 100..10000 instead of rejecting; this schema rejects them so authors notice."
+    },
+    "command": { "$ref": "#/$defs/commandSpec" },
+    "http": { "$ref": "#/$defs/httpSpec" },
+    "allow_run_command": {
+      "type": "boolean",
+      "default": false,
+      "description": "Must be true for this plugin's results to carry run_command actions; otherwise any result with one is dropped by the sanitizer."
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "command" } }, "required": ["type"] },
+      "then": { "required": ["command"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "http" } }, "required": ["type"] },
+      "then": { "required": ["http"] }
+    }
+  ],
+  "$defs": {
+    "trigger": {
+      "title": "Trigger",
+      "type": "object",
+      "description": "When the plugin sees untargeted (non-bang) queries. The plugin matches when ANY text path (prefix, regex, all_queries -- tried in that order, first match decides the stripped query) matches AND the focused_app gate, when present, matches. Bang targeting bypasses triggers entirely. Omit the whole trigger to make the plugin bang-only.",
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "description": "Case-insensitive (rune-folded) prefix match on the typed query; the remainder, trimmed, becomes the request's 'stripped'."
+        },
+        "regex": {
+          "type": "string",
+          "description": "Case-insensitive RE2 pattern matched against the RAW query; on match 'stripped' is the trimmed raw query. An invalid pattern rejects the manifest at load."
+        },
+        "all_queries": {
+          "type": "boolean",
+          "default": false,
+          "description": "Match every query. When set and min_query_len is 0, the effective minimum stripped length is 2, so an all-queries plugin does not fire on single keystrokes."
+        },
+        "min_query_len": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Minimum STRIPPED query length in runes, gating ALL text paths. 0 means no minimum (except the all_queries default of 2, see above)."
+        },
+        "debounce_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2000,
+          "default": 0,
+          "description": "Extra delay before dispatch; a newer keystroke cancels the wait, so a debounced plugin only sees queries the user paused on. The dispatcher CLAMPS values to 0..2000; this schema rejects out-of-range values."
+        },
+        "focused_app": { "$ref": "#/$defs/focusedGate" },
+        "focused_boost": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 0,
+          "description": "Added to every result score (result scores are clamped at 100) when the focused_app gate matches -- lets app-specific plugins outrank generic ones. The dispatcher CLAMPS values to 0..100; this schema rejects out-of-range values."
+        }
+      },
+      "additionalProperties": false
+    },
+    "focusedGate": {
+      "title": "Focused-app gate",
+      "type": "object",
+      "description": "The trigger only matches when the application focused at hotkey press matches (case-insensitive RE2). At least one pattern must be non-empty (both empty rejects the manifest at load); an empty or omitted pattern is a wildcard. When no focused app is known (Wayland, degraded platforms) the gate never matches (fail-closed).",
+      "properties": {
+        "name_regex": {
+          "type": "string",
+          "description": "Case-insensitive RE2 matched against the focused app's name (e.g. 'firefox|chrome')."
+        },
+        "exe_regex": {
+          "type": "string",
+          "description": "Case-insensitive RE2 matched against the focused app's executable path."
+        }
+      },
+      "additionalProperties": false,
+      "anyOf": [
+        { "required": ["name_regex"], "properties": { "name_regex": { "minLength": 1 } } },
+        { "required": ["exe_regex"], "properties": { "exe_regex": { "minLength": 1 } } }
+      ]
+    },
+    "commandSpec": {
+      "title": "Command transport",
+      "type": "object",
+      "description": "Required for type 'command'. The app runs argv directly (no shell), request JSON on stdin (then closed), response JSON from stdout (capped 1 MiB). An absolute argv[0] runs as-is; one containing a path separator resolves relative to the manifest's directory; a bare name goes through PATH. The working directory is always the manifest's directory.",
+      "required": ["argv"],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "The command line; at least one entry, none empty."
+        }
+      },
+      "additionalProperties": false
+    },
+    "httpSpec": {
+      "title": "HTTP transport",
+      "type": "object",
+      "description": "Required for type 'http'. The app POSTs the request JSON (Content-Type: application/json) to url and reads the response JSON from a 2xx reply (body capped 1 MiB). Redirects are followed at most 3 hops and only to http(s) targets.",
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "pattern": "^https?://",
+          "description": "Absolute http or https URL with a host."
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Headers set on every request (e.g. an API key)."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "examples": [
+    {
+      "v": 1,
+      "id": "calc",
+      "name": "Calculator",
+      "type": "command",
+      "trigger": { "prefix": "=" },
+      "bangs": ["calc", "c"],
+      "timeout_ms": 1500,
+      "command": { "argv": ["python3", "calc.py"] }
+    },
+    {
+      "v": 1,
+      "id": "tickets",
+      "name": "Ticket lookup",
+      "type": "http",
+      "trigger": {
+        "regex": "^[a-z]{2,5}-[0-9]+$",
+        "min_query_len": 4,
+        "debounce_ms": 150,
+        "focused_app": { "name_regex": "firefox|chrome" },
+        "focused_boost": 20
+      },
+      "bangs": ["ticket", "t"],
+      "context": ["focused"],
+      "timeout_ms": 3000,
+      "http": {
+        "url": "http://127.0.0.1:9800/query",
+        "headers": { "X-Api-Key": "swordfish" }
+      },
+      "allow_run_command": false
+    }
+  ]
+}

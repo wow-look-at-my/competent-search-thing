@@ -10,32 +10,75 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   hide-on-close, fixed 680x460), binds the App object. Deliberately has
   NO test file and stays minimal (see coverage note below).
 - `internal/app` -- the Wails-bound App object and its methods
-  (Search/Open/Reveal/Hide/Startup/Shutdown). Bound methods appear in
-  JS as `window.go.app.App.<Method>`. Holds the `index.Manager`;
-  `Startup` saves the runtime ctx, registers the global hotkey (once;
-  parse or register failure = log once, run on without it), and kicks
-  the initial disk walk in a goroutine; when the walk finishes,
-  `startWatch` brings up a `watch.Watcher` + `watch.Rescanner` pair;
-  `Shutdown` (wired to Wails OnShutdown) releases the hotkey and stops
-  them cleanly, and also flags a still-running initial build to skip
-  starting them. The hotkey callback `toggle` (rate-limited 250ms
-  against key autorepeat) hides the bar when visible, else
+  (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/Shutdown/
+  QueryPlugins/RunPluginAction). Bound methods appear in JS as
+  `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
+  saves the runtime ctx, registers the global hotkey (once; parse or
+  register failure = log once, run on without it), brings the plugin
+  layer up once (plugins.go: an appctx.Cache over the plat.appSource
+  seam + RefreshInstalledAsync, then the registry via the
+  `newRegistry` builder seam, whose production value `buildRegistry`
+  re-reads config.json, LoadDirs <configDir>/plugins, passes Version
+  and the installedApps getter, and logs every registry Errors()
+  entry once with a "plugin:" prefix -- missing plugins dir =
+  builtins only, no noise), starts theme hot reload (theme.go: a
+  dedicated fsnotify watcher on the config dir + its themes/ subdir,
+  events debounced 300ms into "theme:changed"; any failure = log +
+  run on without live reload), and kicks the initial disk walk in a
+  goroutine; when the walk finishes, `startWatch` brings up a
+  `watch.Watcher` + `watch.Rescanner` pair; `Shutdown` (wired to
+  Wails OnShutdown) releases the hotkey, cancels the in-flight plugin
+  generation + Close()s the registry, and stops rescanner+watcher
+  plus the theme watcher cleanly, also flagging a still-running
+  initial build to skip starting them. GetTheme re-loads config.json
+  (ONLY the theme field is consumed live) and returns theme.Resolve's
+  token map -- errors are logged once per distinct message and fall
+  back to dark; GetCustomCSS returns <configDir>/themes/custom.css
+  verbatim when <= 64KB (the unvalidated escape hatch), else "". The
+  hotkey callback `toggle` (rate-limited 250ms against key
+  autorepeat) hides the bar when visible; when hidden it FIRST
+  captures app context (`captureAppContext`: CaptureFocused +
+  RefreshRunningAsync + EnsureFreshInstalled(5m) -- the bar window
+  steals focus, so this precedes showing), then
   `showOnCursorDisplay`: platform.CursorDisplays -> PickDisplay ->
   BarPosition (absolute coords), then darwin = native.MoveWindow,
   linux/windows = translate via DisplayForWindow + WailsPosition (Wails
   WindowSetPosition is RELATIVE to the window's current monitor -- and
   to the WORK AREA origin on Windows -- while WindowGetPosition is
   absolute; verified in the v2.13.0 sources), any failure -> WindowCenter;
-  then WindowShow + "app:shown". Events emitted (all guarded so a nil
-  ctx no-ops): "index:progress" {indexed,done,seconds},
-  "watch:degraded" {watched,dropped,overflows}, "app:shown". ALL Wails
+  then WindowShow + "app:shown". `QueryPlugins(query string, gen
+  int) plugin.TargetInfo` stores gen (atomic), cancels the previous
+  generation's context (aborting plugin subprocesses/HTTP/debounces;
+  empty query or nil registry = cancel only, zero TargetInfo),
+  converts the appctx Snapshot to the plugin wire types, and
+  dispatches; providers answer async via "plugin:results" events
+  whose emit path drops stale generations. `RunPluginAction(pluginID
+  string, action plugin.Action) error` RE-validates every action the
+  frontend echoes back (defense in depth), logs it, then executes:
+  copy_text -> ClipboardSetText (bar stays open); open_path (abs
+  path only) and open_url (http/https + host only) -> the open seam;
+  run_command (1..16 non-empty <=1024-byte argv) -> the run seam
+  (launcher, detached); run_builtin -> rescan (Rescanner.Request;
+  friendly error while the index is still building) / reload
+  (newRegistry, swap under mutex, Close the old) / config (open
+  config.json) / version (copy `Version`, stays open) / quit
+  (runtime Quit); everything else hides the bar on success. Events
+  emitted (all guarded so a nil ctx no-ops): "index:progress"
+  {indexed,done,seconds}, "watch:degraded"
+  {watched,dropped,overflows}, "app:shown", "theme:changed" (no
+  payload; frontend refetches GetTheme/GetCustomCSS),
+  "plugin:results" (payload plugin.Emission
+  {plugin,name,gen,results}). ALL Wails
   runtime calls and platform hooks sit behind seam structs
-  (`runtimeSeams`/`platformSeams` in window.go, defaults in New); unit
-  tests MUST replace them (see newTestApp) -- real runtime funcs abort
-  the process without a Wails context. Open/Reveal call the platform
-  launcher and hide the bar on success. `app.Result` is a type alias of
-  `index.Result` (the JSON tags path/name/isDir live in
-  internal/index). Unit-tested.
+  (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
+  incl. run/appSource, in window.go; defaults in New, plus the
+  `newRegistry` seam); unit tests MUST replace them (see newTestApp,
+  which also nils appSource and stubs newRegistry so no config or
+  X11 IO happens) -- real runtime funcs abort the process without a
+  Wails context. Open/Reveal call the platform launcher and hide the
+  bar on success. `app.Result` is a type alias of `index.Result`
+  (the JSON tags path/name/isDir live in internal/index). The app
+  `Version` constant lives in plugins.go. Unit-tested.
 - `internal/index` -- the index engine. `Store`: compact
   column-oriented data (interned parent-dir table; lowercased +
   original-case name blobs with 0x00 separators and offset tables;
@@ -53,10 +96,135 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   thread-safe. Benchmarks build synthetic 100k/1M-entry stores in
   memory (see bench_test.go) and a ~50k-entry disk tree.
 - `internal/config` -- config.json load/save (roots, excludes, hotkey,
-  rescanIntervalMinutes, maxResults). Lives under os.UserConfigDir();
-  the `COMPETENT_SEARCH_CONFIG_DIR` env var overrides the directory
-  (tests rely on this). `Load` never crashes: missing file -> defaults
+  rescanIntervalMinutes, maxResults, theme, plugins {disabled, entries
+  {<id>: {disabled, settings}}}, bangs {sigils, aliases}). Lives under
+  os.UserConfigDir(); the `COMPETENT_SEARCH_CONFIG_DIR` env var
+  overrides the directory (tests rely on this); `Dir()` exposes that
+  directory (the plugins/ and themes/ dirs live inside it, next to
+  config.json). `Load` never crashes: missing file -> defaults
   written, corrupt file -> defaults + error returned for logging.
+  `Normalize` repairs zero values (empty theme -> dark, nil plugin
+  entries/bang aliases -> empty maps, empty sigils -> the ! / @
+  defaults); entry settings are opaque json.RawMessage forwarded
+  verbatim to that plugin.
+- `internal/theme` -- design-token resolution. WARNING: the 22
+  `TokenNames` (bg, bg-elevated, fg, fg-dim, accent, accent-fg,
+  selection-bg, selection-fg, border, highlight, warning, badge-bg,
+  badge-fg, scrollbar, font-family, font-size, font-size-small,
+  radius, gap, padding, bg-opacity, blur) are a STABLE PUBLIC
+  CONTRACT -- the frontend exposes each as `--sb-<token>`, the README
+  documents the table, and the plugin workstream styles plugin
+  accents/badges against them (accent/accent-fg primary,
+  badge-bg/badge-fg reserved for result badges); never rename or
+  remove one. Builtins dark.json (the original palette) + light.json
+  (extends dark) are embedded via go:embed. `Resolve(name,
+  configDir)`: builtin lookup first (not shadowable), else
+  `<configDir>/themes/<name>.json`; merges over the extends chain
+  (builtin-or-user, depth cap 4, cycle detection), gap-fills from
+  dark so the result always covers every token; validates strictly
+  (unknown keys -> error naming them; values whitelisted to hex /
+  rgb()/rgba()/hsl()/hsla() / px|em|rem|% lengths / bare numbers,
+  font-family to a tight charset; url(, expression(, @import, `;`,
+  `{`, `}` hard-rejected). ANY error returns the dark builtin
+  ALONGSIDE the error (caller logs; never crash). sync_test.go is the
+  drift guard: it parses frontend/src/style.css's :root --sb-* block
+  and requires it token-for-token identical to dark.json -- edit both
+  together or the build fails.
+- `internal/plugin` -- the plugin system, pure and headless-testable
+  (wired into the app by internal/app's plugins.go). schema.go:
+  versioned JSON wire protocol
+  (Request/Response/Result/Action, v=1) and `SanitizeResponse`, which
+  clamps/validates everything an external plugin returns: 20-result
+  cap, rune caps (title 200/subtitle 300/badge 24/field 40+200, max 8
+  fields), control chars -> spaces everywhere, icon = builtin name or
+  <=32-byte glyph, accent_color regex, score default 50 clamp 0..100,
+  action validation (open_path abs path, open_url http(s)+host,
+  copy_text <=8 KiB, run_command 1..16 argv <=1024 B each and the
+  whole RESULT is dropped unless the manifest sets allow_run_command;
+  internal-only set_query/run_builtin always stripped; anything
+  removed gets a human-readable reason for logging). trigger.go:
+  `Trigger` Compile/Match/Boost -- prefix (case-insensitive,
+  rune-folded) / regex (ci RE2 on the RAW query) / all_queries paths
+  (first match wins the stripped value), min_query_len in runes of
+  the STRIPPED query gating all paths (defaults 2 when all_queries),
+  optional focused-app gate (name/exe ci RE2, both-empty rejected at
+  Compile, fail-closed) + focused_boost clamped 0..100. manifest.go:
+  `LoadDir(<configDir>/plugins)` -- one error per broken manifest
+  (path-prefixed), missing dir = no plugins no error, duplicate id ->
+  first alphabetical dir wins, defaults (v=1, name=id, timeout_ms
+  1500 clamp 100..10000, bangs=[id]), bangs lowercased+deduped,
+  context subset of {focused,running,installed}, empty bangs + nil
+  trigger rejected as unreachable, trigger compiled on load.
+  bangs.go: `BangSet` -- config-driven sigils (must be one non-letter/
+  digit/space rune; invalid ones recorded via Errors(), all-invalid ->
+  defaults ! / @), Register (dup = error, first wins), Parse (sigil +
+  [a-zA-Z0-9_-]* name lowercased + end-or-space + raw rest), Resolve
+  (exact > alias > unique prefix, canonical bang returned), sorted
+  Candidates(partial), Primary() = first configured sigil.
+  command.go/http.go: the transports behind the tiny `transport` seam
+  -- command = one shell-free subprocess per query (request JSON to
+  stdin then closed, cwd = Manifest.Dir, argv[0] with a separator
+  resolved against it, stdout capped 1 MiB, stderr capped 8 KiB and
+  quoted in errors, ctx timeout hard-kills with 250ms WaitDelay);
+  http = POST to the manifest url (ONE shared keep-alive client per
+  Registry, max 3 http(s)-only redirect hops, 2xx required, body
+  capped 1 MiB). Both error on invalid JSON and v != 1. registry.go:
+  `New(Options) *Registry` wraps manifests in providers (settings
+  default "{}", request context filtered to the manifest-declared
+  parts, `SanitizeResponse` applied HERE so trusted builtins bypass
+  it), registers builtins FIRST (a manifest can never shadow a
+  builtin bang or id; dup bang/id = recorded error, first wins),
+  honors the global kill switch + per-id disable entries, and
+  collects every setup problem for `Errors()`. `Dispatch(ctx, query,
+  gen, appCtx, emit)` returns `TargetInfo` synchronously and fans out
+  one goroutine per matching provider: ctx-abortable debounce
+  (clamped 0..2s here -- DebounceMS arrives unclamped), per-plugin
+  timeout ctx (manifest timeout_ms; builtins 1.5s), panic recovery,
+  per-provider 5s-throttled logging (throttle.go), focused boost
+  added and clamped at 100, emit only with results and only while ctx
+  is live -- emit runs on provider goroutines and MUST be
+  goroutine-safe. Routing: resolved bang (exact/alias/unique-prefix)
+  + space => ONLY that provider, all trigger gating bypassed;
+  bare/partial/ambiguous or resolved-without-space sigil => ONLY the
+  builtin suggestions provider; bang-shaped text with zero candidates
+  => normal trigger fan-out on the raw query. `Close()` drops idle
+  HTTP connections; reload = build a new Registry, swap atomically,
+  Close the old. Builtins (targeted-only, in-process, no sanitizer):
+  builtin_bangs.go "bangs"/Commands -- bang completions (resolved
+  bang first, primary-sigil titles, typed-sigil set_query preserving
+  the query rest, cap 12); builtin_app.go "app"/App Commands --
+  !rescan/!reload/!config/!version/!quit, one run_builtin result each
+  (version subtitle from Options.Version); builtin_apps.go
+  "apps"/Launch -- !app/!launch over the Options.InstalledApps
+  snapshot (empty query = first 15 alphabetical, prefix 100 /
+  substring 80, cap 15, run_command argv via `parseDesktopExec`:
+  quotes, backslash escapes, %-field codes stripped). Exhaustively
+  unit-tested, table-driven, plus an end-to-end manifest ->
+  registry -> /bin/sh transport dispatch test.
+- `internal/appctx` -- app-context collection for the plugin system,
+  pure and headless-tested: the data types (AppInfo / InstalledApp /
+  Snapshot -- deliberately NOT internal/plugin's wire types, the app
+  layer converts), the `Source` seam implemented by
+  internal/platform/native, and `Cache` (mutex-guarded, injectable
+  clock): `CaptureFocused` = synchronous focused-app read at
+  hotkey-press BEFORE the window steals focus;
+  `RefreshRunningAsync` / `RefreshInstalledAsync` = single-flight
+  background refreshes that never block callers and keep old data on
+  failure; `EnsureFreshInstalled(ttl)` re-kicks only when the last
+  SUCCESSFUL installed refresh is older than ttl; `Snapshot()` =
+  immutable copies. A zero-value or nil-Source Cache no-ops
+  everything (degraded). desktop.go = XDG .desktop scanning with
+  injectable dirs (`DesktopDirs(getenv)`: $XDG_DATA_HOME else
+  ~/.local/share, then $XDG_DATA_DIRS else
+  /usr/local/share:/usr/share, each + /applications, deduped;
+  `ScanDesktopDirs`: flat per-dir scan of *.desktop files, [Desktop
+  Entry] needs Type=Application + non-empty Name/Exec,
+  NoDisplay/Hidden/Terminal skipped, Exec kept RAW for the plugin
+  layer's parser, ID = file name, earlier dirs shadow later ones BY
+  PRESENCE (a Hidden local copy disables a system app), localized
+  Name[xx] ignored, sorted by Name). proc.go = `ProcInfo(procRoot,
+  pid)` readlink exe + trimmed comm, each empty on error (cross-user
+  /proc exe readlink fails; expected).
 - `internal/watch` -- keeps the index live after the initial walk.
   `Watcher` (watch.go + events.go): one fsnotify watch per live indexed
   directory plus the roots -- fsnotify is used uniformly on ALL
@@ -124,25 +292,114 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (platform_darwin.h/.m: cursor via CGEventCreate, screens via
   NSScreen with bottom-left->top-left conversion, MoveWindow via
   setFrameOrigin on the first NSWindow, all on the main thread).
+  Also per OS: `AppSource() appctx.Source` (appsource_*.go), the
+  app-context glue -- linux = EWMH over conn-per-call xgb
+  (_NET_ACTIVE_WINDOW / _NET_CLIENT_LIST -> per-window _NET_WM_PID,
+  WM_CLASS class for Name, _NET_WM_NAME falling back to WM_NAME for
+  Title, exe/comm via appctx.ProcInfo("/proc", pid); RunningApps
+  dedupes by pid keeping the first window's title, skips pid==0, caps
+  64, sorts by Name; InstalledApps = appctx.ScanDesktopDirs; no X ->
+  ok=false); windows = GetForegroundWindow / EnumWindows (package-
+  level callback) + IsWindowVisible + GetWindowTextW +
+  GetWindowThreadProcessId + OpenProcess/QueryFullProcessImageNameW
+  (Name = exe base sans extension), InstalledApps = HKLM+HKCU
+  uninstall keys (native + WOW6432Node; DisplayName, skip
+  SystemComponent=1, Exec from a plausible-.exe DisplayIcon with the
+  ",N" index stripped and spaces re-quoted in .desktop syntax);
+  darwin = NSWorkspace via the Cocoa shim (frontmostApplication /
+  runningApplications with regular activation policy; Title always
+  empty -- titles need the AX API), InstalledApps = /Applications +
+  ~/Applications *.app scan (Exec = `open -a "<path>"`).
   windows/darwin files compile only on their OSes -- CI is linux/amd64
   -- so keep them boring and conventional.
 - `wails.json` -- Wails CLI project config (app name, frontend
   install/build commands) read by `wails dev`/`wails build` only; the
   no-CLI go-toolchain path does not use it.
 - `frontend/` -- vanilla TypeScript + Vite. No framework. `index.html`
-  (query row with inline SVG magnifier, results list, status bar +
-  degraded chip, <template> folder/file icons) + `src/main.ts` (search
-  as-you-type: 15ms debounce + sequence-number stale-response drop;
-  selection: ArrowUp/Down wrap, Home/End, hover; Enter=Open,
-  Ctrl/Cmd+Enter=Reveal, click/ctrl-click likewise, Esc + window blur
-  -> Hide; runtime events: "app:shown" -> focus+select+refresh,
+  (query row with inline SVG magnifier + hidden bang chip; #results
+  split into #file-results / static #empty ("No matches") /
+  #plugin-results zones; status bar + degraded chip; <template>s for
+  folder/file icons AND plugin section/row skeletons) + `src/main.ts`
+  (search as-you-type: 15ms debounce + sequence-number stale-response
+  drop; every generation also fire-and-forgets QueryPlugins(query,
+  seq) -- INCLUDING the empty query, which is the Go-side cancel
+  signal -- and updates the bang chip from the returned TargetInfo;
+  "plugin:results" emissions are dropped unless gen === seq, else
+  upsert that plugin's section (keyed by id) and re-render the plugin
+  area BELOW the file rows, never displacing them; selection is one
+  flat list, file rows then plugin rows: ArrowUp/Down wrap, Home/End,
+  hover; file rows Enter=Open / Ctrl/Cmd+Enter=Reveal; plugin rows run
+  their action on Enter/click (Ctrl+Enter identical): set_query stays
+  frontend-local (replace input, caret to end, re-run the pipeline),
+  everything else goes to RunPluginAction -- Go owns bar-hide per
+  action type; copy_text and run_builtin "version" stay open and flash
+  "Copied" ~1.2s in the status bar, action errors flash ~2s; #empty
+  shows only when a non-blank query has neither files nor sections;
+  Esc + window blur -> Hide; runtime events: "app:shown" ->
+  focus+select+refresh (plugins re-query through the same path),
   "index:progress" -> status text, "watch:degraded" -> warning chip)
-  + `src/render.ts` (row DOM: icon, name with highlighted match, dim
-  parent dir; pure text nodes, no innerHTML) + `src/style.css` (dark
-  Spotlight-ish bar; dir ellipsizes before the name; thin scrollbar)
-  + `src/wails.d.ts` (ambient types for the Wails-injected `window.go`
-  / `window.runtime` incl. EventsOn and the event payload shapes --
-  keep in sync with internal/app's payload structs).
+  + `src/render.ts` (pure text-node DOM builders, no innerHTML
+  anywhere: file rows with highlighted match + dim parent dir; plugin
+  sections -- unselectable header, rows with icon/title/dim
+  subtitle/badge/"label: value" fields; the builtin icon-name -> glyph
+  map (calculator globe clock star info warning link terminal text
+  hash bolt app puzzle; unknown/absent -> puzzle, non-name values
+  render as literal glyphs); accent_color is ONLY ever applied by
+  setting the `--plugin-accent` custom property on the row -- never
+  inline color styles) + `src/theme.ts` (initTheme called first in
+  wire(): fetches GetTheme and sets each token as `--sb-<k>` on
+  <html>, injects GetCustomCSS as the text of the single managed
+  `<style id="sb-custom-css">`, refetches on "theme:changed") +
+  `src/style.css` (Spotlight-ish bar, dark by default; dir ellipsizes
+  before the name; thin scrollbar; ALL colors/sizes/effects flow
+  through var(--sb-*) -- the :root block holds the dark fallbacks and
+  MUST stay identical to internal/theme/builtin/dark.json, enforced
+  by internal/theme/sync_test.go; appended namespaced plugin block
+  (.plugin-*, .bang-chip, .status-flash) where every accent rule
+  consumes var(--plugin-accent, var(--accent, #89b4fa)) and a :root
+  bridge defines --accent: var(--sb-accent, #89b4fa), so the theming
+  design tokens apply when present and the standalone default
+  otherwise, merge order irrelevant) + `src/wails.d.ts` (ambient
+  types for the Wails-injected `window.go` / `window.runtime` incl.
+  EventsOn, the event payload shapes, and the plugin wire contract
+  TargetInfo/PluginAction/PluginResult/PluginEmission -- keep in sync
+  with internal/app + internal/plugin payload structs).
+- `examples/plugins/` -- three shipped example plugins, INERT until a
+  user copies one into `<configDir>/plugins/` (each has a README with
+  install/usage): `calc` (python3 command plugin: trigger prefix "=",
+  bangs calc/c, ast-whitelisted arithmetic with bounded exponents,
+  Hex/Binary fields for integers, copy_text, icon "calculator");
+  `color-http` (the HTTP-transport sample: package `colorhttp`
+  implements the documented wire format WITHOUT importing internal
+  packages -- POST-only 405, malformed body 400, any path -- and is
+  unit-tested to the coverage gate; `server/` is a thin package main,
+  DELIBERATELY NO test file like internal/platform/native; manifest
+  prefix "#", bang color, swatch fields R/G/B + H/S/L, accent = the
+  color); `ps` (python3 bang-targeted-only plugin: NO trigger key,
+  bangs ps, context ["running"], filters the running-app snapshot,
+  copy_text PID). internal/plugin/integration_test.go drives the REAL
+  shipped manifests + scripts end-to-end (LoadDir -> New -> Dispatch
+  -> emission): calc/ps via real python3 (t.Skip when absent; CI has
+  it), color via httptest around colorhttp.Handler, plus an echo
+  script proving undeclared context stays off the wire and a
+  min-timeout kill of a sleeping script. Keep the scripts, manifests,
+  and those tests in sync.
+- `schemas/` -- formal JSON Schemas (draft 2020-12, $id = raw master
+  URLs) for every JSON format: config.schema.json (config.json),
+  plugin-manifest.schema.json, theme.schema.json (theme files),
+  plugin-request/plugin-response.schema.json (the v1 wire protocol).
+  Deliberately STRICTER than the loaders (additionalProperties false;
+  the response schema rejects what the sanitizer would clamp) --
+  authoring aids, not the runtime validators. Kept in lockstep by
+  internal/plugin/schemas_test.go, internal/config/schema_test.go and
+  internal/theme/schema_test.go (test-only dep
+  santhosh-tekuri/jsonschema/v6): they compile all five, validate the
+  shipped example manifests + builtin themes + config.Default() +
+  canned wire payloads, assert negative cases, and reflection-guard
+  every struct json tag against the schema properties (and the theme
+  token set against TokenNames), so a struct/schema drift fails CI.
+  The example manifests and builtin themes carry "$schema" keys
+  (loaders ignore unknown top-level keys).
 
 ## Build / test
 
@@ -152,11 +409,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - Build the frontend FIRST -- `frontend/dist` is embedded and gitignored:
 
       cd frontend && npm install && npm run build && cd ..
-      GOFLAGS=-tags=webkit2_41 go-toolchain --cgo
+      GOFLAGS=-tags=webkit2_41,desktop,production go-toolchain --cgo
 
 - `--cgo` is required (Wails Linux webview uses cgo for gtk3/webkit).
 - `GOFLAGS=-tags=webkit2_41` is required on webkit2gtk-4.1-only distros
   (Ubuntu 24.04+); go-toolchain passes GOFLAGS through to the go tool.
+- `desktop,production` are Wails v2's manual-build tags. WITHOUT them
+  the binary still compiles and tests still pass, but running it exits
+  immediately with "Wails applications will not build without the
+  correct build tags" (the tagless wails/v2/internal/app is a stub).
+  Keep them in GOFLAGS everywhere a runnable binary matters (CI needs
+  one for the screenshot step).
 - Linux build deps:
   `apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev`.
 - go-toolchain AUTO-REWRITES files (gofmt, go.mod/go.sum tidy, lint
@@ -182,8 +445,20 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - Strict frontend file-type separation: TS/JS only in `.ts`/`.js`, CSS
   only in `.css`, HTML only in `.html`. No inline `<style>`/`<script>`
   bodies.
-- One branch per session (`claude/searchbar-v1` for the v1 build),
-  squash-merged; add follow-up commits rather than rebasing.
+- Plugin styling: a result's accent_color reaches CSS EXCLUSIVELY via
+  the `--plugin-accent` custom property set per row in render.ts;
+  every consumer uses var(--plugin-accent, var(--accent, #89b4fa)),
+  and a :root bridge defines `--accent: var(--sb-accent, #89b4fa)` so
+  the theming tokens apply when present. Never apply plugin data
+  as literal inline color/background styles, and never widen the
+  whitelisted styling knobs without updating the sanitizer + README.
+- Changing any JSON-carrying struct (config, manifest/trigger, wire
+  Request/Response, themeFile) or its validator means updating the
+  matching schema in `schemas/` in the same commit -- the lockstep
+  schema tests enforce it.
+- One branch per session (`claude/searchbar-v1` for the v1 build,
+  `claude/plugins-v1` for the plugin system), squash-merged; add
+  follow-up commits rather than rebasing.
 - Commit go-toolchain's auto-rewrites as part of your work.
 
 ## CI notes
@@ -192,13 +467,62 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   filters). The single job is named exactly `all-builds` -- the org
   ruleset requires a green `all-builds` status on the head SHA before
   a PR can merge to master. Do not rename it.
-- The job: checkout -> apt install gtk/webkit/x11 dev packages ->
-  `npm ci && npm run build` in `frontend/` -> `wow-look-at-my/go-toolchain@v1`
-  with `targets: linux/amd64`, `cgo: 'true'`, `autorelease: 'false'`,
-  `timeout: '20'`, and env `GOFLAGS: "-tags=webkit2_41"`.
+- The job: checkout -> apt install gtk/webkit/x11 dev packages plus
+  xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run build`
+  in `frontend/` -> `wow-look-at-my/go-toolchain@v1` with
+  `targets: linux/amd64`, `cgo: 'true'`, `autorelease: 'false'`,
+  `timeout: '20'`, and env
+  `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> screenshot
+  capture -> `actions/upload-artifact@v4`.
 - `targets: linux/amd64` because the default target matrix
   (linux,darwin,windows x amd64,arm64) cannot cross-compile a cgo/webkit
   app from a Linux runner.
 - `autorelease: 'false'` because buildhost publishing needs the
   `actions: read` permission this workflow does not grant.
 - `frontend/package-lock.json` is committed (required by `npm ci`).
+
+## CI screenshots
+
+- After the build, `.github/scripts/screenshots.ts` (run via
+  `wow-look-at-my/actions@typescript#latest`, `file:` input) boots the
+  freshly built binary under Xvfb and captures three PNGs PER BUILTIN
+  THEME into `screenshots/<theme>/` (dark, light) at the workspace
+  root: `01-summoned.png` (empty bar), `02-results.png` (query "rep"
+  with highlighted matches), `03-selection.png` (selection moved down
+  two rows). Each theme gets a FRESH app process reading a temp
+  config.json with that `theme` set (no hot-reload reliance);
+  Xvfb/openbox stay up across themes. Everything uploads as the
+  `screenshots-<sha>` artifact (`if: always()`; upload-artifact walks
+  `screenshots/` recursively, so no per-theme path config) for visual
+  comparison between runs. The step FAILS the job -- and with it the
+  required `all-builds` status -- when the window never maps, a capture
+  is blank/tiny, the hotkey grab is refused, or Escape does not hide
+  the bar; treat that as a real UI regression, not flakiness to mute.
+  Blank detection is PER-THEME (dark mean band 500..60000, light
+  30000..64000 -- the light UI averages ~61k/65535, above dark's old
+  ceiling -- plus per-shot size floors); the bounds were derived from
+  real local captures recorded in the script comment. If the UI or a
+  builtin theme changes deliberately, RE-DERIVE them from a local run
+  (CLAUDE.md "To capture locally" below); never guess.
+- Mechanics (mirrors what was verified manually): deterministic
+  ~200-file fixture tree + `config.json` in a temp dir
+  (`COMPETENT_SEARCH_CONFIG_DIR`), `Xvfb :99` at 1280x800x24, openbox
+  with the stock `A-space` keybind stripped from
+  `/etc/xdg/openbox/rc.xml` -- stock openbox grabs Alt+Space for its
+  client menu, which wins the race and makes the app's XGrabKey fail
+  with BadAccess -- then the REAL `xdotool key --clearmodifiers
+  alt+space` summon, `xdotool type`, arrow keys, `import -window`,
+  Escape-hides assertion. The app window is found by name + 680x460
+  geometry in `xwininfo -root -tree` (xdotool search --onlyvisible
+  --class does not match it). One full retry with
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1` (not needed under Xvfb so far).
+  The binary is `build/competent-search-thing_linux_amd64` in CI
+  (go-toolchain matrix naming) or `build/competent-search-thing`
+  locally; the script tries both and runs a THROWAWAY COPY, never the
+  build/ artifact itself.
+- To capture locally: `apt-get install -y xvfb xdotool imagemagick
+  x11-utils openbox`, build with the full GOFLAGS above, then follow
+  the same sequence (the script is directly readable as the runbook).
+- `docs/screenshot.png` is the committed reference image used by
+  README.md (the 02-results state, captured from the real app under
+  Xvfb). If the UI changes deliberately, recapture and replace it.

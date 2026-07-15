@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/wow-look-at-my/competent-search-thing/master/schemas/plugin-request.schema.json",
+  "title": "competent-search-thing plugin request (wire protocol v1)",
+  "description": "The JSON payload the app sends to a plugin for one query: written to stdin for command plugins (stdin is then closed), POSTed as the body (Content-Type: application/json) for HTTP plugins. Source of truth: internal/plugin/schema.go (Request). This schema describes what plugin AUTHORS receive and can rely on; parse it leniently (tolerate added fields in future versions) and reject any 'v' other than 1.",
+  "type": "object",
+  "required": ["v", "query", "stripped", "gen", "targeted", "bang", "settings"],
+  "properties": {
+    "v": {
+      "type": "integer",
+      "const": 1,
+      "description": "Protocol version, always 1. Reject anything else."
+    },
+    "query": {
+      "type": "string",
+      "description": "The raw text as typed, including any trigger prefix or bang."
+    },
+    "stripped": {
+      "type": "string",
+      "description": "The query with the trigger prefix or bang removed and trimmed; usually what you want to parse."
+    },
+    "gen": {
+      "type": "integer",
+      "description": "The query generation (monotonically increasing). Echo-free: purely informational for logging/correlation."
+    },
+    "targeted": {
+      "type": "boolean",
+      "description": "true when the query targeted this plugin via a bang ('!calc 2+2'); trigger gating was bypassed."
+    },
+    "bang": {
+      "type": "string",
+      "description": "The canonical (registered) bang name that targeted this plugin, or \"\" when not targeted."
+    },
+    "settings": {
+      "type": "object",
+      "description": "This plugin's opaque settings object from config.json (plugins.entries.<id>.settings), or {} when there is none. Always a JSON object."
+    },
+    "context": { "$ref": "#/$defs/requestContext" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "requestContext": {
+      "title": "App context",
+      "type": "object",
+      "description": "The app-context parts this plugin declared in its manifest 'context' list. Undeclared parts are omitted; when a plugin declares nothing, the whole 'context' field is absent. A declared part can still be absent when the platform could not provide it (e.g. no focused app known on Wayland).",
+      "properties": {
+        "focused_app": {
+          "$ref": "#/$defs/appInfo",
+          "description": "The application focused at hotkey press (manifest context 'focused')."
+        },
+        "running_apps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/appInfo" },
+          "description": "Visible running applications (manifest context 'running'); deduped by pid, capped at 64, sorted by name."
+        },
+        "installed_apps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/installedApp" },
+          "description": "Installed applications (manifest context 'installed')."
+        }
+      },
+      "additionalProperties": false
+    },
+    "appInfo": {
+      "title": "Running application",
+      "type": "object",
+      "required": ["name", "exe", "title", "pid"],
+      "properties": {
+        "name": { "type": "string", "description": "Application name (window class on X11, exe base name on Windows)." },
+        "exe": { "type": "string", "description": "Executable path; may be \"\" when unreadable (cross-user processes)." },
+        "title": { "type": "string", "description": "Window title; may be \"\" (always empty on macOS)." },
+        "pid": { "type": "integer", "description": "Process id; 0 when unknown." }
+      },
+      "additionalProperties": false
+    },
+    "installedApp": {
+      "title": "Installed application",
+      "type": "object",
+      "required": ["name", "exec", "id"],
+      "properties": {
+        "name": { "type": "string", "description": "Display name." },
+        "exec": { "type": "string", "description": "RAW launch command in .desktop Exec syntax (quotes, %-field codes not yet stripped)." },
+        "id": { "type": "string", "description": "Stable identifier (e.g. the .desktop file name)." }
+      },
+      "additionalProperties": false
+    }
+  },
+  "examples": [
+    {
+      "v": 1,
+      "query": "!calc 2+2",
+      "stripped": "2+2",
+      "gen": 42,
+      "targeted": true,
+      "bang": "calc",
+      "settings": {},
+      "context": {
+        "focused_app": { "name": "firefox", "exe": "/usr/lib/firefox/firefox", "title": "Mozilla Firefox", "pid": 1234 },
+        "running_apps": [{ "name": "kitty", "exe": "/usr/bin/kitty", "title": "~/src", "pid": 4321 }],
+        "installed_apps": [{ "name": "Firefox", "exec": "firefox %u", "id": "firefox.desktop" }]
+      }
+    }
+  ]
+}

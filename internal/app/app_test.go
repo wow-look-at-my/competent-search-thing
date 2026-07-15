@@ -5,12 +5,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/index"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/watch"
@@ -75,9 +77,15 @@ func (r *seamRecorder) emitted(name string) []emittedEvent {
 }
 
 // newTestApp builds an App whose runtime and platform seams are all
-// safe fakes recording into the returned seamRecorder.
-func newTestApp(m *index.Manager, opt Options) (*App, *seamRecorder) {
+// safe fakes recording into the returned seamRecorder. It points the
+// config package (and therefore the theme layer Startup brings up) at
+// a private temp dir, and shuts the app down at test end -- Shutdown
+// is idempotent, so tests exercising it themselves stay valid.
+func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorder) {
+	t.Helper()
+	t.Setenv(config.EnvConfigDir, t.TempDir())
 	a := New(m, opt)
+	t.Cleanup(func() { a.Shutdown(context.Background()) })
 	r := &seamRecorder{}
 	a.rt = runtimeSeams{
 		show:   func(context.Context) { r.call("show") },
@@ -101,6 +109,11 @@ func newTestApp(m *index.Manager, opt Options) (*App, *seamRecorder) {
 			defer r.mu.Unlock()
 			r.emits = append(r.emits, emittedEvent{name: name, payload: data})
 		},
+		clipboardSetText: func(_ context.Context, text string) error {
+			r.call("clipboard:" + text)
+			return nil
+		},
+		quit: func(context.Context) { r.call("quit") },
 	}
 	a.plat.startHotkey = func(platform.Hotkey, func()) (func(), error) {
 		r.call("startHotkey")
@@ -119,6 +132,13 @@ func newTestApp(m *index.Manager, opt Options) (*App, *seamRecorder) {
 	}
 	a.plat.open = func(path string) error { r.call("open:" + path); return nil }
 	a.plat.reveal = func(path string) error { r.call("reveal:" + path); return nil }
+	a.plat.run = func(argv []string) error { r.call("run:" + strings.Join(argv, " ")); return nil }
+	// A nil Source degrades the app-context cache to a no-op; tests
+	// that exercise capture inject a fake Source before Startup.
+	a.plat.appSource = nil
+	// No config.json or plugins-dir IO in unit tests; tests that
+	// exercise the real builder restore a.buildRegistry explicitly.
+	a.newRegistry = func() dispatcher { return nil }
 	return a, r
 }
 
@@ -130,7 +150,7 @@ func TestNewHasNoContext(t *testing.T) {
 }
 
 func TestStartupSavesContext(t *testing.T) {
-	a, _ := newTestApp(nil, Options{})
+	a, _ := newTestApp(t, nil, Options{})
 	type key struct{}
 	ctx := context.WithValue(context.Background(), key{}, "marker")
 	a.Startup(ctx)
@@ -138,7 +158,7 @@ func TestStartupSavesContext(t *testing.T) {
 }
 
 func TestSearchBlankQueryReturnsEmpty(t *testing.T) {
-	a, _ := newTestApp(index.NewManager(nil, nil, 0), Options{})
+	a, _ := newTestApp(t, index.NewManager(nil, nil, 0), Options{})
 	for _, q := range []string{"", "   ", "\t \n"} {
 		got := a.Search(q)
 		require.NotNil(t, got)
@@ -147,7 +167,7 @@ func TestSearchBlankQueryReturnsEmpty(t *testing.T) {
 }
 
 func TestSearchWithoutManagerReturnsEmpty(t *testing.T) {
-	a, _ := newTestApp(nil, Options{})
+	a, _ := newTestApp(t, nil, Options{})
 	got := a.Search("hello")
 	require.NotNil(t, got)
 	require.Empty(t, got)
@@ -157,7 +177,7 @@ func TestSearchQueriesManager(t *testing.T) {
 	m := index.NewManager(nil, nil, 0)
 	require.NoError(t, m.Add("/notes", "shopping-list.txt", false))
 	require.NoError(t, m.Add("/notes", "projects", true))
-	a, _ := newTestApp(m, Options{})
+	a, _ := newTestApp(t, m, Options{})
 
 	got := a.Search("  shopping  ") // query is trimmed
 	require.Len(t, got, 1)
@@ -174,7 +194,7 @@ func TestStartupKicksOffIndexBuildAndEmitsProgress(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "world.md"), []byte("x"), 0o644))
 
 	m := index.NewManager([]string{dir}, nil, 0)
-	a, r := newTestApp(m, Options{})
+	a, r := newTestApp(t, m, Options{})
 	t.Cleanup(func() { a.Shutdown(context.Background()) })
 	a.Startup(context.Background())
 	require.Eventually(t, func() bool { return m.LiveCount() == 2 },
@@ -206,7 +226,7 @@ func TestStartupBringsUpWatcherAndAppliesEvents(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "seed.txt"), []byte("x"), 0o644))
 	m := index.NewManager([]string{dir}, nil, 0)
-	a, _ := newTestApp(m, Options{})
+	a, _ := newTestApp(t, m, Options{})
 	a.Startup(context.Background())
 
 	require.Eventually(t, func() bool { return watchUp(a) },
@@ -226,7 +246,7 @@ func TestShutdownBeforeBuildFinishesSkipsWatch(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "only.txt"), []byte("x"), 0o644))
 	m := index.NewManager([]string{dir}, nil, 0)
-	a, _ := newTestApp(m, Options{})
+	a, _ := newTestApp(t, m, Options{})
 	a.Shutdown(context.Background()) // before Startup: sets the flag, stops nothing
 	a.Startup(context.Background())
 
@@ -240,7 +260,7 @@ func TestStartWatchToleratesBadExcluder(t *testing.T) {
 	// A malformed exclude pattern cannot panic startWatch; the watcher
 	// runs with a nil Excluder (excludes nothing).
 	m := index.NewManager([]string{t.TempDir()}, []string{"["}, 0)
-	a, _ := newTestApp(m, Options{})
+	a, _ := newTestApp(t, m, Options{})
 	a.startWatch()
 	require.True(t, watchUp(a))
 	a.Shutdown(context.Background())
@@ -250,13 +270,13 @@ func TestBuildIndexLogsAndSurvivesFailure(t *testing.T) {
 	// A malformed exclude pattern makes BuildFromDisk fail; buildIndex
 	// must swallow it (log only), never panic.
 	m := index.NewManager([]string{t.TempDir()}, []string{"["}, 0)
-	a, _ := newTestApp(m, Options{})
+	a, _ := newTestApp(t, m, Options{})
 	a.buildIndex()
 	require.Equal(t, 0, m.LiveCount())
 }
 
 func TestEmitDegradedPayload(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.Startup(context.Background())
 	a.emitDegraded(watch.Stats{WatchedDirs: 7, DroppedWatches: 3, Overflows: 2, Degraded: true})
 
@@ -266,20 +286,20 @@ func TestEmitDegradedPayload(t *testing.T) {
 }
 
 func TestEmitEventBeforeStartupIsNoOp(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.emitDegraded(watch.Stats{})
 	require.Empty(t, r.emits, "no context yet: nothing emitted, nothing crashed")
 }
 
 func TestOpenRunsPlatformOpenAndHides(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.Startup(context.Background())
 	require.NoError(t, a.Open("/tmp/x"))
 	require.Equal(t, []string{"open:/tmp/x", "hide"}, r.callNames())
 }
 
 func TestOpenErrorKeepsBarVisible(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.Startup(context.Background())
 	boom := errors.New("no handler")
 	a.plat.open = func(string) error { return boom }
@@ -288,7 +308,7 @@ func TestOpenErrorKeepsBarVisible(t *testing.T) {
 }
 
 func TestRevealRunsPlatformRevealAndHides(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.Startup(context.Background())
 	require.NoError(t, a.Reveal("/tmp/y"))
 	require.Equal(t, []string{"reveal:/tmp/y", "hide"}, r.callNames())
@@ -307,7 +327,7 @@ func TestOpenRevealUseRealLauncherValidation(t *testing.T) {
 }
 
 func TestHideWithoutContextIsNoOp(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.Hide()
 	require.Empty(t, r.callNames(), "no context yet: the runtime hide is not reached")
 }
