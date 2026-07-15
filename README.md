@@ -7,6 +7,15 @@ Spotlight-style presentation with voidtools-Everything-style speed.
 Built with Go and [Wails v2](https://wails.io), with a tiny vanilla
 TypeScript + Vite frontend.
 
+## Screenshot
+
+![The searchbar showing ranked, highlighted results for the query "rep"](docs/screenshot.png)
+
+The real Linux webview, summoned with Alt+Space and captured under Xvfb
+against the deterministic fixture tree CI uses (see `.github/scripts/`).
+CI re-captures three screenshots like this on every push and uploads
+them as run artifacts for visual comparison.
+
 ## Status
 
 Feature-complete for v1 (release packaging still pending):
@@ -57,13 +66,17 @@ wails build -tags webkit2_41   # production build (tag needed on webkit-4.1 dist
 
 ```
 cd frontend && npm install && npm run build && cd ..
-GOFLAGS=-tags=webkit2_41 go-toolchain --cgo
+GOFLAGS=-tags=webkit2_41,desktop,production go-toolchain --cgo
 ```
 
 `go-toolchain` (this org's build tool) tidies modules, runs tests with
 coverage, and builds into `build/`. CGO must be enabled (`--cgo`)
-because the Linux webview binds gtk3/webkit via cgo. On macOS and
-Windows the `GOFLAGS` tag is unnecessary.
+because the Linux webview binds gtk3/webkit via cgo. `desktop` and
+`production` are Wails v2's standard manual-build tags -- without them
+the binary compiles but exits immediately with "Wails applications
+will not build without the correct build tags". On macOS and Windows
+the `webkit2_41` tag is unnecessary (but `desktop,production` still
+apply).
 
 ### macOS
 

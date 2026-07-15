@@ -152,11 +152,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - Build the frontend FIRST -- `frontend/dist` is embedded and gitignored:
 
       cd frontend && npm install && npm run build && cd ..
-      GOFLAGS=-tags=webkit2_41 go-toolchain --cgo
+      GOFLAGS=-tags=webkit2_41,desktop,production go-toolchain --cgo
 
 - `--cgo` is required (Wails Linux webview uses cgo for gtk3/webkit).
 - `GOFLAGS=-tags=webkit2_41` is required on webkit2gtk-4.1-only distros
   (Ubuntu 24.04+); go-toolchain passes GOFLAGS through to the go tool.
+- `desktop,production` are Wails v2's manual-build tags. WITHOUT them
+  the binary still compiles and tests still pass, but running it exits
+  immediately with "Wails applications will not build without the
+  correct build tags" (the tagless wails/v2/internal/app is a stub).
+  Keep them in GOFLAGS everywhere a runnable binary matters (CI needs
+  one for the screenshot step).
 - Linux build deps:
   `apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev`.
 - go-toolchain AUTO-REWRITES files (gofmt, go.mod/go.sum tidy, lint
@@ -192,13 +198,52 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   filters). The single job is named exactly `all-builds` -- the org
   ruleset requires a green `all-builds` status on the head SHA before
   a PR can merge to master. Do not rename it.
-- The job: checkout -> apt install gtk/webkit/x11 dev packages ->
-  `npm ci && npm run build` in `frontend/` -> `wow-look-at-my/go-toolchain@v1`
-  with `targets: linux/amd64`, `cgo: 'true'`, `autorelease: 'false'`,
-  `timeout: '20'`, and env `GOFLAGS: "-tags=webkit2_41"`.
+- The job: checkout -> apt install gtk/webkit/x11 dev packages plus
+  xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run build`
+  in `frontend/` -> `wow-look-at-my/go-toolchain@v1` with
+  `targets: linux/amd64`, `cgo: 'true'`, `autorelease: 'false'`,
+  `timeout: '20'`, and env
+  `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> screenshot
+  capture -> `actions/upload-artifact@v4`.
 - `targets: linux/amd64` because the default target matrix
   (linux,darwin,windows x amd64,arm64) cannot cross-compile a cgo/webkit
   app from a Linux runner.
 - `autorelease: 'false'` because buildhost publishing needs the
   `actions: read` permission this workflow does not grant.
 - `frontend/package-lock.json` is committed (required by `npm ci`).
+
+## CI screenshots
+
+- After the build, `.github/scripts/screenshots.ts` (run via
+  `wow-look-at-my/actions@typescript#latest`, `file:` input) boots the
+  freshly built binary under Xvfb and captures three PNGs into
+  `screenshots/` at the workspace root: `01-summoned.png` (empty bar),
+  `02-results.png` (query "rep" with highlighted matches),
+  `03-selection.png` (selection moved down two rows). They upload as
+  the `screenshots-<sha>` artifact (`if: always()`) for visual
+  comparison between runs. The step FAILS the job -- and with it the
+  required `all-builds` status -- when the window never maps, a capture
+  is blank/tiny, the hotkey grab is refused, or Escape does not hide
+  the bar; treat that as a real UI regression, not flakiness to mute.
+- Mechanics (mirrors what was verified manually): deterministic
+  ~200-file fixture tree + `config.json` in a temp dir
+  (`COMPETENT_SEARCH_CONFIG_DIR`), `Xvfb :99` at 1280x800x24, openbox
+  with the stock `A-space` keybind stripped from
+  `/etc/xdg/openbox/rc.xml` -- stock openbox grabs Alt+Space for its
+  client menu, which wins the race and makes the app's XGrabKey fail
+  with BadAccess -- then the REAL `xdotool key --clearmodifiers
+  alt+space` summon, `xdotool type`, arrow keys, `import -window`,
+  Escape-hides assertion. The app window is found by name + 680x460
+  geometry in `xwininfo -root -tree` (xdotool search --onlyvisible
+  --class does not match it). One full retry with
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1` (not needed under Xvfb so far).
+  The binary is `build/competent-search-thing_linux_amd64` in CI
+  (go-toolchain matrix naming) or `build/competent-search-thing`
+  locally; the script tries both and runs a THROWAWAY COPY, never the
+  build/ artifact itself.
+- To capture locally: `apt-get install -y xvfb xdotool imagemagick
+  x11-utils openbox`, build with the full GOFLAGS above, then follow
+  the same sequence (the script is directly readable as the runbook).
+- `docs/screenshot.png` is the committed reference image used by
+  README.md (the 02-results state, captured from the real app under
+  Xvfb). If the UI changes deliberately, recapture and replace it.
