@@ -286,8 +286,8 @@ func TestCacheNilAndZeroValueSafety(t *testing.T) {
 		require.Equal(t, Snapshot{}, c.Snapshot())
 	}
 
-	exercise(nil)          // nil receiver
-	exercise(&Cache{})     // zero value (nil source AND nil clock)
+	exercise(nil)      // nil receiver
+	exercise(&Cache{}) // zero value (nil source AND nil clock)
 	exercise(NewCache(nil))
 }
 
