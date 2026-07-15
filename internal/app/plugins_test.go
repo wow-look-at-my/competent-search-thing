@@ -105,7 +105,7 @@ func (s *fakeSource) InstalledApps() ([]appctx.InstalledApp, bool) {
 // through the builder seam and Startup already run.
 func newPluginTestApp(t *testing.T) (*App, *seamRecorder, *fakeDispatcher) {
 	t.Helper()
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	f := &fakeDispatcher{}
 	a.newRegistry = func() dispatcher { return f }
 	a.Startup(context.Background())
@@ -175,14 +175,14 @@ func TestQueryPluginsEmptyQueryCancelsOnly(t *testing.T) {
 }
 
 func TestQueryPluginsWithoutRegistry(t *testing.T) {
-	a, _ := newTestApp(nil, Options{})
+	a, _ := newTestApp(t, nil, Options{})
 	require.Equal(t, plugin.TargetInfo{}, a.QueryPlugins("x", 1), "safe before Startup")
 	a.Startup(context.Background()) // the test builder seam yields a nil registry
 	require.Equal(t, plugin.TargetInfo{}, a.QueryPlugins("x", 2), "safe with a nil registry")
 }
 
 func TestToggleCapturesFocusBeforeShow(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.plat.now = (&fakeClock{step: time.Second}).now
 	a.plat.appSource = &fakeSource{r: r, focusedOK: true}
 	a.Startup(context.Background())
@@ -198,7 +198,7 @@ func TestToggleCapturesFocusBeforeShow(t *testing.T) {
 }
 
 func TestCaptureBuildsPluginRequestContext(t *testing.T) {
-	a, r := newTestApp(nil, Options{})
+	a, r := newTestApp(t, nil, Options{})
 	a.plat.appSource = &fakeSource{
 		r:           r,
 		focused:     appctx.AppInfo{Name: "firefox", Exe: "/usr/lib/firefox/firefox", Title: "Mozilla Firefox", PID: 1234},
@@ -224,7 +224,7 @@ func TestCaptureBuildsPluginRequestContext(t *testing.T) {
 }
 
 func TestPluginContextSafeBeforeStartup(t *testing.T) {
-	a, _ := newTestApp(nil, Options{})
+	a, _ := newTestApp(t, nil, Options{})
 	a.captureAppContext() // nil cache: no-op, no panic
 	rc := a.pluginRequestContext()
 	require.Nil(t, rc.FocusedApp)
@@ -244,7 +244,7 @@ func TestRunPluginActionCopyText(t *testing.T) {
 }
 
 func TestRunPluginActionCopyTextErrors(t *testing.T) {
-	a, _ := newTestApp(nil, Options{})
+	a, _ := newTestApp(t, nil, Options{})
 	require.Error(t, a.RunPluginAction("calc", plugin.Action{Type: plugin.ActionCopyText, Value: "x"}),
 		"no clipboard before Startup")
 
@@ -341,7 +341,7 @@ func TestRunBuiltinRescanWithoutWatcher(t *testing.T) {
 func TestRunBuiltinRescanRequestsAndHides(t *testing.T) {
 	dir := t.TempDir()
 	m := index.NewManager([]string{dir}, nil, 0)
-	a, r := newTestApp(m, Options{})
+	a, r := newTestApp(t, m, Options{})
 	a.Startup(context.Background())
 	t.Cleanup(func() { a.Shutdown(context.Background()) })
 	require.Eventually(t, func() bool { return watchUp(a) },
@@ -366,9 +366,11 @@ func TestRunBuiltinReloadSwapsRegistry(t *testing.T) {
 }
 
 func TestRunBuiltinConfigOpensConfigJSON(t *testing.T) {
+	// newTestApp (inside newPluginTestApp) points EnvConfigDir at its
+	// own temp dir, so pin ours AFTER building the app.
+	a, r, _ := newPluginTestApp(t)
 	dir := t.TempDir()
 	t.Setenv(config.EnvConfigDir, dir)
-	a, r, _ := newPluginTestApp(t)
 	require.NoError(t, a.RunPluginAction("app", plugin.Action{Type: plugin.ActionRunBuiltin, Value: "config"}))
 	require.Equal(t, []string{"open:" + filepath.Join(dir, "config.json"), "hide"}, r.callNames())
 }
@@ -385,7 +387,7 @@ func TestRunBuiltinQuit(t *testing.T) {
 	require.NoError(t, a.RunPluginAction("app", plugin.Action{Type: plugin.ActionRunBuiltin, Value: "quit"}))
 	require.Equal(t, []string{"quit"}, r.callNames())
 
-	before, _ := newTestApp(nil, Options{})
+	before, _ := newTestApp(t, nil, Options{})
 	require.Error(t, before.RunPluginAction("app", plugin.Action{Type: plugin.ActionRunBuiltin, Value: "quit"}),
 		"quit needs the runtime context")
 }
@@ -414,8 +416,9 @@ func TestStartupBuildsRegistryFromPluginsDir(t *testing.T) {
 
 	files := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(files, "shopping-list.txt"), []byte("x"), 0o644))
-	a, _ := newTestApp(index.NewManager([]string{files}, nil, 0), Options{})
-	a.newRegistry = a.buildRegistry // the real builder
+	a, _ := newTestApp(t, index.NewManager([]string{files}, nil, 0), Options{})
+	t.Setenv(config.EnvConfigDir, dir) // newTestApp re-pointed it; restore ours before Startup
+	a.newRegistry = a.buildRegistry    // the real builder
 	a.Startup(context.Background())
 	t.Cleanup(func() { a.Shutdown(context.Background()) })
 
@@ -432,14 +435,12 @@ func TestStartupBuildsRegistryFromPluginsDir(t *testing.T) {
 }
 
 func TestStartupMissingPluginsDirIsQuiet(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv(config.EnvConfigDir, dir)
-
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
-	a, _ := newTestApp(nil, Options{})
+	a, _ := newTestApp(t, nil, Options{})
+	t.Setenv(config.EnvConfigDir, t.TempDir()) // fresh dir, definitely no plugins/ inside
 	a.newRegistry = a.buildRegistry
 	a.Startup(context.Background())
 	t.Cleanup(func() { a.Shutdown(context.Background()) })
@@ -452,15 +453,15 @@ func TestStartupMissingPluginsDirIsQuiet(t *testing.T) {
 }
 
 func TestBuildRegistryToleratesCorruptConfig(t *testing.T) {
+	a, _ := newTestApp(t, nil, Options{})
 	dir := t.TempDir()
-	t.Setenv(config.EnvConfigDir, dir)
+	t.Setenv(config.EnvConfigDir, dir) // after newTestApp, which re-points it
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte("{corrupt"), 0o644))
 
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
-	a, _ := newTestApp(nil, Options{})
 	reg := a.buildRegistry()
 	require.NotNil(t, reg, "a corrupt config still yields a registry (defaults)")
 	require.Contains(t, buf.String(), "plugin: config:", "the parse error is logged")
