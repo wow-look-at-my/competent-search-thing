@@ -321,6 +321,26 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   incl. EventsOn, the event payload shapes, and the plugin wire
   contract TargetInfo/PluginAction/PluginResult/PluginEmission -- keep
   in sync with internal/app + internal/plugin payload structs).
+- `examples/plugins/` -- three shipped example plugins, INERT until a
+  user copies one into `<configDir>/plugins/` (each has a README with
+  install/usage): `calc` (python3 command plugin: trigger prefix "=",
+  bangs calc/c, ast-whitelisted arithmetic with bounded exponents,
+  Hex/Binary fields for integers, copy_text, icon "calculator");
+  `color-http` (the HTTP-transport sample: package `colorhttp`
+  implements the documented wire format WITHOUT importing internal
+  packages -- POST-only 405, malformed body 400, any path -- and is
+  unit-tested to the coverage gate; `server/` is a thin package main,
+  DELIBERATELY NO test file like internal/platform/native; manifest
+  prefix "#", bang color, swatch fields R/G/B + H/S/L, accent = the
+  color); `ps` (python3 bang-targeted-only plugin: NO trigger key,
+  bangs ps, context ["running"], filters the running-app snapshot,
+  copy_text PID). internal/plugin/integration_test.go drives the REAL
+  shipped manifests + scripts end-to-end (LoadDir -> New -> Dispatch
+  -> emission): calc/ps via real python3 (t.Skip when absent; CI has
+  it), color via httptest around colorhttp.Handler, plus an echo
+  script proving undeclared context stays off the wire and a
+  min-timeout kill of a sleeping script. Keep the scripts, manifests,
+  and those tests in sync.
 
 ## Build / test
 
