@@ -27,6 +27,8 @@ const (
 	DefaultHotkey = "alt+space"
 	// DefaultMaxResults caps one query's result list.
 	DefaultMaxResults = 50
+	// DefaultTheme is the builtin theme used when none is configured.
+	DefaultTheme = "dark"
 )
 
 // Config is the on-disk configuration.
@@ -43,6 +45,10 @@ type Config struct {
 	RescanIntervalMinutes int `json:"rescanIntervalMinutes"`
 	// MaxResults caps one query's result list.
 	MaxResults int `json:"maxResults"`
+	// Theme names the UI theme: a builtin ("dark", "light") or a user
+	// theme file at <configDir>/themes/<name>.json (see internal/theme).
+	// Unknown or invalid themes fall back to dark at resolve time.
+	Theme string `json:"theme"`
 }
 
 // Default returns the default configuration: index the user's home
@@ -62,6 +68,7 @@ func Default() Config {
 		Hotkey:                DefaultHotkey,
 		RescanIntervalMinutes: 0,
 		MaxResults:            DefaultMaxResults,
+		Theme:                 DefaultTheme,
 	}
 }
 
@@ -75,6 +82,17 @@ func Path() (string, error) {
 		return "", fmt.Errorf("config: resolving user config dir: %w", err)
 	}
 	return filepath.Join(base, appDirName, fileName), nil
+}
+
+// Dir returns the directory holding config.json; it is also the
+// parent of the themes/ directory (user theme JSON files and the
+// custom.css escape hatch, see internal/theme).
+func Dir() (string, error) {
+	p, err := Path()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(p), nil
 }
 
 // Load reads the config file. A missing file is created with defaults
@@ -156,5 +174,8 @@ func (c *Config) Normalize() {
 	}
 	if c.MaxResults <= 0 {
 		c.MaxResults = DefaultMaxResults
+	}
+	if c.Theme == "" {
+		c.Theme = DefaultTheme
 	}
 }

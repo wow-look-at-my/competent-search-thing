@@ -15,6 +15,11 @@ interface WailsAppBindings {
   Open(path: string): Promise<void>;
   Reveal(path: string): Promise<void>;
   Hide(): Promise<void>;
+  // Resolved theme tokens: every internal/theme.TokenNames key mapped
+  // to a validated CSS value (theme.ts sets each as --sb-<key>).
+  GetTheme(): Promise<Record<string, string>>;
+  // Contents of <configDir>/themes/custom.css (<= 64KB), else "".
+  GetCustomCSS(): Promise<string>;
 }
 
 // The subset of the Wails runtime API this app uses (see the wails v2

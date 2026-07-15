@@ -1,5 +1,33 @@
+/* Theme tokens: the closed --sb-* set (see internal/theme). The
+   values below are the DARK builtin's and MUST stay byte-identical to
+   internal/theme/builtin/dark.json -- the Go test
+   internal/theme/sync_test.go enforces it. They are only fallbacks:
+   at startup (and on every theme:changed event) frontend/src/theme.ts
+   overwrites each property on <html> with the resolved theme. */
 :root {
   color-scheme: dark;
+  --sb-bg: #18181c;
+  --sb-bg-elevated: #2c2c33;
+  --sb-fg: #f2f2f5;
+  --sb-fg-dim: #8a8a94;
+  --sb-accent: #8db8ff;
+  --sb-accent-fg: #101018;
+  --sb-selection-bg: #2b3f66;
+  --sb-selection-fg: #f2f2f5;
+  --sb-border: #3a3a42;
+  --sb-highlight: #8db8ff;
+  --sb-warning: #d9a13d;
+  --sb-badge-bg: #2b3f66;
+  --sb-badge-fg: #b8c6e8;
+  --sb-scrollbar: rgba(255, 255, 255, 0.14);
+  --sb-font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --sb-font-size: 14px;
+  --sb-font-size-small: 12px;
+  --sb-radius: 10px;
+  --sb-gap: 10px;
+  --sb-padding: 16px;
+  --sb-bg-opacity: 0.97;
+  --sb-blur: 0px;
 }
 
 * {
@@ -12,7 +40,7 @@ html,
 body {
   height: 100%;
   background: transparent;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--sb-font-family);
   user-select: none;
 }
 
@@ -20,9 +48,15 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: rgba(24, 24, 28, 0.97);
-  border: 1px solid #3a3a42;
-  border-radius: 10px;
+  background: color-mix(
+    in srgb,
+    var(--sb-bg) calc(var(--sb-bg-opacity) * 100%),
+    transparent
+  );
+  border: 1px solid var(--sb-border);
+  border-radius: var(--sb-radius);
+  -webkit-backdrop-filter: blur(var(--sb-blur));
+  backdrop-filter: blur(var(--sb-blur));
   overflow: hidden;
 }
 
@@ -32,29 +66,35 @@ body {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 16px;
-  border-bottom: 1px solid #2c2c33;
+  gap: calc(var(--sb-gap) + 2px);
+  padding: 0 var(--sb-padding);
+  border-bottom: 1px solid var(--sb-bg-elevated);
 }
 
 #magnifier {
   flex: 0 0 auto;
-  color: #6c6c76;
+  color: var(--sb-fg-dim);
 }
 
 #query {
   flex: 1 1 auto;
   min-width: 0;
   padding: 14px 0;
-  font-size: 20px;
-  color: #f2f2f5;
+  font-size: calc(var(--sb-font-size) + 6px);
+  color: var(--sb-fg);
+  caret-color: var(--sb-accent);
   background: transparent;
   border: none;
   outline: none;
 }
 
 #query::placeholder {
-  color: #6c6c76;
+  color: var(--sb-fg-dim);
+}
+
+#query::selection {
+  background: var(--sb-selection-bg);
+  color: var(--sb-selection-fg);
 }
 
 /* --- results ------------------------------------------------------ */
@@ -71,8 +111,8 @@ body {
 }
 
 #results::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
-  border-radius: 4px;
+  background: var(--sb-scrollbar);
+  border-radius: calc(var(--sb-radius) * 0.4);
 }
 
 #results::-webkit-scrollbar-track {
@@ -82,17 +122,17 @@ body {
 .result {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 16px;
-  font-size: 14px;
-  color: #d4d4dc;
+  gap: var(--sb-gap);
+  padding: 7px var(--sb-padding);
+  font-size: var(--sb-font-size);
+  color: var(--sb-fg);
   white-space: nowrap;
   cursor: default;
 }
 
 .result .icon {
   flex: 0 0 auto;
-  color: #8a8a94;
+  color: var(--sb-fg-dim);
 }
 
 .result .name {
@@ -104,7 +144,7 @@ body {
 }
 
 .result .name .hl {
-  color: #8db8ff;
+  color: var(--sb-highlight);
   font-weight: 600;
 }
 
@@ -114,27 +154,29 @@ body {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 12px;
-  color: #77777f;
+  font-size: var(--sb-font-size-small);
+  color: var(--sb-fg-dim);
 }
 
 .result.selected {
-  background: #2b3f66;
-  color: #f2f2f5;
+  background: var(--sb-selection-bg);
+  color: var(--sb-selection-fg);
 }
 
 .result.selected .icon {
-  color: #b8c6e8;
+  color: var(--sb-selection-fg);
+  opacity: 0.8;
 }
 
 .result.selected .dir {
-  color: #9aa7c4;
+  color: var(--sb-selection-fg);
+  opacity: 0.62;
 }
 
 .empty {
-  padding: 18px 16px;
-  font-size: 13px;
-  color: #6c6c76;
+  padding: 18px var(--sb-padding);
+  font-size: calc(var(--sb-font-size) - 1px);
+  color: var(--sb-fg-dim);
   text-align: center;
 }
 
@@ -145,11 +187,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 6px 16px;
-  font-size: 11px;
-  color: #8a8a94;
-  border-top: 1px solid #2c2c33;
+  gap: var(--sb-gap);
+  padding: 6px var(--sb-padding);
+  font-size: calc(var(--sb-font-size-small) - 1px);
+  color: var(--sb-fg-dim);
+  border-top: 1px solid var(--sb-bg-elevated);
 }
 
 #status-text {
@@ -161,9 +203,9 @@ body {
 #degraded-chip {
   flex: 0 0 auto;
   padding: 1px 7px;
-  font-size: 10px;
-  color: #d9a13d;
-  border: 1px solid rgba(217, 161, 61, 0.45);
-  border-radius: 8px;
+  font-size: calc(var(--sb-font-size-small) - 2px);
+  color: var(--sb-warning);
+  border: 1px solid color-mix(in srgb, var(--sb-warning) 45%, transparent);
+  border-radius: calc(var(--sb-radius) * 0.8);
   white-space: nowrap;
 }

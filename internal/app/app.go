@@ -73,15 +73,18 @@ type App struct {
 	buildOnce sync.Once
 	hkOnce    sync.Once
 
-	mu         sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop
-	ctx        context.Context
-	visible    bool
-	lastToggle time.Time
-	hotkeyStop func()
+	mu           sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, lastThemeErr
+	ctx          context.Context
+	visible      bool
+	lastToggle   time.Time
+	hotkeyStop   func()
+	lastThemeErr string
 
+	themeOnce    sync.Once
 	watchMu      sync.Mutex
 	watcher      *watch.Watcher
 	rescanner    *watch.Rescanner
+	themeW       *themeWatcher
 	shuttingDown bool
 
 	// rt and plat are seams over the Wails runtime and the platform
@@ -105,14 +108,16 @@ func New(m *index.Manager, opt Options) *App {
 }
 
 // Startup is wired to the Wails OnStartup hook: it saves the runtime
-// context, registers the global hotkey (best effort), and kicks off the
-// initial index build in the background, so the window is responsive
+// context, registers the global hotkey (best effort), starts theme
+// hot reload (best effort, see theme.go), and kicks off the initial
+// index build in the background, so the window is responsive
 // immediately while the walk fills the index.
 func (a *App) Startup(ctx context.Context) {
 	a.mu.Lock()
 	a.ctx = ctx
 	a.mu.Unlock()
 	a.hkOnce.Do(a.registerHotkey)
+	a.themeOnce.Do(a.startThemeWatch)
 	if a.manager == nil {
 		return
 	}
@@ -214,9 +219,10 @@ func (a *App) emitDegraded(s watch.Stats) {
 
 // Shutdown is wired to the Wails OnShutdown hook. It releases the
 // global hotkey and stops the rescanner first (it may be mid-rescan and
-// calls back into the watcher to resync watches), then the watcher.
-// Safe to call at any point, even before the watch layer came up; a
-// still-running initial build then skips starting it.
+// calls back into the watcher to resync watches), then the watcher,
+// then the theme hot-reload watcher. Safe to call at any point, even
+// before the watch layer came up; a still-running initial build then
+// skips starting it.
 func (a *App) Shutdown(_ context.Context) {
 	a.mu.Lock()
 	hkStop := a.hotkeyStop
@@ -228,14 +234,17 @@ func (a *App) Shutdown(_ context.Context) {
 
 	a.watchMu.Lock()
 	a.shuttingDown = true
-	w, r := a.watcher, a.rescanner
-	a.watcher, a.rescanner = nil, nil
+	w, r, tw := a.watcher, a.rescanner, a.themeW
+	a.watcher, a.rescanner, a.themeW = nil, nil, nil
 	a.watchMu.Unlock()
 	if r != nil {
 		r.Stop()
 	}
 	if w != nil {
 		w.Stop()
+	}
+	if tw != nil {
+		tw.stop()
 	}
 }
 

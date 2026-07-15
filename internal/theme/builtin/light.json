@@ -1,0 +1,21 @@
+{
+  "name": "light",
+  "extends": "dark",
+  "tokens": {
+    "bg": "#f7f7f9",
+    "bg-elevated": "#e4e4ea",
+    "fg": "#1b1b22",
+    "fg-dim": "#6b6b76",
+    "accent": "#2f6fdb",
+    "accent-fg": "#ffffff",
+    "selection-bg": "#d8e4fb",
+    "selection-fg": "#14213d",
+    "border": "#cfcfd8",
+    "highlight": "#1a56c0",
+    "warning": "#9a6b12",
+    "badge-bg": "#dbe7ff",
+    "badge-fg": "#1d3a6e",
+    "scrollbar": "rgba(0, 0, 0, 0.2)",
+    "bg-opacity": "0.98"
+  }
+}

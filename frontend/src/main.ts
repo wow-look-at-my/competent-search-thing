@@ -1,9 +1,11 @@
 // Frontend wiring: as-you-type search over the Go index with stale
 // response dropping, a keyboard/mouse selection model, open/reveal
 // actions, and the runtime events the Go side emits (app:shown,
-// index:progress, watch:degraded). Rendering lives in render.ts.
+// index:progress, watch:degraded, theme:changed). Rendering lives in
+// render.ts; theme token/custom-css application lives in theme.ts.
 
 import { applySelection, renderResults } from "./render";
+import { initTheme } from "./theme";
 
 const SEARCH_DEBOUNCE_MS = 15;
 
@@ -192,6 +194,7 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
 }
 
 function wire(app: WailsAppBindings, rt: WailsRuntime): void {
+  initTheme(app, rt);
   inputEl.addEventListener("input", () => {
     scheduleSearch(app);
   });
