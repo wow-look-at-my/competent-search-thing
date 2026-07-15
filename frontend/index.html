@@ -23,6 +23,7 @@
           <circle cx="11" cy="11" r="7" />
           <line x1="16.5" y1="16.5" x2="21" y2="21" />
         </svg>
+        <span id="bang-chip" class="bang-chip" hidden></span>
         <input
           id="query"
           type="text"
@@ -31,7 +32,11 @@
           spellcheck="false"
         />
       </div>
-      <div id="results" role="listbox"></div>
+      <div id="results" role="listbox">
+        <div id="file-results"></div>
+        <div id="empty" class="empty" hidden>No matches</div>
+        <div id="plugin-results"></div>
+      </div>
       <div id="status">
         <span id="status-text">starting...</span>
         <span id="degraded-chip" hidden
@@ -70,6 +75,22 @@
         <path d="M6 2h8l4 4v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z" />
         <path d="M14 2v4h4" />
       </svg>
+    </template>
+    <template id="tpl-plugin-section">
+      <div class="plugin-section">
+        <div class="plugin-section-header"></div>
+      </div>
+    </template>
+    <template id="tpl-plugin-row">
+      <div class="result plugin-row" role="option">
+        <div class="plugin-main">
+          <span class="plugin-icon"></span>
+          <span class="name plugin-title"></span>
+          <span class="plugin-subtitle"></span>
+          <span class="plugin-badge" hidden></span>
+        </div>
+        <div class="plugin-fields" hidden></div>
+      </div>
     </template>
 
     <script type="module" src="./src/main.ts"></script>

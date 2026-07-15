@@ -50,7 +50,10 @@ export function highlightedName(name: string, query: string): HTMLSpanElement {
 }
 
 // renderResults replaces container's children with one row per item
-// and returns the row elements for the selection model to drive.
+// and returns the row elements for the selection model to drive. The
+// "No matches" empty state is owned by main.ts (the static #empty
+// element): it depends on the plugin sections too, which arrive after
+// the file response.
 export function renderResults(
   container: HTMLElement,
   items: WailsSearchResult[],
@@ -84,12 +87,6 @@ export function renderResults(
     frag.append(row);
     rows.push(row);
   });
-  if (items.length === 0 && query.trim() !== "") {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    empty.textContent = "No matches";
-    frag.append(empty);
-  }
   container.replaceChildren(frag);
   return rows;
 }
