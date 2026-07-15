@@ -27,9 +27,9 @@ func examplesDir(t *testing.T) string {
 	t.Helper()
 	dir, err := filepath.Abs(filepath.Join("..", "..", "examples", "plugins"))
 	require.NoError(t, err)
-	if _, err := os.Stat(dir); err != nil {
-		t.Fatalf("examples/plugins not found at %s (did the examples move?): %v", dir, err)
-	}
+	_, err = os.Stat(dir)
+	require.Nil(t, err)
+
 	return dir
 }
 
