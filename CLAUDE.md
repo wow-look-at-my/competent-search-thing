@@ -225,6 +225,24 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (platform_darwin.h/.m: cursor via CGEventCreate, screens via
   NSScreen with bottom-left->top-left conversion, MoveWindow via
   setFrameOrigin on the first NSWindow, all on the main thread).
+  Also per OS: `AppSource() appctx.Source` (appsource_*.go), the
+  app-context glue -- linux = EWMH over conn-per-call xgb
+  (_NET_ACTIVE_WINDOW / _NET_CLIENT_LIST -> per-window _NET_WM_PID,
+  WM_CLASS class for Name, _NET_WM_NAME falling back to WM_NAME for
+  Title, exe/comm via appctx.ProcInfo("/proc", pid); RunningApps
+  dedupes by pid keeping the first window's title, skips pid==0, caps
+  64, sorts by Name; InstalledApps = appctx.ScanDesktopDirs; no X ->
+  ok=false); windows = GetForegroundWindow / EnumWindows (package-
+  level callback) + IsWindowVisible + GetWindowTextW +
+  GetWindowThreadProcessId + OpenProcess/QueryFullProcessImageNameW
+  (Name = exe base sans extension), InstalledApps = HKLM+HKCU
+  uninstall keys (native + WOW6432Node; DisplayName, skip
+  SystemComponent=1, Exec from a plausible-.exe DisplayIcon with the
+  ",N" index stripped and spaces re-quoted in .desktop syntax);
+  darwin = NSWorkspace via the Cocoa shim (frontmostApplication /
+  runningApplications with regular activation policy; Title always
+  empty -- titles need the AX API), InstalledApps = /Applications +
+  ~/Applications *.app scan (Exec = `open -a "<path>"`).
   windows/darwin files compile only on their OSes -- CI is linux/amd64
   -- so keep them boring and conventional.
 - `wails.json` -- Wails CLI project config (app name, frontend

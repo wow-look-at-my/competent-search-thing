@@ -1,8 +1,11 @@
-// Cocoa shim for display_darwin.go / movewindow_darwin.go. Kept
-// minimal and conventional: CI compiles linux/amd64 only, so nothing
-// here is exercised before a real macOS build.
+// Cocoa shim for display_darwin.go / movewindow_darwin.go /
+// appsource_darwin.go. Kept minimal and conventional: CI compiles
+// linux/amd64 only, so nothing here is exercised before a real macOS
+// build.
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
+
+#include <string.h>
 
 #include "platform_darwin.h"
 
@@ -81,4 +84,58 @@ int csMoveWindow(double x, double y) {
 		ok = 1;
 	});
 	return ok;
+}
+
+// fillAppInfo copies one NSRunningApplication into the C struct.
+// Every accessor is nil-tolerant (messaging nil yields nil/NULL) and
+// the memset guarantees NUL termination after the bounded copies.
+static void fillAppInfo(NSRunningApplication *app, csAppInfo *out) {
+	memset(out, 0, sizeof(*out));
+	const char *cname = app.localizedName.UTF8String;
+	if (cname != NULL) {
+		strncpy(out->name, cname, sizeof(out->name) - 1);
+	}
+	NSURL *url = app.executableURL;
+	if (url == nil) {
+		url = app.bundleURL;
+	}
+	const char *cpath = url.path.UTF8String;
+	if (cpath != NULL) {
+		strncpy(out->exe, cpath, sizeof(out->exe) - 1);
+	}
+	out->pid = (int)app.processIdentifier;
+}
+
+int csFrontmostApp(csAppInfo *out) {
+	__block int ok = 0;
+	runOnMain(^{
+		NSRunningApplication *app = [NSWorkspace sharedWorkspace].frontmostApplication;
+		if (app == nil) {
+			return;
+		}
+		fillAppInfo(app, out);
+		ok = 1;
+	});
+	return ok;
+}
+
+int csRunningApps(csAppInfo *out, int max) {
+	__block int n = 0;
+	runOnMain(^{
+		NSArray<NSRunningApplication *> *apps = [NSWorkspace sharedWorkspace].runningApplications;
+		if (apps == nil) {
+			return;
+		}
+		for (NSUInteger i = 0; i < apps.count && n < max; i++) {
+			NSRunningApplication *app = apps[i];
+			// Regular activation policy = shows in the Dock and app
+			// switcher; skips daemons, status items, and helpers.
+			if (app.activationPolicy != NSApplicationActivationPolicyRegular) {
+				continue;
+			}
+			fillAppInfo(app, &out[n]);
+			n++;
+		}
+	});
+	return n;
 }
