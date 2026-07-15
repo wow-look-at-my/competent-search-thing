@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -101,6 +102,11 @@ func newTestApp(m *index.Manager, opt Options) (*App, *seamRecorder) {
 			defer r.mu.Unlock()
 			r.emits = append(r.emits, emittedEvent{name: name, payload: data})
 		},
+		clipboardSetText: func(_ context.Context, text string) error {
+			r.call("clipboard:" + text)
+			return nil
+		},
+		quit: func(context.Context) { r.call("quit") },
 	}
 	a.plat.startHotkey = func(platform.Hotkey, func()) (func(), error) {
 		r.call("startHotkey")
@@ -119,6 +125,13 @@ func newTestApp(m *index.Manager, opt Options) (*App, *seamRecorder) {
 	}
 	a.plat.open = func(path string) error { r.call("open:" + path); return nil }
 	a.plat.reveal = func(path string) error { r.call("reveal:" + path); return nil }
+	a.plat.run = func(argv []string) error { r.call("run:" + strings.Join(argv, " ")); return nil }
+	// A nil Source degrades the app-context cache to a no-op; tests
+	// that exercise capture inject a fake Source before Startup.
+	a.plat.appSource = nil
+	// No config.json or plugins-dir IO in unit tests; tests that
+	// exercise the real builder restore a.buildRegistry explicitly.
+	a.newRegistry = func() dispatcher { return nil }
 	return a, r
 }
 
