@@ -384,6 +384,22 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   script proving undeclared context stays off the wire and a
   min-timeout kill of a sleeping script. Keep the scripts, manifests,
   and those tests in sync.
+- `schemas/` -- formal JSON Schemas (draft 2020-12, $id = raw master
+  URLs) for every JSON format: config.schema.json (config.json),
+  plugin-manifest.schema.json, theme.schema.json (theme files),
+  plugin-request/plugin-response.schema.json (the v1 wire protocol).
+  Deliberately STRICTER than the loaders (additionalProperties false;
+  the response schema rejects what the sanitizer would clamp) --
+  authoring aids, not the runtime validators. Kept in lockstep by
+  internal/plugin/schemas_test.go, internal/config/schema_test.go and
+  internal/theme/schema_test.go (test-only dep
+  santhosh-tekuri/jsonschema/v6): they compile all five, validate the
+  shipped example manifests + builtin themes + config.Default() +
+  canned wire payloads, assert negative cases, and reflection-guard
+  every struct json tag against the schema properties (and the theme
+  token set against TokenNames), so a struct/schema drift fails CI.
+  The example manifests and builtin themes carry "$schema" keys
+  (loaders ignore unknown top-level keys).
 
 ## Build / test
 
@@ -436,6 +452,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the theming tokens apply when present. Never apply plugin data
   as literal inline color/background styles, and never widen the
   whitelisted styling knobs without updating the sanitizer + README.
+- Changing any JSON-carrying struct (config, manifest/trigger, wire
+  Request/Response, themeFile) or its validator means updating the
+  matching schema in `schemas/` in the same commit -- the lockstep
+  schema tests enforce it.
 - One branch per session (`claude/searchbar-v1` for the v1 build,
   `claude/plugins-v1` for the plugin system), squash-merged; add
   follow-up commits rather than rebasing.

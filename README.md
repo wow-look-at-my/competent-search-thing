@@ -173,6 +173,11 @@ Field reference:
   `{ "aliases": { "math": "calc" } }` makes `!math` target the plugin
   that registered `calc`.
 
+The full format is formally described by
+[`schemas/config.schema.json`](schemas/config.schema.json) -- add a
+`"$schema"` key to your `config.json` for editor validation and
+completion (see [JSON Schemas](#json-schemas)).
+
 ## Theming
 
 Every color, size, and effect in the UI flows through a fixed set of
@@ -220,6 +225,10 @@ directory on first run, next to `config.json`).
 - Errors never break the app: an unknown theme name, a corrupt file,
   an unknown token key, or an invalid value is logged (once per
   distinct problem) and the bar falls back to the builtin dark theme.
+- The file format is formally described by
+  [`schemas/theme.schema.json`](schemas/theme.schema.json) -- add a
+  `"$schema"` key to your theme file for editor validation (see
+  [JSON Schemas](#json-schemas)).
 
 ### Token reference
 
@@ -691,6 +700,69 @@ to `python`). `color-http`'s endpoint runs with
 HTTP-plugin reference: POST-only (405 otherwise), 400 for a malformed
 body -- the recommended answers, since the searchbar logs any non-2xx
 as a plugin error.
+
+### JSON Schemas
+
+Every JSON format the app reads or speaks is formally described by a
+JSON Schema (draft 2020-12) under [`schemas/`](schemas/):
+
+- [`schemas/config.schema.json`](schemas/config.schema.json) --
+  `config.json` (see [Configuration](#configuration))
+- [`schemas/plugin-manifest.schema.json`](schemas/plugin-manifest.schema.json) --
+  a plugin's `manifest.json` (see [The manifest](#the-manifest))
+- [`schemas/theme.schema.json`](schemas/theme.schema.json) -- theme
+  files (see [Theming](#theming))
+- [`schemas/plugin-request.schema.json`](schemas/plugin-request.schema.json) --
+  the wire request a plugin receives
+- [`schemas/plugin-response.schema.json`](schemas/plugin-response.schema.json) --
+  the wire response a plugin returns
+
+For editor validation and completion, add a `"$schema"` key to the
+file (the app ignores unknown keys, so this is always safe; the
+shipped example manifests do it):
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/wow-look-at-my/competent-search-thing/master/schemas/plugin-manifest.schema.json"
+}
+```
+
+Or map the schemas by file name in VS Code's `settings.json`:
+
+```json
+{
+  "json.schemas": [
+    {
+      "fileMatch": ["competent-search-thing/config.json"],
+      "url": "https://raw.githubusercontent.com/wow-look-at-my/competent-search-thing/master/schemas/config.schema.json"
+    },
+    {
+      "fileMatch": ["competent-search-thing/plugins/*/manifest.json"],
+      "url": "https://raw.githubusercontent.com/wow-look-at-my/competent-search-thing/master/schemas/plugin-manifest.schema.json"
+    },
+    {
+      "fileMatch": ["competent-search-thing/themes/*.json"],
+      "url": "https://raw.githubusercontent.com/wow-look-at-my/competent-search-thing/master/schemas/theme.schema.json"
+    }
+  ]
+}
+```
+
+Two things to know about strictness:
+
+- The schemas set `additionalProperties: false` so editors flag typos
+  (`"maxResluts"`), while the app itself IGNORES unknown keys -- a
+  file that fails schema validation may still load fine.
+- The response schema REJECTS what the app's sanitizer would merely
+  clamp or drop (a score of 101, a 21st result, a 201-rune title), so
+  authors notice instead of silently losing data. Staying inside the
+  schema guarantees the app shows exactly what you sent.
+
+The schemas are kept in lockstep with the Go validators by tests
+(`internal/*/schema*_test.go`): the shipped example manifests, the
+builtin themes, the default config, and canned wire payloads are
+validated on every build, and reflection guards fail the build when a
+struct field and its schema drift apart.
 
 ### Limits and troubleshooting
 
