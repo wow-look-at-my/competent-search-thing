@@ -134,6 +134,30 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   quotes, backslash escapes, %-field codes stripped). Exhaustively
   unit-tested, table-driven, plus an end-to-end manifest ->
   registry -> /bin/sh transport dispatch test.
+- `internal/appctx` -- app-context collection for the plugin system,
+  pure and headless-tested: the data types (AppInfo / InstalledApp /
+  Snapshot -- deliberately NOT internal/plugin's wire types, the app
+  layer converts), the `Source` seam implemented by
+  internal/platform/native, and `Cache` (mutex-guarded, injectable
+  clock): `CaptureFocused` = synchronous focused-app read at
+  hotkey-press BEFORE the window steals focus;
+  `RefreshRunningAsync` / `RefreshInstalledAsync` = single-flight
+  background refreshes that never block callers and keep old data on
+  failure; `EnsureFreshInstalled(ttl)` re-kicks only when the last
+  SUCCESSFUL installed refresh is older than ttl; `Snapshot()` =
+  immutable copies. A zero-value or nil-Source Cache no-ops
+  everything (degraded). desktop.go = XDG .desktop scanning with
+  injectable dirs (`DesktopDirs(getenv)`: $XDG_DATA_HOME else
+  ~/.local/share, then $XDG_DATA_DIRS else
+  /usr/local/share:/usr/share, each + /applications, deduped;
+  `ScanDesktopDirs`: flat per-dir scan of *.desktop files, [Desktop
+  Entry] needs Type=Application + non-empty Name/Exec,
+  NoDisplay/Hidden/Terminal skipped, Exec kept RAW for the plugin
+  layer's parser, ID = file name, earlier dirs shadow later ones BY
+  PRESENCE (a Hidden local copy disables a system app), localized
+  Name[xx] ignored, sorted by Name). proc.go = `ProcInfo(procRoot,
+  pid)` readlink exe + trimmed comm, each empty on error (cross-user
+  /proc exe readlink fails; expected).
 - `internal/watch` -- keeps the index live after the initial walk.
   `Watcher` (watch.go + events.go): one fsnotify watch per live indexed
   directory plus the roots -- fsnotify is used uniformly on ALL
