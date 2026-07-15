@@ -6,11 +6,16 @@ import (
 	"syscall"
 	"unsafe"
 
+	"golang.org/x/sys/windows"
+
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 )
 
+// NewLazySystemDLL comes from x/sys: the standard syscall package only
+// exports NewLazyDLL on Windows (verified by a windows/amd64
+// cross-build; syscall.NewLazySystemDLL does not compile).
 var (
-	user32                  = syscall.NewLazySystemDLL("user32.dll")
+	user32                  = windows.NewLazySystemDLL("user32.dll")
 	procGetCursorPos        = user32.NewProc("GetCursorPos")
 	procEnumDisplayMonitors = user32.NewProc("EnumDisplayMonitors")
 	procGetMonitorInfoW     = user32.NewProc("GetMonitorInfoW")

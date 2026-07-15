@@ -1,0 +1,30 @@
+package appctx
+
+// AppInfo describes one running (or the focused) application. It
+// mirrors internal/plugin's AppInfo shape but deliberately does not
+// import it: the app layer converts when building request payloads,
+// keeping OS data collection decoupled from the wire protocol.
+type AppInfo struct {
+	Name  string // application identity (WM_CLASS class, exe base name, ...)
+	Exe   string // executable path; often empty (cross-user /proc, denied handles)
+	Title string // window title; empty where the OS offers none
+	PID   int
+}
+
+// InstalledApp describes one installed application. Exec is kept raw
+// in .desktop Exec-line syntax (field codes and all); the plugin
+// layer's parser handles quoting and %-codes when launching.
+type InstalledApp struct {
+	Name string
+	Exec string
+	ID   string // stable identity: desktop-file name, registry subkey, bundle name
+}
+
+// Snapshot is an immutable copy of the cached app context at one
+// point in time. Mutating its slices or the Focused struct never
+// affects the Cache.
+type Snapshot struct {
+	Focused   *AppInfo // nil when no focused app was captured
+	Running   []AppInfo
+	Installed []InstalledApp
+}

@@ -1,0 +1,11 @@
+{
+    "$schema": "https://raw.githubusercontent.com/wow-look-at-my/competent-search-thing/master/schemas/plugin-manifest.schema.json",
+    "v": 1,
+    "id": "calc",
+    "name": "Calculator",
+    "type": "command",
+    "trigger": { "prefix": "=" },
+    "bangs": ["calc", "c"],
+    "timeout_ms": 1500,
+    "command": { "argv": ["python3", "calc.py"] }
+}

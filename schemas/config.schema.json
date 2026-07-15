@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/wow-look-at-my/competent-search-thing/master/schemas/config.schema.json",
+  "title": "competent-search-thing config.json",
+  "description": "The application configuration file, loaded from <configDir>/config.json (Linux: ~/.config/competent-search-thing/, overridable via the COMPETENT_SEARCH_CONFIG_DIR environment variable). Source of truth: internal/config/config.go. The app itself ignores unknown keys (plain encoding/json decoding) and repairs missing or nonsensical values via Normalize; this schema is stricter than the loader on purpose, so editors catch typos and out-of-range values that the app would silently fix.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional editor hint pointing at this schema. Ignored by the app."
+    },
+    "roots": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Directories to index. Default: your home directory. Relative paths are made absolute on load; an empty or missing list falls back to the default. Symlinks are indexed as entries but never descended."
+    },
+    "excludes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "default": [".git", "node_modules", ".cache"],
+      "description": "Patterns pruned from indexing. A pattern WITHOUT a path separator matches each entry's base name ('node_modules', '*.tmp'): matching directories are pruned, matching files skipped. A pattern WITH a separator matches the full path ('/home/*/secret'). '*' never crosses a separator and there is no '**'. An explicitly empty list means 'exclude nothing'. The same semantics apply to the initial walk, live filesystem events, and rescans."
+    },
+    "hotkey": {
+      "type": "string",
+      "minLength": 1,
+      "default": "alt+space",
+      "description": "The global summon shortcut: '+'-separated tokens, case- and whitespace-insensitive, zero or more modifiers followed by exactly one key. Modifiers: ctrl/control, shift, alt/option, super/win/cmd/meta. Keys: space, tab, enter/return, esc/escape, a-z, 0-9, f1-f12, up/down/left/right. Examples: 'alt+space', 'ctrl+shift+k', 'super+space'. An invalid or unregistrable hotkey is logged and the app runs on without one."
+    },
+    "rescanIntervalMinutes": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Optional periodic full re-index (a safety net on top of live fsnotify updates); 0 disables the timer. Negative values are normalized to 0 by the app; this schema rejects them."
+    },
+    "maxResults": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 50,
+      "description": "Maximum number of file results one query returns. Zero or negative values are reset to the default by the app; this schema rejects them."
+    },
+    "theme": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "default": "dark",
+      "description": "The UI theme: a builtin ('dark', 'light') or the name of a user theme file at <configDir>/themes/<name>.json (see theme.schema.json). An unknown or invalid theme is logged and falls back to 'dark'. An empty value means the default."
+    },
+    "plugins": { "$ref": "#/$defs/pluginsConfig" },
+    "bangs": { "$ref": "#/$defs/bangsConfig" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "pluginsConfig": {
+      "title": "Plugin system configuration",
+      "type": "object",
+      "properties": {
+        "disabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "true turns the whole plugin system off, built-in providers included."
+        },
+        "entries": {
+          "type": "object",
+          "description": "Per-plugin overrides keyed by provider id (the built-in ids 'bangs', 'app' and 'apps' work here too).",
+          "patternProperties": {
+            "^[a-z0-9][a-z0-9_-]{0,31}$": { "$ref": "#/$defs/pluginEntry" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "pluginEntry": {
+      "title": "One plugin's configuration",
+      "type": "object",
+      "properties": {
+        "disabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "true turns this one provider off."
+        },
+        "settings": {
+          "type": "object",
+          "description": "Opaque JSON object forwarded verbatim to this plugin in every request (its 'settings' field), so plugins can be configured without editing their manifest."
+        }
+      },
+      "additionalProperties": false
+    },
+    "bangsConfig": {
+      "title": "Bang parsing configuration",
+      "type": "object",
+      "properties": {
+        "sigils": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1,
+            "pattern": "^[^\\p{L}\\p{Nd}\\s]$",
+            "description": "Exactly one character that is not a letter, digit, or space."
+          },
+          "default": ["!", "/", "@"],
+          "description": "Characters that may start a bang query. Invalid sigils are logged and skipped by the app; an empty or all-invalid list falls back to the defaults."
+        },
+        "aliases": {
+          "type": "object",
+          "description": "Extra names mapped onto registered bangs, e.g. {\"math\": \"calc\"} makes '!math' target the plugin that registered 'calc'. Keys are lowercased on load; only [a-z0-9_-] names can ever be typed. An alias pointing at a bang that never gets registered is ignored.",
+          "patternProperties": {
+            "^[a-z0-9_-]+$": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]+$",
+              "description": "The registered bang name this alias resolves to."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "examples": [
+    {
+      "roots": ["/home/me"],
+      "excludes": [".git", "node_modules", ".cache"],
+      "hotkey": "alt+space",
+      "rescanIntervalMinutes": 0,
+      "maxResults": 50,
+      "theme": "dark",
+      "plugins": {
+        "disabled": false,
+        "entries": {
+          "calc": { "disabled": false, "settings": {} }
+        }
+      },
+      "bangs": {
+        "sigils": ["!", "/", "@"],
+        "aliases": { "math": "calc" }
+      }
+    }
+  ]
+}

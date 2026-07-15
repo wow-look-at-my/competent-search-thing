@@ -49,7 +49,43 @@ type Config struct {
 	// theme file at <configDir>/themes/<name>.json (see internal/theme).
 	// Unknown or invalid themes fall back to dark at resolve time.
 	Theme string `json:"theme"`
+	// Plugins configures the plugin system (see internal/plugin).
+	Plugins PluginsConfig `json:"plugins"`
+	// Bangs configures bang parsing (sigils and aliases).
+	Bangs BangsConfig `json:"bangs"`
 }
+
+// PluginsConfig configures the plugin system. The zero value means
+// "plugins enabled, nothing overridden".
+type PluginsConfig struct {
+	// Disabled turns the whole plugin system off.
+	Disabled bool `json:"disabled"`
+	// Entries holds per-plugin overrides keyed by plugin id (builtin
+	// provider ids work here too).
+	Entries map[string]PluginEntry `json:"entries"`
+}
+
+// PluginEntry is one plugin's configuration.
+type PluginEntry struct {
+	// Disabled turns this one plugin off.
+	Disabled bool `json:"disabled"`
+	// Settings is an opaque JSON object forwarded verbatim to the
+	// plugin in every request.
+	Settings json.RawMessage `json:"settings,omitempty"`
+}
+
+// BangsConfig configures the bang system.
+type BangsConfig struct {
+	// Sigils are the characters that may start a bang query; empty
+	// means the defaults (see DefaultBangSigils).
+	Sigils []string `json:"sigils"`
+	// Aliases map extra names onto registered bangs.
+	Aliases map[string]string `json:"aliases"`
+}
+
+// DefaultBangSigils returns the default bang sigil set. It returns a
+// fresh slice on every call so callers may modify it safely.
+func DefaultBangSigils() []string { return []string{"!", "/", "@"} }
 
 // Default returns the default configuration: index the user's home
 // directory (falling back to the current directory if the home cannot
@@ -69,30 +105,33 @@ func Default() Config {
 		RescanIntervalMinutes: 0,
 		MaxResults:            DefaultMaxResults,
 		Theme:                 DefaultTheme,
+		Plugins:               PluginsConfig{Entries: map[string]PluginEntry{}},
+		Bangs:                 BangsConfig{Sigils: DefaultBangSigils(), Aliases: map[string]string{}},
 	}
 }
 
-// Path returns the resolved location of the config file.
-func Path() (string, error) {
+// Dir returns the directory holding the configuration (config.json,
+// the plugins/ subdirectory, and the themes/ directory with user theme
+// JSON files and the custom.css escape hatch, see internal/theme),
+// consistent with Path.
+func Dir() (string, error) {
 	if dir := os.Getenv(EnvConfigDir); dir != "" {
-		return filepath.Join(dir, fileName), nil
+		return dir, nil
 	}
 	base, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("config: resolving user config dir: %w", err)
 	}
-	return filepath.Join(base, appDirName, fileName), nil
+	return filepath.Join(base, appDirName), nil
 }
 
-// Dir returns the directory holding config.json; it is also the
-// parent of the themes/ directory (user theme JSON files and the
-// custom.css escape hatch, see internal/theme).
-func Dir() (string, error) {
-	p, err := Path()
+// Path returns the resolved location of the config file.
+func Path() (string, error) {
+	dir, err := Dir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Dir(p), nil
+	return filepath.Join(dir, fileName), nil
 }
 
 // Load reads the config file. A missing file is created with defaults
@@ -145,9 +184,12 @@ func Save(c Config) error {
 }
 
 // Normalize repairs missing or nonsensical fields in place: empty roots
-// fall back to the default root, relative roots are absolutized, and
-// zero/negative knobs get their defaults. Excludes are left as the user
-// wrote them (an explicitly empty list means "exclude nothing").
+// fall back to the default root, relative roots are absolutized,
+// zero/negative knobs get their defaults, an empty theme name gets the
+// default theme, nil plugin entries and bang aliases become empty maps,
+// and an empty sigil list gets the default sigils. Excludes are left as
+// the user wrote them (an explicitly empty list means "exclude
+// nothing").
 func (c *Config) Normalize() {
 	if len(c.Roots) == 0 {
 		c.Roots = Default().Roots
@@ -177,5 +219,14 @@ func (c *Config) Normalize() {
 	}
 	if c.Theme == "" {
 		c.Theme = DefaultTheme
+	}
+	if c.Plugins.Entries == nil {
+		c.Plugins.Entries = map[string]PluginEntry{}
+	}
+	if len(c.Bangs.Sigils) == 0 {
+		c.Bangs.Sigils = DefaultBangSigils()
+	}
+	if c.Bangs.Aliases == nil {
+		c.Bangs.Aliases = map[string]string{}
 	}
 }

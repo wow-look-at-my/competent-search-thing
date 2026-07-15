@@ -209,3 +209,119 @@ body {
   border-radius: calc(var(--sb-radius) * 0.8);
   white-space: nowrap;
 }
+
+/* --- plugins (append-only, namespaced) ----------------------------- */
+/* Everything below is scoped to .plugin-*, .bang-chip, and
+   .status-flash so the theming branch can restyle without conflicts.
+   Plugin accent colors arrive EXCLUSIVELY as a --plugin-accent custom
+   property set per row from render.ts; every rule that uses it falls
+   back to the theme token --accent (bridged just below), then to a
+   literal. */
+
+/* Bridges plugin accents to the theming design tokens (--sb-*) when
+   present; resolves to the standalone default otherwise, so the
+   theming and plugin PRs can merge in any order. */
+:root {
+  --accent: var(--sb-accent, #89b4fa);
+}
+
+/* Bang-target chip in the query row (display name of the targeted
+   plugin, e.g. "Calculator" for "!calc 2+2"). */
+.bang-chip {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  font-size: 12px;
+  color: var(--accent, #89b4fa);
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.plugin-section {
+  margin-top: 4px;
+  padding-top: 2px;
+  border-top: 1px solid #2c2c33;
+}
+
+/* Section header: the plugin's display name; never selectable. */
+.plugin-section-header {
+  padding: 4px 16px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6c6c76;
+}
+
+/* Plugin rows share the .result base class (padding, colors, selected
+   state), stacked as main line over fields. The left edge is the
+   accent: 13px padding + 3px border keeps text aligned with file
+   rows' 16px. */
+.plugin-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding-left: 13px;
+  border-left: 3px solid var(--plugin-accent, var(--accent, #89b4fa));
+}
+
+.plugin-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.plugin-icon {
+  flex: 0 0 auto;
+  width: 18px;
+  font-size: 13px;
+  line-height: 1;
+  text-align: center;
+}
+
+.plugin-subtitle {
+  /* Dim, ellipsizes first -- the same language as .result .dir. */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: #77777f;
+}
+
+.result.selected .plugin-subtitle {
+  color: #9aa7c4;
+}
+
+.plugin-badge {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  font-size: 10px;
+  color: var(--plugin-accent, var(--accent, #89b4fa));
+  border: 1px solid var(--plugin-accent, var(--accent, #89b4fa));
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.plugin-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  min-width: 0;
+  padding-left: 28px; /* aligns under the title, past the icon */
+  font-size: 11px;
+  color: #77777f;
+}
+
+.plugin-field {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Status-bar flash ("Copied", plugin action errors). */
+.status-flash {
+  color: #f2f2f5;
+}

@@ -1,0 +1,11 @@
+{
+    "$schema": "https://raw.githubusercontent.com/wow-look-at-my/competent-search-thing/master/schemas/plugin-manifest.schema.json",
+    "v": 1,
+    "id": "color",
+    "name": "Color preview",
+    "type": "http",
+    "trigger": { "prefix": "#" },
+    "bangs": ["color"],
+    "timeout_ms": 1500,
+    "http": { "url": "http://127.0.0.1:8765/query" }
+}
