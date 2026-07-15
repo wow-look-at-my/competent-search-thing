@@ -380,8 +380,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - Strict frontend file-type separation: TS/JS only in `.ts`/`.js`, CSS
   only in `.css`, HTML only in `.html`. No inline `<style>`/`<script>`
   bodies.
-- One branch per session (`claude/searchbar-v1` for the v1 build),
-  squash-merged; add follow-up commits rather than rebasing.
+- Plugin styling: a result's accent_color reaches CSS EXCLUSIVELY via
+  the `--plugin-accent` custom property set per row in render.ts;
+  every consumer uses var(--plugin-accent, var(--accent, #89b4fa)) so
+  a future theme branch can define `--accent`. Never apply plugin data
+  as literal inline color/background styles, and never widen the
+  whitelisted styling knobs without updating the sanitizer + README.
+- One branch per session (`claude/searchbar-v1` for the v1 build,
+  `claude/plugins-v1` for the plugin system), squash-merged; add
+  follow-up commits rather than rebasing.
 - Commit go-toolchain's auto-rewrites as part of your work.
 
 ## CI notes
