@@ -173,7 +173,15 @@ body {
    .status-flash so the theming branch can restyle without conflicts.
    Plugin accent colors arrive EXCLUSIVELY as a --plugin-accent custom
    property set per row from render.ts; every rule that uses it falls
-   back to the future theme token --accent, then to a literal. */
+   back to the theme token --accent (bridged just below), then to a
+   literal. */
+
+/* Bridges plugin accents to the theming design tokens (--sb-*) when
+   present; resolves to the standalone default otherwise, so the
+   theming and plugin PRs can merge in any order. */
+:root {
+  --accent: var(--sb-accent, #89b4fa);
+}
 
 /* Bang-target chip in the query row (display name of the targeted
    plugin, e.g. "Calculator" for "!calc 2+2"). */

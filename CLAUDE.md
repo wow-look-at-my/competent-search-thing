@@ -315,8 +315,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   inline color styles) + `src/style.css` (dark Spotlight-ish bar; dir
   ellipsizes before the name; thin scrollbar; appended namespaced
   plugin block (.plugin-*, .bang-chip, .status-flash) where every
-  accent rule consumes var(--plugin-accent, var(--accent, #89b4fa)) so
-  the theming branch can define --accent later) + `src/wails.d.ts`
+  accent rule consumes var(--plugin-accent, var(--accent, #89b4fa))
+  and a :root bridge defines --accent: var(--sb-accent, #89b4fa), so
+  the theming design tokens apply when present and the standalone
+  default otherwise, merge order irrelevant) + `src/wails.d.ts`
   (ambient types for the Wails-injected `window.go` / `window.runtime`
   incl. EventsOn, the event payload shapes, and the plugin wire
   contract TargetInfo/PluginAction/PluginResult/PluginEmission -- keep
@@ -382,8 +384,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   bodies.
 - Plugin styling: a result's accent_color reaches CSS EXCLUSIVELY via
   the `--plugin-accent` custom property set per row in render.ts;
-  every consumer uses var(--plugin-accent, var(--accent, #89b4fa)) so
-  a future theme branch can define `--accent`. Never apply plugin data
+  every consumer uses var(--plugin-accent, var(--accent, #89b4fa)),
+  and a :root bridge defines `--accent: var(--sb-accent, #89b4fa)` so
+  the theming tokens apply when present. Never apply plugin data
   as literal inline color/background styles, and never widen the
   whitelisted styling knobs without updating the sanitizer + README.
 - One branch per session (`claude/searchbar-v1` for the v1 build,

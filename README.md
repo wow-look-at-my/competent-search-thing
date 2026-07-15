@@ -434,9 +434,10 @@ icon. Remote icon URLs are not supported.
 It sets exactly one CSS custom property, `--plugin-accent`, on that
 row; the stylesheet consumes it as
 `var(--plugin-accent, var(--accent, #89b4fa))` (row left edge and
-badge), so themes can define `--accent` as the app-wide fallback.
-Plugins cannot inject HTML, CSS, or inline styles -- every string is
-rendered as a text node.
+badge). A `:root` bridge defines `--accent: var(--sb-accent, #89b4fa)`,
+so the app-wide theme accent token applies when present and the
+standalone default otherwise. Plugins cannot inject HTML, CSS, or
+inline styles -- every string is rendered as a text node.
 
 ### Actions
 
