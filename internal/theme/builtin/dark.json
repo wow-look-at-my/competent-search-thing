@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/wow-look-at-my/competent-search-thing/master/schemas/theme.schema.json",
   "name": "dark",
   "tokens": {
     "bg": "#18181c",

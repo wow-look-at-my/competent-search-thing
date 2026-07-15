@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/wow-look-at-my/competent-search-thing/master/schemas/theme.schema.json",
+  "title": "competent-search-thing theme file",
+  "description": "A theme JSON file: the embedded builtins (internal/theme/builtin/dark.json, light.json) and user themes at <configDir>/themes/<name>.json. Source of truth: internal/theme/theme.go. The file's BASE NAME (without .json) is the authoritative theme name used for lookup and 'extends' references; the 'name' field is informational. A theme does not have to define every token: anything the extends chain leaves unset falls back to the dark builtin's value. The loader ignores unknown TOP-LEVEL keys but strictly REJECTS unknown token keys and non-whitelisted token values (the theme then falls back to dark, with the error logged). Values are trimmed by the loader; this schema expects them already trimmed.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional editor hint pointing at this schema. Ignored by the app."
+    },
+    "name": {
+      "type": "string",
+      "description": "Informational display name. Lookup uses the file's base name, not this field."
+    },
+    "extends": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "Optional parent theme: a builtin ('dark', 'light') or another user theme's file base name. Chains are capped at 4 themes and cycles are rejected. A user theme can extend a builtin but never shadow one."
+    },
+    "tokens": {
+      "type": "object",
+      "description": "The design tokens this theme sets. The key set is CLOSED (the 22 names below; anything else rejects the whole file). The frontend exposes token k as the CSS custom property --sb-<k>. Values are whitelisted: hex colors (#rgb/#rgba/#rrggbb/#rrggbbaa), rgb()/rgba()/hsl()/hsla() with numeric arguments, px/em/rem/% lengths, and bare numbers; font-family instead takes a comma-separated font list over the charset [A-Za-z0-9 ,'\"-]. url(...), expression(...), @import, ';', '{' and '}' are hard-rejected.",
+      "properties": {
+        "bg": { "$ref": "#/$defs/cssValue", "description": "Bar background color." },
+        "bg-elevated": { "$ref": "#/$defs/cssValue", "description": "Elevated surface color (rows, chips)." },
+        "fg": { "$ref": "#/$defs/cssValue", "description": "Primary text color." },
+        "fg-dim": { "$ref": "#/$defs/cssValue", "description": "Dimmed/secondary text color." },
+        "accent": { "$ref": "#/$defs/cssValue", "description": "Accent color (also the default plugin accent via the --accent bridge)." },
+        "accent-fg": { "$ref": "#/$defs/cssValue", "description": "Text color on accent surfaces." },
+        "selection-bg": { "$ref": "#/$defs/cssValue", "description": "Selected-row background." },
+        "selection-fg": { "$ref": "#/$defs/cssValue", "description": "Selected-row text color." },
+        "border": { "$ref": "#/$defs/cssValue", "description": "Border color." },
+        "highlight": { "$ref": "#/$defs/cssValue", "description": "Match-highlight color in result names." },
+        "warning": { "$ref": "#/$defs/cssValue", "description": "Warning color (degraded chip)." },
+        "badge-bg": { "$ref": "#/$defs/cssValue", "description": "Result badge background (reserved for plugin result badges)." },
+        "badge-fg": { "$ref": "#/$defs/cssValue", "description": "Result badge text color." },
+        "scrollbar": { "$ref": "#/$defs/cssValue", "description": "Scrollbar thumb color." },
+        "font-family": { "$ref": "#/$defs/fontValue", "description": "Font stack; charset-limited, no url() or exotic syntax." },
+        "font-size": { "$ref": "#/$defs/cssValue", "description": "Base font size." },
+        "font-size-small": { "$ref": "#/$defs/cssValue", "description": "Small font size (subtitles, status bar)." },
+        "radius": { "$ref": "#/$defs/cssValue", "description": "Corner radius." },
+        "gap": { "$ref": "#/$defs/cssValue", "description": "Layout gap." },
+        "padding": { "$ref": "#/$defs/cssValue", "description": "Layout padding." },
+        "bg-opacity": { "$ref": "#/$defs/cssValue", "description": "Bar background opacity (bare number 0..1)." },
+        "blur": { "$ref": "#/$defs/cssValue", "description": "Backdrop blur radius (length)." }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "cssValue": {
+      "type": "string",
+      "pattern": "^(#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|(rgb|rgba|hsl|hsla)\\([0-9,./% ]+\\)|-?([0-9]+(\\.[0-9]+)?|\\.[0-9]+)(px|em|rem|%)?)$",
+      "description": "Whitelisted CSS value: a hex color, rgb()/rgba()/hsl()/hsla() over [0-9,./% ], a px/em/rem/% length, or a bare number."
+    },
+    "fontValue": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9 ,'\"-]+$",
+      "description": "Comma-separated font list over a tight charset (letters, digits, spaces, commas, quotes, hyphens)."
+    }
+  },
+  "examples": [
+    {
+      "name": "midnight",
+      "extends": "dark",
+      "tokens": {
+        "bg": "#0b0b12",
+        "accent": "#7fd4c4",
+        "radius": "6px"
+      }
+    }
+  ]
+}
