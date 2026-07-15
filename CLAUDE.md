@@ -282,19 +282,45 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   install/build commands) read by `wails dev`/`wails build` only; the
   no-CLI go-toolchain path does not use it.
 - `frontend/` -- vanilla TypeScript + Vite. No framework. `index.html`
-  (query row with inline SVG magnifier, results list, status bar +
-  degraded chip, <template> folder/file icons) + `src/main.ts` (search
-  as-you-type: 15ms debounce + sequence-number stale-response drop;
-  selection: ArrowUp/Down wrap, Home/End, hover; Enter=Open,
-  Ctrl/Cmd+Enter=Reveal, click/ctrl-click likewise, Esc + window blur
-  -> Hide; runtime events: "app:shown" -> focus+select+refresh,
+  (query row with inline SVG magnifier + hidden bang chip; #results
+  split into #file-results / static #empty ("No matches") /
+  #plugin-results zones; status bar + degraded chip; <template>s for
+  folder/file icons AND plugin section/row skeletons) + `src/main.ts`
+  (search as-you-type: 15ms debounce + sequence-number stale-response
+  drop; every generation also fire-and-forgets QueryPlugins(query,
+  seq) -- INCLUDING the empty query, which is the Go-side cancel
+  signal -- and updates the bang chip from the returned TargetInfo;
+  "plugin:results" emissions are dropped unless gen === seq, else
+  upsert that plugin's section (keyed by id) and re-render the plugin
+  area BELOW the file rows, never displacing them; selection is one
+  flat list, file rows then plugin rows: ArrowUp/Down wrap, Home/End,
+  hover; file rows Enter=Open / Ctrl/Cmd+Enter=Reveal; plugin rows run
+  their action on Enter/click (Ctrl+Enter identical): set_query stays
+  frontend-local (replace input, caret to end, re-run the pipeline),
+  everything else goes to RunPluginAction -- Go owns bar-hide per
+  action type; copy_text and run_builtin "version" stay open and flash
+  "Copied" ~1.2s in the status bar, action errors flash ~2s; #empty
+  shows only when a non-blank query has neither files nor sections;
+  Esc + window blur -> Hide; runtime events: "app:shown" ->
+  focus+select+refresh (plugins re-query through the same path),
   "index:progress" -> status text, "watch:degraded" -> warning chip)
-  + `src/render.ts` (row DOM: icon, name with highlighted match, dim
-  parent dir; pure text nodes, no innerHTML) + `src/style.css` (dark
-  Spotlight-ish bar; dir ellipsizes before the name; thin scrollbar)
-  + `src/wails.d.ts` (ambient types for the Wails-injected `window.go`
-  / `window.runtime` incl. EventsOn and the event payload shapes --
-  keep in sync with internal/app's payload structs).
+  + `src/render.ts` (pure text-node DOM builders, no innerHTML
+  anywhere: file rows with highlighted match + dim parent dir; plugin
+  sections -- unselectable header, rows with icon/title/dim
+  subtitle/badge/"label: value" fields; the builtin icon-name -> glyph
+  map (calculator globe clock star info warning link terminal text
+  hash bolt app puzzle; unknown/absent -> puzzle, non-name values
+  render as literal glyphs); accent_color is ONLY ever applied by
+  setting the `--plugin-accent` custom property on the row -- never
+  inline color styles) + `src/style.css` (dark Spotlight-ish bar; dir
+  ellipsizes before the name; thin scrollbar; appended namespaced
+  plugin block (.plugin-*, .bang-chip, .status-flash) where every
+  accent rule consumes var(--plugin-accent, var(--accent, #89b4fa)) so
+  the theming branch can define --accent later) + `src/wails.d.ts`
+  (ambient types for the Wails-injected `window.go` / `window.runtime`
+  incl. EventsOn, the event payload shapes, and the plugin wire
+  contract TargetInfo/PluginAction/PluginResult/PluginEmission -- keep
+  in sync with internal/app + internal/plugin payload structs).
 
 ## Build / test
 
