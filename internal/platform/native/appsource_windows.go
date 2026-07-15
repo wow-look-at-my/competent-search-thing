@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
@@ -24,7 +25,7 @@ const maxRunningApps = 64
 const processQueryLimitedInformation = 0x1000
 
 var (
-	kernel32                       = syscall.NewLazySystemDLL("kernel32.dll")
+	kernel32                       = windows.NewLazySystemDLL("kernel32.dll")
 	procGetForegroundWindow        = user32.NewProc("GetForegroundWindow")
 	procGetWindowTextW             = user32.NewProc("GetWindowTextW")
 	procGetWindowThreadProcessID   = user32.NewProc("GetWindowThreadProcessId")
