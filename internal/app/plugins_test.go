@@ -451,6 +451,22 @@ func TestStartupMissingPluginsDirIsQuiet(t *testing.T) {
 		"builtins are still registered")
 }
 
+func TestBuildRegistryToleratesCorruptConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(config.EnvConfigDir, dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte("{corrupt"), 0o644))
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	a, _ := newTestApp(nil, Options{})
+	reg := a.buildRegistry()
+	require.NotNil(t, reg, "a corrupt config still yields a registry (defaults)")
+	require.Contains(t, buf.String(), "plugin: config:", "the parse error is logged")
+	reg.Close()
+}
+
 func TestShutdownClosesRegistryAndCancels(t *testing.T) {
 	a, _, f := newPluginTestApp(t)
 	a.QueryPlugins("query", 1)

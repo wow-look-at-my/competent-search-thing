@@ -10,32 +10,65 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   hide-on-close, fixed 680x460), binds the App object. Deliberately has
   NO test file and stays minimal (see coverage note below).
 - `internal/app` -- the Wails-bound App object and its methods
-  (Search/Open/Reveal/Hide/Startup/Shutdown). Bound methods appear in
-  JS as `window.go.app.App.<Method>`. Holds the `index.Manager`;
-  `Startup` saves the runtime ctx, registers the global hotkey (once;
-  parse or register failure = log once, run on without it), and kicks
-  the initial disk walk in a goroutine; when the walk finishes,
-  `startWatch` brings up a `watch.Watcher` + `watch.Rescanner` pair;
-  `Shutdown` (wired to Wails OnShutdown) releases the hotkey and stops
-  them cleanly, and also flags a still-running initial build to skip
+  (Search/Open/Reveal/Hide/Startup/Shutdown/QueryPlugins/
+  RunPluginAction). Bound methods appear in JS as
+  `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
+  saves the runtime ctx, registers the global hotkey (once; parse or
+  register failure = log once, run on without it), brings the plugin
+  layer up once (plugins.go: an appctx.Cache over the plat.appSource
+  seam + RefreshInstalledAsync, then the registry via the
+  `newRegistry` builder seam, whose production value `buildRegistry`
+  re-reads config.json, LoadDirs <configDir>/plugins, passes Version
+  and the installedApps getter, and logs every registry Errors()
+  entry once with a "plugin:" prefix -- missing plugins dir =
+  builtins only, no noise), and kicks the initial disk walk in a
+  goroutine; when the walk finishes, `startWatch` brings up a
+  `watch.Watcher` + `watch.Rescanner` pair; `Shutdown` (wired to
+  Wails OnShutdown) releases the hotkey, cancels the in-flight plugin
+  generation + Close()s the registry, and stops rescanner+watcher
+  cleanly, also flagging a still-running initial build to skip
   starting them. The hotkey callback `toggle` (rate-limited 250ms
-  against key autorepeat) hides the bar when visible, else
+  against key autorepeat) hides the bar when visible; when hidden it
+  FIRST captures app context (`captureAppContext`: CaptureFocused +
+  RefreshRunningAsync + EnsureFreshInstalled(5m) -- the bar window
+  steals focus, so this precedes showing), then
   `showOnCursorDisplay`: platform.CursorDisplays -> PickDisplay ->
   BarPosition (absolute coords), then darwin = native.MoveWindow,
   linux/windows = translate via DisplayForWindow + WailsPosition (Wails
   WindowSetPosition is RELATIVE to the window's current monitor -- and
   to the WORK AREA origin on Windows -- while WindowGetPosition is
   absolute; verified in the v2.13.0 sources), any failure -> WindowCenter;
-  then WindowShow + "app:shown". Events emitted (all guarded so a nil
-  ctx no-ops): "index:progress" {indexed,done,seconds},
-  "watch:degraded" {watched,dropped,overflows}, "app:shown". ALL Wails
+  then WindowShow + "app:shown". `QueryPlugins(query string, gen
+  int) plugin.TargetInfo` stores gen (atomic), cancels the previous
+  generation's context (aborting plugin subprocesses/HTTP/debounces;
+  empty query or nil registry = cancel only, zero TargetInfo),
+  converts the appctx Snapshot to the plugin wire types, and
+  dispatches; providers answer async via "plugin:results" events
+  whose emit path drops stale generations. `RunPluginAction(pluginID
+  string, action plugin.Action) error` RE-validates every action the
+  frontend echoes back (defense in depth), logs it, then executes:
+  copy_text -> ClipboardSetText (bar stays open); open_path (abs
+  path only) and open_url (http/https + host only) -> the open seam;
+  run_command (1..16 non-empty <=1024-byte argv) -> the run seam
+  (launcher, detached); run_builtin -> rescan (Rescanner.Request;
+  friendly error while the index is still building) / reload
+  (newRegistry, swap under mutex, Close the old) / config (open
+  config.json) / version (copy `Version`, stays open) / quit
+  (runtime Quit); everything else hides the bar on success. Events
+  emitted (all guarded so a nil ctx no-ops): "index:progress"
+  {indexed,done,seconds}, "watch:degraded"
+  {watched,dropped,overflows}, "app:shown", "plugin:results"
+  (payload plugin.Emission {plugin,name,gen,results}). ALL Wails
   runtime calls and platform hooks sit behind seam structs
-  (`runtimeSeams`/`platformSeams` in window.go, defaults in New); unit
-  tests MUST replace them (see newTestApp) -- real runtime funcs abort
-  the process without a Wails context. Open/Reveal call the platform
-  launcher and hide the bar on success. `app.Result` is a type alias of
-  `index.Result` (the JSON tags path/name/isDir live in
-  internal/index). Unit-tested.
+  (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
+  incl. run/appSource, in window.go; defaults in New, plus the
+  `newRegistry` seam); unit tests MUST replace them (see newTestApp,
+  which also nils appSource and stubs newRegistry so no config or
+  X11 IO happens) -- real runtime funcs abort the process without a
+  Wails context. Open/Reveal call the platform launcher and hide the
+  bar on success. `app.Result` is a type alias of `index.Result`
+  (the JSON tags path/name/isDir live in internal/index). The app
+  `Version` constant lives in plugins.go. Unit-tested.
 - `internal/index` -- the index engine. `Store`: compact
   column-oriented data (interned parent-dir table; lowercased +
   original-case name blobs with 0x00 separators and offset tables;
@@ -64,7 +97,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   -> the ! / @ defaults); entry settings are opaque json.RawMessage
   forwarded verbatim to that plugin.
 - `internal/plugin` -- the plugin system, pure and headless-testable
-  (only the app wiring lands in a later increment). schema.go:
+  (wired into the app by internal/app's plugins.go). schema.go:
   versioned JSON wire protocol
   (Request/Response/Result/Action, v=1) and `SanitizeResponse`, which
   clamps/validates everything an external plugin returns: 20-result
