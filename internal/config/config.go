@@ -27,6 +27,8 @@ const (
 	DefaultHotkey = "alt+space"
 	// DefaultMaxResults caps one query's result list.
 	DefaultMaxResults = 50
+	// DefaultTheme is the builtin theme used when none is configured.
+	DefaultTheme = "dark"
 )
 
 // Config is the on-disk configuration.
@@ -43,6 +45,10 @@ type Config struct {
 	RescanIntervalMinutes int `json:"rescanIntervalMinutes"`
 	// MaxResults caps one query's result list.
 	MaxResults int `json:"maxResults"`
+	// Theme names the UI theme: a builtin ("dark", "light") or a user
+	// theme file at <configDir>/themes/<name>.json (see internal/theme).
+	// Unknown or invalid themes fall back to dark at resolve time.
+	Theme string `json:"theme"`
 	// Plugins configures the plugin system (see internal/plugin).
 	Plugins PluginsConfig `json:"plugins"`
 	// Bangs configures bang parsing (sigils and aliases).
@@ -98,13 +104,16 @@ func Default() Config {
 		Hotkey:                DefaultHotkey,
 		RescanIntervalMinutes: 0,
 		MaxResults:            DefaultMaxResults,
+		Theme:                 DefaultTheme,
 		Plugins:               PluginsConfig{Entries: map[string]PluginEntry{}},
 		Bangs:                 BangsConfig{Sigils: DefaultBangSigils(), Aliases: map[string]string{}},
 	}
 }
 
-// Dir returns the directory holding the configuration (config.json
-// and the plugins/ subdirectory), consistent with Path.
+// Dir returns the directory holding the configuration (config.json,
+// the plugins/ subdirectory, and the themes/ directory with user theme
+// JSON files and the custom.css escape hatch, see internal/theme),
+// consistent with Path.
 func Dir() (string, error) {
 	if dir := os.Getenv(EnvConfigDir); dir != "" {
 		return dir, nil
@@ -176,10 +185,11 @@ func Save(c Config) error {
 
 // Normalize repairs missing or nonsensical fields in place: empty roots
 // fall back to the default root, relative roots are absolutized,
-// zero/negative knobs get their defaults, nil plugin entries and bang
-// aliases become empty maps, and an empty sigil list gets the default
-// sigils. Excludes are left as the user wrote them (an explicitly empty
-// list means "exclude nothing").
+// zero/negative knobs get their defaults, an empty theme name gets the
+// default theme, nil plugin entries and bang aliases become empty maps,
+// and an empty sigil list gets the default sigils. Excludes are left as
+// the user wrote them (an explicitly empty list means "exclude
+// nothing").
 func (c *Config) Normalize() {
 	if len(c.Roots) == 0 {
 		c.Roots = Default().Roots
@@ -206,6 +216,9 @@ func (c *Config) Normalize() {
 	}
 	if c.MaxResults <= 0 {
 		c.MaxResults = DefaultMaxResults
+	}
+	if c.Theme == "" {
+		c.Theme = DefaultTheme
 	}
 	if c.Plugins.Entries == nil {
 		c.Plugins.Entries = map[string]PluginEntry{}

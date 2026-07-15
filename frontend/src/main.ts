@@ -3,8 +3,9 @@
 // actions, the async plugin pipeline (fire-and-forget QueryPlugins,
 // "plugin:results" sections below the file rows, the bang-target
 // chip, plugin action dispatch), and the runtime events the Go side
-// emits (app:shown, index:progress, watch:degraded). Rendering lives
-// in render.ts.
+// emits (app:shown, index:progress, watch:degraded, theme:changed).
+// Rendering lives in render.ts; theme token/custom-css application
+// lives in theme.ts.
 
 import {
   applySelection,
@@ -12,6 +13,7 @@ import {
   renderResults,
 } from "./render";
 import type { PluginRowRef, PluginSection } from "./render";
+import { initTheme } from "./theme";
 
 const SEARCH_DEBOUNCE_MS = 15;
 const FLASH_COPIED_MS = 1200;
@@ -419,6 +421,7 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
 }
 
 function wire(app: WailsAppBindings, rt: WailsRuntime): void {
+  initTheme(app, rt);
   inputEl.addEventListener("input", () => {
     scheduleSearch(app);
   });
