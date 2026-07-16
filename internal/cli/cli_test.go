@@ -204,6 +204,20 @@ func TestShowStartsGUIWhenNotRunning(t *testing.T) {
 	require.True(t, gui.last(t).ShowOnStartup)
 }
 
+func TestToggleRunsGUIDegradedWhenListenFails(t *testing.T) {
+	// The dial fails (not running) and the fallback Listen fails too
+	// (unusable path): the GUI must still start, without IPC.
+	t.Setenv(ipc.EnvSocket, filepath.Join(t.TempDir(), "no-such-dir", "s.sock"))
+	gui := &guiRecorder{}
+
+	code, _, _ := run(t, gui, "toggle")
+	require.Equal(t, 0, code)
+	require.Equal(t, 1, gui.count(), "the GUI still runs, degraded")
+	opts := gui.last(t)
+	require.Nil(t, opts.Server)
+	require.True(t, opts.ShowOnStartup)
+}
+
 func TestHideErrorsWhenNotRunning(t *testing.T) {
 	testSocketEnv(t)
 	gui := &guiRecorder{}
