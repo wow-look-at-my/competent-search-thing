@@ -5,16 +5,22 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 
 ## Architecture map
 
-- `main.go` -- Wails glue only: embeds `frontend/dist` (go:embed),
-  configures the window (frameless, always-on-top, start-hidden,
-  hide-on-close, fixed 680x460), binds the App object. Deliberately has
-  NO test file and stays minimal (see coverage note below).
+- `main.go` -- glue only: embeds `frontend/dist` (go:embed) and calls
+  cli.Execute(app.Version, runGUI); runGUI configures the window
+  (frameless, always-on-top, start-hidden, hide-on-close, fixed
+  680x460), binds the App object and wires OnStartup / OnDomReady /
+  OnShutdown. Zero-arg invocation boots the GUI exactly as before the
+  CLI existed (CI screenshots rely on that). Deliberately has NO test
+  file and stays minimal (see coverage note below).
 - `internal/app` -- the Wails-bound App object and its methods
-  (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/Shutdown/
-  QueryPlugins/RunPluginAction). Bound methods appear in JS as
+  (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/DomReady/
+  Shutdown/QueryPlugins/RunPluginAction). Bound methods appear in JS as
   `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
   saves the runtime ctx, registers the global hotkey (once; parse or
-  register failure = log once, run on without it), brings the plugin
+  register failure = log once, run on without it), wires the
+  single-instance IPC handlers when Options.IPC is set (Toggle =
+  toggle, Show = showIfHidden, Hide = Hide; Options.ShowOnStartup
+  latches a pending show), brings the plugin
   layer up once (plugins.go: an appctx.Cache over the plat.appSource
   seam + RefreshInstalledAsync, then the registry via the
   `newRegistry` builder seam, whose production value `buildRegistry`
@@ -27,10 +33,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   run on without live reload), and kicks the initial disk walk in a
   goroutine; when the walk finishes, `startWatch` brings up a
   `watch.Watcher` + `watch.Rescanner` pair; `Shutdown` (wired to
-  Wails OnShutdown) releases the hotkey, cancels the in-flight plugin
+  Wails OnShutdown) closes the IPC server first (when present),
+  releases the hotkey, cancels the in-flight plugin
   generation + Close()s the registry, and stops rescanner+watcher
   plus the theme watcher cleanly, also flagging a still-running
-  initial build to skip starting them. GetTheme re-loads config.json
+  initial build to skip starting them. Summons that arrive before
+  the frontend can render are deferred: `DomReady` (wired to Wails
+  OnDomReady) executes at most ONE pending show (ShowOnStartup or an
+  early hotkey/IPC toggle/show; Hide cancels the pending flag), and
+  after DomReady summons act immediately. `showIfHidden` is the IPC
+  show handler: visible = plain re-WindowShow (no capture, no
+  reposition), hidden = the same capture+position+show path toggle
+  uses. GetTheme re-loads config.json
   (ONLY the theme field is consumed live) and returns theme.Resolve's
   token map -- errors are logged once per distinct message and fall
   back to dark; GetCustomCSS returns <configDir>/themes/custom.css
@@ -79,6 +93,41 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   bar on success. `app.Result` is a type alias of `index.Result`
   (the JSON tags path/name/isDir live in internal/index). The app
   `Version` constant lives in plugins.go. Unit-tested.
+- `internal/cli` -- the cobra command line, the real process entry
+  point (main.go calls cli.Execute(app.Version, runGUI)). Bare
+  invocation = the GUI path: ipc.Listen on ipc.SocketPath(os.Getenv);
+  ErrAlreadyRunning = Send "show" to the running instance + stdout
+  notice + exit 0; any other listen error = log + run the GUI with a
+  NIL server (degraded, no IPC -- the app must still work). toggle /
+  show send their command to the running instance; when none runs
+  they start the GUI in this process with ShowOnStartup=true (on an
+  ErrAlreadyRunning race they fall back to Send "show"); an "err not
+  ready" reply counts as success (the instance is booting and shows
+  itself). hide never starts the app: not running = plain notice on
+  stderr + exit 1 (cobra error/usage output suppressed). Convention:
+  ONE self-registering subcommand per file (init -> registerCommand);
+  newRoot() consumes the builder registry so Execute -- and every
+  test -- gets a fresh command tree. RunOptions{Server,
+  ShowOnStartup} is the runGUI contract; the App takes ownership of
+  the server (Shutdown closes it). Unit-tested headlessly: fake
+  runGUI, real ipc servers on temp sockets, COMPETENT_SEARCH_SOCKET
+  (t.Setenv) isolation.
+- `internal/ipc` -- the single-instance unix-socket IPC layer, pure
+  and headless-tested. SocketPath: $COMPETENT_SEARCH_SOCKET override,
+  else $XDG_RUNTIME_DIR/competent-search-thing.sock, else a per-uid
+  name under os.TempDir(). Line protocol, ONE request per conn (2s
+  conn deadline, 4 KiB line cap): toggle/show/hide/version/ping ->
+  "ok" | the bare version string | "err <reason>" ("err not ready"
+  until SetHandlers wires the app -- nil handler members stay not
+  ready; version/ping always answer). Listen recovers stale sockets:
+  EADDRINUSE -> 500ms probe dial; an answer = ErrAlreadyRunning, a
+  dead socket = os.Remove + retry ONCE; after listening the file is
+  chmodded 0600 (filesystem perms are the only auth). Close is
+  idempotent + nil-safe: stops the accept loop, unlinks the socket,
+  waits for in-flight conns. Send wraps every dial failure in
+  ErrNotRunning (test with IsNotRunning) so callers can branch
+  "nothing to talk to" vs a broken exchange. Handlers run on conn
+  goroutines and must be goroutine-safe.
 - `internal/index` -- the index engine. `Store`: compact
   column-oriented data (interned parent-dir table; lowercased +
   original-case name blobs with 0x00 separators and offset tables;
@@ -273,7 +322,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   `RevealCommands`: linux xdg-open / dbus-send FileManager1.ShowItems
   with xdg-open-parent fallback, darwin open / open -R, windows
   rundll32 FileProtocolHandler / explorer /select,) and `Launcher`
-  (injectable `Run` seam; default starts detached and reaps).
+  (injectable `Run` seam; default starts detached and reaps); session
+  detection (session.go: `DetectSession(getenv)` -- XDG_SESSION_TYPE
+  "wayland"/"x11" wins, else WAYLAND_DISPLAY, else DISPLAY, else
+  unknown; Desktop = raw XDG_CURRENT_DESKTOP;
+  `Session.IsGNOME` = any colon-separated segment equals "gnome"
+  case-insensitively).
 - `internal/platform/native` -- the thin OS glue, DELIBERATELY NO test
   files (go-toolchain skips coverage for packages without tests; the
   code needs a live display server). Keep it minimal and defensive;

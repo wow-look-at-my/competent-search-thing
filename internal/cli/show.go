@@ -15,8 +15,9 @@ func newShowCmd(e *env) *cobra.Command {
 		Use:   "show",
 		Short: "Show the search bar (starts the app if it is not running)",
 		Long: "Show asks the running instance to show the search bar; unlike\n" +
-			"toggle it never hides a visible bar. It starts the app if it is\n" +
-			"not running, showing the bar once it is ready.",
+			"toggle it never hides a visible bar. Show\n" +
+			"starts the app if it is not running, with the bar shown once it\n" +
+			"is ready.",
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			return summon(e, ipc.CmdShow)
