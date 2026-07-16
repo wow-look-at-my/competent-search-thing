@@ -94,6 +94,7 @@ type fakePortal struct {
 	lastBind        []shortcut
 	lastParent      string
 	lastBindSession string
+	lastListSession string
 	sessions        []string
 	sessionCloses   int
 }
@@ -206,6 +207,12 @@ func (f *fakePortal) LastBindSession() string {
 	return f.lastBindSession
 }
 
+func (f *fakePortal) LastListSession() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastListSession
+}
+
 func (f *fakePortal) Sessions() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -245,7 +252,7 @@ func (h shortcutsHandler) ListShortcuts(sender dbus.Sender, sessionHandle dbus.O
 	f := h.f
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	_ = sessionHandle
+	f.lastListSession = string(sessionHandle)
 	ret := f.replyPathLocked(string(sender), options)
 	f.respond(ret, f.cfg.listCode, map[string]dbus.Variant{
 		"shortcuts": dbus.MakeVariant(append([]shortcut{}, f.cfg.listShortcuts...)),

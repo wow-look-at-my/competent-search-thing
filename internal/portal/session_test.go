@@ -47,6 +47,7 @@ func TestRegisterHappyPath(t *testing.T) {
 	require.Equal(t, 1, f.BindCalls())
 	require.NotEmpty(t, sess.Handle())
 	require.Equal(t, []string{sess.Handle()}, f.Sessions())
+	require.Equal(t, sess.Handle(), f.LastListSession())
 	require.Equal(t, sess.Handle(), f.LastBindSession())
 	require.Equal(t, "", f.LastParent())
 	bind := f.LastBind()
