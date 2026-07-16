@@ -67,12 +67,17 @@ type platformSeams struct {
 	// keybinding running command; production wraps
 	// gsettings.EnsureBinding with the real gsettings CLI runner.
 	ensureGnomeBinding func(ctx context.Context, hk platform.Hotkey, command string) (gsettings.Applied, error)
-	cursorInfo         func() (cx, cy int, ds []platform.Display, ok bool)
-	moveWindow         func(x, y int) bool
-	open               func(path string) error
-	reveal             func(path string) error
-	run                func(argv []string) error
-	appSource          appctx.Source
+	// mediaKeysDaemon reports whether gsd-media-keys owns its
+	// session-bus name -- the daemon a GNOME keybinding is inert
+	// without; production is gsettings.DaemonRunning. An error means
+	// the check could not run (no session bus) and is skipped quietly.
+	mediaKeysDaemon func(ctx context.Context) (bool, error)
+	cursorInfo      func() (cx, cy int, ds []platform.Display, ok bool)
+	moveWindow      func(x, y int) bool
+	open            func(path string) error
+	reveal          func(path string) error
+	run             func(argv []string) error
+	appSource       appctx.Source
 }
 
 func defaultPlatformSeams() platformSeams {
@@ -88,12 +93,13 @@ func defaultPlatformSeams() platformSeams {
 		ensureGnomeBinding: func(ctx context.Context, hk platform.Hotkey, command string) (gsettings.Applied, error) {
 			return gsettings.EnsureBinding(ctx, gsettings.Run, hk, command)
 		},
-		cursorInfo: native.CursorDisplays,
-		moveWindow: native.MoveWindow,
-		open:       launcher.Open,
-		reveal:     launcher.Reveal,
-		run:        launcher.Run,
-		appSource:  native.AppSource(),
+		mediaKeysDaemon: gsettings.DaemonRunning,
+		cursorInfo:      native.CursorDisplays,
+		moveWindow:      native.MoveWindow,
+		open:            launcher.Open,
+		reveal:          launcher.Reveal,
+		run:             launcher.Run,
+		appSource:       native.AppSource(),
 	}
 }
 

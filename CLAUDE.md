@@ -32,16 +32,27 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   portal success stores the handle + logs the bound trigger,
   ErrNoPortal/ErrNoGlobalShortcuts logs one line and falls through,
   ErrDenied STOPS the chain (never write a keybinding after the user
-  said no), the gsettings backend calls
-  gsettings.EnsureBinding(hotkeyCtx, run, hk,
-  gsettings.ToggleCommand(executable seam)) and logs EXACTLY ONE loud
-  summary ("hotkey: GNOME keybinding active: <accel>", with
-  "(requested <accel> is taken by GNOME; using fallback)" when it
-  fell back, or "hotkey: using existing GNOME keybinding <accel>
-  (edit in GNOME Settings > Keyboard)"), and a plan that runs dry
-  logs the manual bind-a-key-to-'competent-search-thing toggle'
-  instructions. The effective summon description (hk.String(), the
-  portal's bound-trigger description, or the installed accelerator)
+  said no), the gsettings backend refuses an empty executable-seam
+  path and filepath.Abs-resolves a relative one (gsd runs the command
+  with its own cwd/PATH), calls gsettings.EnsureBinding(hotkeyCtx,
+  run, hk, gsettings.ToggleCommand(exe)), then logs one evidence line
+  quoting the read-back disk state ("hotkey: GNOME keybinding entry
+  <path>: binding <b>, command <c>, in custom-keybindings list: <v>")
+  followed by EXACTLY ONE loud summary that is HONEST: the "hotkey:
+  GNOME keybinding active: <accel>" / "(requested <accel> is taken by
+  GNOME; using fallback)" / "hotkey: using existing GNOME keybinding
+  <accel> (edit in GNOME Settings > Keyboard)" wordings fire ONLY
+  when Applied.Verified (read-back confirmed list membership +
+  binding + command) AND the mediaKeysDaemon seam (production
+  gsettings.DaemonRunning; probe errors = no session bus = skip
+  silently) sees org.gnome.SettingsDaemon.MediaKeys owned; otherwise
+  the one summary is a WARNING naming what is missing (VerifyNote /
+  daemon absent) plus the manual-fix instructions, and a.hotkeyDesc
+  stays empty (never advertise a summon key that cannot fire). A plan
+  that runs dry logs the manual
+  bind-a-key-to-'competent-search-thing toggle' instructions. The
+  effective summon description (hk.String(), the portal's
+  bound-trigger description, or the verified installed accelerator)
   is stored on the App (a.hotkeyDesc, read via hotkeyDescription() --
   EMPTY unless a summon path actually registered, and consumed by the
   tray tooltip), starts the tray icon once (tray.go in this package:
@@ -476,7 +487,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   accelerator normalization treats <Primary>/<Ctrl>/<Ctl> as control,
   ignores modifier order and case (conflict detection).
   `EnsureBinding(ctx, run, hk, command)` -> `Applied{Binding,
-  Requested, FellBack, Changed, Existing}`: reads the media-keys
+  Requested, FellBack, Changed, Existing, InList, DiskBinding,
+  DiskCommand, Verified, VerifyNote}`: reads the media-keys
   custom-keybindings list; if the app's entry (fixed path ...
   /custom-keybindings/competent-search-thing/) exists it is STICKY --
   the binding is never rewritten (user edits in GNOME Settings
@@ -489,14 +501,31 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   custom entry's binding (capped 64) -- because mutter silently
   refuses conflicting grabs and GNOME 46 defaults take BOTH Alt+Space
   (activate-window-menu) and Super+Space (switch-input-source); all
-  candidates taken = sentinel ErrAllTaken, nothing written. Writes
-  are GVariant text (single-quoted, parsed+serialized by tiny
-  in-package helpers, incl. the "@as []" empty form); the scan
-  tolerates missing schemas/entries but list/entry read and all write
-  failures are fatal. `ToggleCommand(exe)` builds the GLib-shell-safe
-  "<exe> toggle" command. Exhaustively unit-tested against scripted
-  runners (exact argv sequences, idempotent second run = zero sets)
-  plus a LookPath-guarded smoke test of the real CLI.
+  candidates taken = sentinel ErrAllTaken, nothing written. Fresh
+  writes go entry keys (name/command/binding) FIRST, list append
+  LAST -- LOAD-BEARING ORDER: gsd (verified identical in
+  gsd-media-keys-manager.c 42.1 and 46.0) reads the entry the moment
+  the list changes, DROPS one whose command+binding are still empty
+  ("Key binding ... is incomplete"), and a command written after
+  that drop is silently lost (update_custom_binding_command only
+  mutates existing keys), so list-last is what guarantees GNOME 42
+  sees a complete entry; never "simplify" back to list-first. Both
+  paths end with a read-back (3 fresh gets: list membership, binding,
+  command) filling the InList/Disk*/Verified/VerifyNote fields --
+  verification read failures degrade to Verified=false + note, never
+  an error. Writes are GVariant text (single-quoted,
+  parsed+serialized by tiny in-package helpers, incl. the "@as []"
+  empty form); the scan tolerates missing schemas/entries but
+  list/entry read and all write failures are fatal.
+  `ToggleCommand(exe)` builds the GLib-shell-safe "<exe> toggle"
+  command. `DaemonRunning(ctx)` (daemon.go) probes the session bus
+  (godbus) for org.gnome.SettingsDaemon.MediaKeys -- the gsd process
+  that turns the entry into a compositor grab; error = no bus =
+  caller skips the check. Exhaustively unit-tested against scripted
+  runners (exact argv sequences incl. write order and read-backs,
+  idempotent second run = zero sets, verification mismatch paths)
+  plus a LookPath-guarded smoke test of the real CLI and a
+  throwaway-dbus-daemon test of the probe.
 - `internal/platform` -- the PURE half of the platform layer, fully
   unit-tested headlessly: `ParseHotkey` ("alt+space", "ctrl+shift+k";
   modifiers ctrl/control, shift, alt/option, super/win/cmd/meta; keys
