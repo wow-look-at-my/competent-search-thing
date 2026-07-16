@@ -666,6 +666,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   one for the screenshot step).
 - Linux build deps:
   `apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev`.
+  The internal/portal and internal/tray bus tests also want `dbus`
+  (dbus-daemon; they t.Skip without it, but skipped is not tested --
+  CI has it).
 - go-toolchain AUTO-REWRITES files (gofmt, go.mod/go.sum tidy, lint
   fixes). Always `git add` and commit whatever it changes; never revert
   its edits. On CI the same checks run read-only and a non-canonical
