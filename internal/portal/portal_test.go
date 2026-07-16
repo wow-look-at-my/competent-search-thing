@@ -1,6 +1,8 @@
 package portal
 
 import (
+	"net"
+	"path/filepath"
 	"testing"
 
 	"github.com/godbus/dbus/v5"
@@ -19,6 +21,34 @@ func TestDialAndAvailable(t *testing.T) {
 	version, err := Available(conn)
 	require.NoError(t, err)
 	require.Equal(t, uint32(2), version)
+}
+
+func TestDialFailsWithUnreachableBus(t *testing.T) {
+	// No session bus at all (headless Linux): Dial must fail cleanly.
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+filepath.Join(t.TempDir(), "absent.sock"))
+	_, err := Dial()
+	require.Error(t, err)
+}
+
+func TestDialFailsWhenAuthRejected(t *testing.T) {
+	// A socket that accepts and immediately hangs up fails the SASL
+	// auth exchange after the connect succeeded.
+	sock := filepath.Join(t.TempDir(), "s.sock")
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+sock)
+	_, err = Dial()
+	require.Error(t, err)
 }
 
 func TestAvailableReturnsVersionOne(t *testing.T) {
