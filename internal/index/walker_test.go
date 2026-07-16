@@ -6,8 +6,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -219,6 +222,44 @@ func TestWalkCancelledContext(t *testing.T) {
 	st := NewStore()
 	_, err := Walk(ctx, st, []string{root}, nil, nil)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+// TestWalkCancelMidWalkReturnsPromptly proves cancellation aborts an
+// IN-FLIGHT walk instead of waiting it out (the fast-quit contract:
+// shutdown must never sit behind a multi-second disk walk). Directory
+// reads are slowed through the readDirFn seam so that the full walk
+// would keep every worker busy for seconds, the context is cancelled
+// deterministically from inside the third read, and Walk must return
+// well under a second later with ctx.Canceled.
+func TestWalkCancelMidWalkReturnsPromptly(t *testing.T) {
+	// Enough directories that, without cancellation, every worker would
+	// grind through ~100 slowed reads: >= 2.5s of remaining walk.
+	root := t.TempDir()
+	for i := 0; i < 100*runtime.NumCPU(); i++ {
+		require.NoError(t, os.Mkdir(filepath.Join(root, fmt.Sprintf("d%05d", i)), 0o755))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var reads atomic.Int32
+	orig := readDirFn
+	readDirFn = func(name string) ([]os.DirEntry, error) {
+		if reads.Add(1) == 3 {
+			cancel() // deterministically mid-walk
+		}
+		time.Sleep(25 * time.Millisecond)
+		return orig(name)
+	}
+	defer func() { readDirFn = orig }()
+
+	start := time.Now()
+	st := NewStore()
+	_, err := Walk(ctx, st, []string{root}, nil, nil)
+	elapsed := time.Since(start)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Less(t, elapsed, time.Second,
+		"cancellation must abort the walk promptly, not wait out the remaining directories")
 }
 
 func TestWalkBadExcludePattern(t *testing.T) {

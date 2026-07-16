@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -87,6 +88,7 @@ type App struct {
 	watcher      *watch.Watcher
 	rescanner    *watch.Rescanner
 	themeW       *themeWatcher
+	buildCancel  context.CancelFunc // cancels the initial build's walk
 	shuttingDown bool
 
 	// Plugin layer (see plugins.go). pluginGen is the current query
@@ -140,7 +142,11 @@ func (a *App) Startup(ctx context.Context) {
 		return
 	}
 	a.buildOnce.Do(func() {
-		go a.buildIndex()
+		ctx, cancel := context.WithCancel(context.Background())
+		a.watchMu.Lock()
+		a.buildCancel = cancel
+		a.watchMu.Unlock()
+		go a.buildIndex(ctx)
 	})
 }
 
@@ -171,8 +177,10 @@ func (a *App) registerHotkey() {
 
 // buildIndex runs the full disk walk -- forwarding progress to the log
 // and to the frontend as eventIndexProgress -- then brings the
-// live-update layer up.
-func (a *App) buildIndex() {
+// live-update layer up. Cancelling ctx (Shutdown) aborts the walk
+// mid-flight: the partial store is discarded (BuildFromDisk only swaps
+// on success) and the watch layer never starts.
+func (a *App) buildIndex(ctx context.Context) {
 	start := a.plat.now()
 	progress := func(indexed int, done bool) {
 		if !done {
@@ -184,9 +192,13 @@ func (a *App) buildIndex() {
 			Seconds: a.plat.now().Sub(start).Seconds(),
 		})
 	}
-	count, dur, err := a.manager.BuildFromDisk(context.Background(), progress)
+	count, dur, err := a.manager.BuildFromDisk(ctx, progress)
 	if err != nil {
-		log.Printf("index: initial build failed: %v", err)
+		if errors.Is(err, context.Canceled) {
+			log.Printf("index: initial build cancelled")
+		} else {
+			log.Printf("index: initial build failed: %v", err)
+		}
 		return
 	}
 	log.Printf("index: %d entries in %s", count, dur.Round(time.Millisecond))
@@ -237,11 +249,15 @@ func (a *App) emitDegraded(s watch.Stats) {
 
 // Shutdown is wired to the Wails OnShutdown hook. It releases the
 // global hotkey, cancels the in-flight plugin generation and closes
-// the registry, and stops the rescanner first (it may be mid-rescan
-// and calls back into the watcher to resync watches), then the
-// watcher, then the theme hot-reload watcher. Safe to call at any
-// point, even before the watch layer came up; a still-running initial
-// build then skips starting it.
+// the registry, cancels a still-running initial build (its walk aborts
+// and logs "index: initial build cancelled"), and stops the rescanner
+// first (it may be mid-rescan and calls back into the watcher to
+// resync watches), then the watcher, then the theme hot-reload
+// watcher. Every step is bounded: an in-flight rescan or watch resync
+// is cancelled, never waited out, so quit stays fast even mid-walk on
+// a huge index. Safe to call at any point, even before the watch layer
+// came up; the shuttingDown flag keeps a racing startWatch from
+// starting it afterwards.
 func (a *App) Shutdown(_ context.Context) {
 	a.mu.Lock()
 	hkStop := a.hotkeyStop
@@ -266,9 +282,14 @@ func (a *App) Shutdown(_ context.Context) {
 
 	a.watchMu.Lock()
 	a.shuttingDown = true
+	buildCancel := a.buildCancel
+	a.buildCancel = nil
 	w, r, tw := a.watcher, a.rescanner, a.themeW
 	a.watcher, a.rescanner, a.themeW = nil, nil, nil
 	a.watchMu.Unlock()
+	if buildCancel != nil {
+		buildCancel()
+	}
 	if r != nil {
 		r.Stop()
 	}

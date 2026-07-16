@@ -20,6 +20,7 @@
 package watch
 
 import (
+	"context"
 	"errors"
 	"log"
 	"os"
@@ -250,20 +251,30 @@ func (w *Watcher) dropWatchesUnder(path string) {
 // The Rescanner calls it after every successful BuildFromDisk swap:
 // directories that vanished lose their watch, directories that appeared
 // gain one. Safe to run concurrently with the event loop.
-func (w *Watcher) syncWatches() {
+//
+// The watch set can be huge (one entry per indexed directory), so the
+// reconcile checks ctx between directories: cancelling it -- the
+// Rescanner passes its loop context, which Stop cancels -- abandons the
+// rest of the pass promptly instead of holding shutdown hostage to
+// millions of notifier calls. A later rescan reconciles whatever was
+// left undone.
+func (w *Watcher) syncWatches(ctx context.Context) {
 	w.mu.Lock()
 	ready := w.n != nil && !w.lc.stopping()
 	w.mu.Unlock()
-	if !ready {
+	if !ready || ctx.Err() != nil {
 		return
 	}
-	desired := w.desiredDirs()
+	desired := w.desiredDirs(ctx)
 	want := make(map[string]struct{}, len(desired))
 	for _, d := range desired {
 		want[d] = struct{}{}
 	}
 	w.mu.Lock()
 	for d := range w.watched {
+		if ctx.Err() != nil {
+			break // partial `want` never drops watches: this loop is dead on cancel
+		}
 		if _, ok := want[d]; !ok {
 			delete(w.watched, d)
 			_ = w.n.Remove(d)
@@ -272,6 +283,9 @@ func (w *Watcher) syncWatches() {
 	w.stats.WatchedDirs = len(w.watched)
 	w.mu.Unlock()
 	for _, d := range desired {
+		if ctx.Err() != nil {
+			return
+		}
 		w.addWatch(d)
 	}
 }
@@ -281,8 +295,11 @@ func (w *Watcher) syncWatches() {
 // filtered out (an excluded directory is never watched -- a root
 // matching its own exclude list is a configuration oddity, but the rule
 // still holds). Directory paths are collected first and watched after,
-// so no syscalls run while the Manager's read lock is held.
-func (w *Watcher) desiredDirs() []string {
+// so no syscalls run while the Manager's read lock is held. Cancelling
+// ctx cuts the index iteration short (it visits every live entry, which
+// can take seconds on a huge index); callers already treat the result
+// as best-effort and re-check ctx before acting on it.
+func (w *Watcher) desiredDirs(ctx context.Context) []string {
 	seen := make(map[string]struct{})
 	var dirs []string
 	add := func(p string) {
@@ -302,6 +319,9 @@ func (w *Watcher) desiredDirs() []string {
 		}
 	}
 	w.mgr.ForEachLiveDir(func(p string) bool {
+		if ctx.Err() != nil {
+			return false
+		}
 		if !w.ex.Match(filepath.Base(p), p) {
 			add(p)
 		}

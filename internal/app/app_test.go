@@ -1,8 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -271,8 +273,58 @@ func TestBuildIndexLogsAndSurvivesFailure(t *testing.T) {
 	// must swallow it (log only), never panic.
 	m := index.NewManager([]string{t.TempDir()}, []string{"["}, 0)
 	a, _ := newTestApp(t, m, Options{})
-	a.buildIndex()
+	a.buildIndex(context.Background())
 	require.Equal(t, 0, m.LiveCount())
+}
+
+func TestBuildIndexCancelledDiscardsPartialAndLogs(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "never-indexed.txt"), []byte("x"), 0o644))
+	m := index.NewManager([]string{dir}, nil, 0)
+	a, _ := newTestApp(t, m, Options{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	a.buildIndex(ctx)
+
+	require.Contains(t, buf.String(), "index: initial build cancelled")
+	require.NotContains(t, buf.String(), "initial build failed")
+	require.Equal(t, 0, m.LiveCount(), "the partial store is discarded, never swapped in")
+	require.False(t, watchUp(a), "a cancelled build never starts the watch layer")
+}
+
+func TestShutdownCancelsInitialBuild(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "one.txt"), []byte("x"), 0o644))
+	a, _ := newTestApp(t, index.NewManager([]string{dir}, nil, 0), Options{})
+	a.Startup(context.Background())
+
+	// Startup stored the build walk's cancel func; wrap it to observe
+	// the call (the tiny build may already have finished -- cancelling
+	// a finished build's context is a harmless no-op, the point is that
+	// Shutdown pulls the trigger at all).
+	called := make(chan struct{})
+	a.watchMu.Lock()
+	orig := a.buildCancel
+	a.buildCancel = func() { orig(); close(called) }
+	a.watchMu.Unlock()
+	require.NotNil(t, orig, "Startup wires a cancellable context into the initial build")
+
+	a.Shutdown(context.Background())
+	select {
+	case <-called:
+	default:
+		t.Fatal("Shutdown did not cancel the initial build context")
+	}
+
+	a.watchMu.Lock()
+	cleared := a.buildCancel == nil
+	a.watchMu.Unlock()
+	require.True(t, cleared, "Shutdown clears the stored cancel func")
 }
 
 func TestEmitDegradedPayload(t *testing.T) {

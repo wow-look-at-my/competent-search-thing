@@ -25,12 +25,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   dedicated fsnotify watcher on the config dir + its themes/ subdir,
   events debounced 300ms into "theme:changed"; any failure = log +
   run on without live reload), and kicks the initial disk walk in a
-  goroutine; when the walk finishes, `startWatch` brings up a
-  `watch.Watcher` + `watch.Rescanner` pair; `Shutdown` (wired to
-  Wails OnShutdown) releases the hotkey, cancels the in-flight plugin
-  generation + Close()s the registry, and stops rescanner+watcher
-  plus the theme watcher cleanly, also flagging a still-running
-  initial build to skip starting them. GetTheme re-loads config.json
+  goroutine (under a cancellable context); when the walk finishes,
+  `startWatch` brings up a `watch.Watcher` + `watch.Rescanner` pair;
+  `Shutdown` (wired to Wails OnShutdown) releases the hotkey, cancels
+  the in-flight plugin generation + Close()s the registry, cancels a
+  still-running initial build (its walk aborts promptly, logs "index:
+  initial build cancelled", discards the partial store, and never
+  starts the watch layer), and stops rescanner+watcher plus the theme
+  watcher cleanly -- every step bounded, so quit never waits out a
+  disk walk. GetTheme re-loads config.json
   (ONLY the theme field is consumed live) and returns theme.Resolve's
   token map -- errors are logged once per distinct message and fall
   back to dark; GetCustomCSS returns <configDir>/themes/custom.css
@@ -257,7 +260,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   interval ticker (config `rescanIntervalMinutes`) and by one-shot
   degradation requests (`Request`), coalesced through a 1-slot channel
   and spaced by `MinGap` (default 30s) so overflow storms cannot cause
-  back-to-back walks. Both loops share the lifecycle.go Start/Stop
+  back-to-back walks. Stop cancels promptly at ANY point of the cycle
+  (fast quit): an in-flight rebuild aborts mid-walk (partial store
+  discarded, previous kept, logged "watch: rescan cancelled"), an
+  in-flight `syncWatches` stops between directories (it takes the
+  rescan loop's ctx; the swapped-in rebuilt store stays), a MinGap
+  wait is cut short, and still-queued requests are dropped. Both
+  loops share the lifecycle.go Start/Stop
   plumbing: idempotent Stop, safe before/during Start, no goroutine
   leaks.
 - `internal/platform` -- the PURE half of the platform layer, fully
