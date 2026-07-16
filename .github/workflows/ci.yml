@@ -49,6 +49,67 @@ jobs:
           autorelease: 'true'
           timeout: '20'
 
+      - name: Build Debian package (carries runtime lib Depends)
+        # buildhost's on-the-fly deb repackaging cannot declare package
+        # dependencies (its control file is Package/Version/Arch/Maintainer/
+        # Description only -- internal/repackage/deb.go), so a raw-binary or
+        # apt.pazer.build install lands without WebKitGTK and fails at the
+        # loader on any machine that never had the build deps. Build a real
+        # .deb here instead: same binary, plus a Depends line derived from the
+        # binary's direct NEEDED libs (objdump -p), package names verified on
+        # Ubuntu 24.04 and 22.04 (noble's t64 packages Provide the unsuffixed
+        # names, so one line covers both; glibc floor is GLIBC_2.34).
+        uses: wow-look-at-my/actions@typescript#latest
+        with:
+          script: |
+            const bin = "build/competent-search-thing_linux_amd64";
+            if (!fs.existsSync(bin)) throw new Error(`missing ${bin} -- did the go-toolchain build layout change?`);
+            const version = `0.${github.run_number}+g${github.sha.slice(0, 7)}`;
+            const root = path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), "debroot");
+            fs.mkdirSync(path.join(root, "DEBIAN"), { recursive: true });
+            fs.mkdirSync(path.join(root, "usr/bin"), { recursive: true });
+            fs.copyFileSync(bin, path.join(root, "usr/bin/competent-search-thing"));
+            fs.chmodSync(path.join(root, "usr/bin/competent-search-thing"), 0o755);
+            const control = [
+              "Package: competent-search-thing",
+              `Version: ${version}`,
+              "Section: utils",
+              "Priority: optional",
+              "Architecture: amd64",
+              "Depends: libwebkit2gtk-4.1-0, libgtk-3-0, libglib2.0-0, libgdk-pixbuf-2.0-0, libsoup-3.0-0, libjavascriptcoregtk-4.1-0, libc6 (>= 2.34)",
+              "Maintainer: wow-look-at-my <https://github.com/wow-look-at-my/competent-search-thing>",
+              "Description: Instant cross-platform desktop file searchbar",
+              " Spotlight-style searchbar with Everything-style speed, built with Go,",
+              " Wails v2 and the system WebKitGTK webview.",
+              "",
+            ].join("\n");
+            fs.writeFileSync(path.join(root, "DEBIAN/control"), control);
+            await $`dpkg-deb --build --root-owner-group ${root} build/competent-search-thing.deb`;
+            await $`dpkg-deb --info build/competent-search-thing.deb`;
+
+      - name: Create buildhost release for the deb
+        id: deb_release
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-create-release@master
+        with:
+          project: competent-search-thing/deb
+
+      - name: Upload deb to buildhost
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-upload-artifact@master
+        with:
+          project: competent-search-thing/deb
+          version: ${{ steps.deb_release.outputs.version }}
+          os: linux
+          arch: amd64
+          path: build/competent-search-thing.deb
+          kind: archive
+          filename: competent-search-thing.deb
+
+      - name: Publish buildhost deb release
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-release@master
+        with:
+          project: competent-search-thing/deb
+          version: ${{ steps.deb_release.outputs.version }}
+
       - name: Capture UI screenshots under Xvfb
         uses: wow-look-at-my/actions@typescript#latest
         with:

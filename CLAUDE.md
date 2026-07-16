@@ -476,8 +476,30 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   published binary vcs.modified/+dirty) -> `wow-look-at-my/go-toolchain@v1`
   with `targets: linux/amd64,windows/amd64`, `cgo: 'true'`,
   `autorelease: 'true'`, `timeout: '20'`, and env
-  `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> screenshot
-  capture -> `actions/upload-artifact@v4`.
+  `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> deb build +
+  publish (next bullet) -> screenshot capture ->
+  `actions/upload-artifact@v4`.
+- Deb packaging: buildhost's own `fmt=deb`/APT-repo debs carry NO
+  `Depends` (hardcoded control in buildhost internal/repackage/deb.go),
+  so on a machine without the WebKitGTK/GTK runtime libs the app dies
+  at the dynamic loader (`libwebkit2gtk-4.1.so.0: cannot open shared
+  object file` -- real user report, 2026-07-16). CI therefore builds a
+  proper .deb itself (dpkg-deb; `Depends: libwebkit2gtk-4.1-0,
+  libgtk-3-0, libglib2.0-0, libgdk-pixbuf-2.0-0, libsoup-3.0-0,
+  libjavascriptcoregtk-4.1-0, libc6 (>= 2.34)` = the binary's direct
+  NEEDED libs; names resolve on Ubuntu 22.04 AND 24.04 -- noble's t64
+  packages Provide the unsuffixed names; deb Version =
+  `0.<run_number>+g<sha7>`) and publishes it to the separate buildhost
+  project `competent-search-thing/deb` (kind=archive, raw download =
+  byte-identical passthrough) via the first-party
+  `wow-look-at-my/buildhost/.github/actions/buildhost-{create-release,
+  upload-artifact,publish-release}@master` actions (OIDC, same
+  `id-token: write` the workflow already grants). If the app ever
+  gains new direct library deps (check `objdump -p` NEEDED), update
+  that Depends line + README's dep table together. The install path
+  was verified in clean Ubuntu 24.04/22.04 chroots that never had the
+  build deps -- keep it that way when changing packaging: an
+  in-build-container run proves nothing about user machines.
 - Targets: linux/amd64 is the only cgo (gtk/webkit) target;
   windows/amd64 cross-compiles pure-Go from the Linux runner (Wails
   uses WebView2 on windows, and Go auto-disables cgo for non-host

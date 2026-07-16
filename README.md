@@ -27,23 +27,56 @@ package registry at pazer.build). Downloads are anonymous; `latest`
 (the URL without a version) serves the newest build of the default
 branch (master).
 
-### Linux (x86_64)
+The binary links the system GTK 3 and WebKitGTK **4.1** libraries at
+runtime -- it does not bundle them. On a machine that never had them
+installed it fails to start with
+`error while loading shared libraries: libwebkit2gtk-4.1.so.0`.
+Both install paths below handle that; the `.deb` does it automatically.
+
+### Linux (x86_64), Debian/Ubuntu -- recommended
+
+CI builds a `.deb` whose `Depends` pulls the runtime libraries through
+apt. Verified in clean (never-had-the-build-deps) Ubuntu 24.04 and
+22.04 environments:
+
+```
+curl -fL -o competent-search-thing.deb "https://dl.pazer.build/competent-search-thing/deb?os=linux&arch=amd64"
+sudo apt install -y ./competent-search-thing.deb
+competent-search-thing
+```
+
+On Ubuntu 22.04 the WebKitGTK 4.1 packages live in the `universe`
+component (enabled by default on stock installs).
+
+### Linux (x86_64), raw binary
 
 ```
 curl -fL --compressed "https://dl.pazer.build/competent-search-thing?os=linux&arch=amd64" \
   -o competent-search-thing && chmod +x competent-search-thing
 ```
 
-Running it needs the GTK 3 and WebKitGTK 4.1 runtime libraries (the
-same stacks the build links against):
+Then install the runtime libraries yourself:
 
-```
-sudo apt-get install -y libgtk-3-0t64 libwebkit2gtk-4.1-0
-```
+| Distro | Command | Status |
+|--------|---------|--------|
+| Ubuntu 24.04 / 22.04 | `sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0` | tested (clean-env) |
+| Debian 12+ | `sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0` | untested |
+| Fedora | `sudo dnf install -y webkit2gtk4.1 gtk3` | untested |
+| Arch | `sudo pacman -S --needed webkit2gtk-4.1 gtk3` | untested |
 
-(Ubuntu 24.04 / Debian 13 package names; on older distros the gtk
-package is `libgtk-3-0`.) The global hotkey needs an X11 session --
-see [Known caveats](#known-caveats) below.
+(On Ubuntu 24.04 the real package names are `libgtk-3-0t64` etc.; the
+t64 packages `Provide` the unsuffixed names, so the one line above
+resolves on both 22.04 and 24.04.) The binary needs glibc >= 2.34.
+The global hotkey needs an X11 session -- see
+[Known caveats](#known-caveats) below.
+
+**WebKitGTK 4.0-only distros are not supported.** The published binary
+is built with Wails' `webkit2_41` tag and hard-links
+`libwebkit2gtk-4.1.so.0`; distros that only ship WebKitGTK 4.0 (Ubuntu
+20.04, Debian 11) cannot run it. CI does not build a second 4.0-flavored
+binary -- every current Debian/Ubuntu LTS ships 4.1. On a 4.0-only
+distro, build from source without the `webkit2_41` tag (see
+[Building](#building)).
 
 ### Windows (x86_64)
 
@@ -51,10 +84,10 @@ see [Known caveats](#known-caveats) below.
 curl -fL --compressed "https://dl.pazer.build/competent-search-thing?os=windows&arch=amd64" -o competent-search-thing.exe
 ```
 
-The Windows binary is cross-compiled (pure Go, WebView2-based) and
-uploaded by the same Linux CI run, but CI only *runs* the Linux build
-(the screenshot tests) -- treat Windows builds as best-effort. WebView2
-is preinstalled on Windows 11 and current Windows 10.
+The Windows binary is cross-compiled in CI (pure Go, WebView2-based)
+but untested on real Windows -- CI only *runs* the Linux build (the
+screenshot tests). WebView2 is preinstalled on Windows 11 and current
+Windows 10.
 
 ### Not published
 
@@ -64,8 +97,12 @@ is preinstalled on Windows 11 and current Windows 10.
 
 Other URL forms: `?v=N` pins a release permanently, `?branch=<name>`
 follows a branch (URL-encode slashes), and `&fmt=tar.gz`/`zip`
-repackages on the fly. See <https://pazer.build/llms.txt> for the full
-download and package-manager (APT, Homebrew, npm, OCI) reference.
+repackages on the fly. These work on the `/deb` project too. See
+<https://pazer.build/llms.txt> for the full download and
+package-manager (APT, Homebrew, npm, OCI) reference. Avoid the
+`apt.pazer.build` APT-repo route and `&fmt=deb` for this app: those
+debs are generated server-side without `Depends`, which is exactly the
+missing-libraries trap the CI-built `.deb` exists to fix.
 
 ## Status
 
