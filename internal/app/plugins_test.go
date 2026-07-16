@@ -186,6 +186,7 @@ func TestToggleCapturesFocusBeforeShow(t *testing.T) {
 	a.plat.now = (&fakeClock{step: time.Second}).now
 	a.plat.appSource = &fakeSource{r: r, focusedOK: true}
 	a.Startup(context.Background())
+	a.DomReady(context.Background())
 
 	a.toggle() // hidden -> capture app context, then show
 

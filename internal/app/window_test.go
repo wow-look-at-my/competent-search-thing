@@ -81,6 +81,7 @@ func TestHotkeyToggleShowsThenHides(t *testing.T) {
 		return func() {}, nil
 	}
 	a.Startup(context.Background())
+	a.DomReady(context.Background())
 	require.NotNil(t, onDown)
 
 	onDown() // hidden -> show (cursor unknown: centers)
@@ -98,6 +99,7 @@ func TestToggleRateLimitSwallowsAutorepeat(t *testing.T) {
 	// press clears the gap against the zero-valued lastToggle.
 	a.plat.now = (&fakeClock{t: time.Unix(1000, 0), step: 0}).now
 	a.Startup(context.Background())
+	a.DomReady(context.Background())
 
 	a.toggle()
 	a.toggle() // autorepeat within toggleGap: dropped
@@ -212,6 +214,7 @@ func TestHideTracksVisibility(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
 	a.plat.now = (&fakeClock{step: time.Second}).now
 	a.Startup(context.Background())
+	a.DomReady(context.Background())
 
 	a.showOnCursorDisplay()
 	a.Hide() // e.g. the frontend reacting to Escape or blur

@@ -98,6 +98,10 @@ func (a *App) emitEvent(name string, payload ...interface{}) {
 func (a *App) Hide() {
 	a.mu.Lock()
 	a.visible = false
+	// A hide also cancels a show that has not executed yet (e.g. an
+	// IPC hide racing a pre-DomReady summon): the ordered outcome is
+	// hidden.
+	a.pendingShow = false
 	a.mu.Unlock()
 	ctx := a.runtimeCtx()
 	if ctx == nil {
@@ -106,11 +110,14 @@ func (a *App) Hide() {
 	a.rt.hide(ctx)
 }
 
-// toggle is the global hotkey callback: hide when visible, summon onto
-// the cursor's display when hidden. Presses within toggleGap of the
-// last accepted one are dropped (key autorepeat). On the summon path
-// the app context is captured FIRST: showing the bar steals focus, so
-// the focused app must be read before the window appears.
+// toggle is the global hotkey and IPC "toggle" callback: hide when
+// visible, summon onto the cursor's display when hidden. Presses
+// within toggleGap of the last accepted one are dropped (key
+// autorepeat). Before the frontend is ready (DomReady) the summon is
+// deferred: DomReady executes it once the bar can render. On the
+// summon path the app context is captured FIRST: showing the bar
+// steals focus, so the focused app must be read before the window
+// appears.
 func (a *App) toggle() {
 	a.mu.Lock()
 	now := a.plat.now()
@@ -119,6 +126,11 @@ func (a *App) toggle() {
 		return
 	}
 	a.lastToggle = now
+	if !a.domReady {
+		a.pendingShow = true
+		a.mu.Unlock()
+		return
+	}
 	visible := a.visible
 	a.mu.Unlock()
 	if visible {
@@ -127,6 +139,31 @@ func (a *App) toggle() {
 		a.captureAppContext()
 		a.showOnCursorDisplay()
 	}
+}
+
+// showIfHidden is the IPC "show" callback: show-only, never hides.
+// Before the frontend is ready the show is deferred to DomReady; when
+// the bar is already visible it is just re-shown (raised), without
+// re-capturing app context or repositioning; when hidden it takes the
+// same capture-context-then-show path toggle uses.
+func (a *App) showIfHidden() {
+	a.mu.Lock()
+	if !a.domReady {
+		a.pendingShow = true
+		a.mu.Unlock()
+		return
+	}
+	visible := a.visible
+	ctx := a.ctx
+	a.mu.Unlock()
+	if visible {
+		if ctx != nil {
+			a.rt.show(ctx)
+		}
+		return
+	}
+	a.captureAppContext()
+	a.showOnCursorDisplay()
 }
 
 // showOnCursorDisplay positions the bar on the display the cursor is
