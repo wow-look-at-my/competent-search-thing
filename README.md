@@ -116,8 +116,13 @@ buildhost (see [Install](#install)):
       debouncing, graceful watch-limit/overflow degradation, optional
       periodic rescans
 - [x] Global hotkey (default Alt+Space) to summon/dismiss the bar
-      (X11 mechanism on Linux -- see caveats; RegisterHotKey on
-      Windows; CGEventTap on macOS, needs the Accessibility permission)
+      (XGrabKey on Linux/X11; on Wayland a portal global shortcut,
+      an automatic GNOME keybinding, or one manual binding -- see
+      [Wayland](#wayland); RegisterHotKey on Windows; CGEventTap on
+      macOS, needs the Accessibility permission)
+- [x] Single instance + CLI: a second launch shows the running bar;
+      `toggle`/`show`/`hide` subcommands drive it over a unix socket
+      (the summon path for any external keybinding mechanism)
 - [x] Bar positions itself on the display the cursor is on (falls back
       to centering when the platform cannot say, e.g. Wayland)
 - [x] Open / Reveal: Enter opens the selection with the OS default
@@ -910,16 +915,129 @@ entries/s (4 workers, warm page cache -- this measures walker overhead
 rather than cold-disk latency). Numbers wobble up to ~2x with
 container load; the shape holds.
 
+## Wayland
+
+Wayland compositors do not let ordinary clients grab global hotkeys
+(XGrabKey is an X11 concept), so summoning works differently per
+desktop. The app detects the session at startup and picks the first
+mechanism that works:
+
+| Environment | How the bar is summoned |
+|-------------|-------------------------|
+| X11 (any desktop or WM, i3 included) | the built-in global hotkey, exactly as before |
+| Wayland: KDE Plasma 5.27+, GNOME 48+, Hyprland | XDG desktop portal global shortcut; the first run shows the system's approval dialog, and the approval is remembered across restarts |
+| Wayland: GNOME 47 and older (Ubuntu 24.04 = GNOME 46) | an automatic GNOME custom keybinding that runs `competent-search-thing toggle` |
+| Wayland: sway, river, labwc, Wayfire, other compositors | one manual keybinding -- see below |
+
+On Wayland the portal is always tried first; when it is missing or has
+no GlobalShortcuts backend the app falls through (GNOME: to the
+keybinding backend; everything else: to a logged manual-binding hint).
+Declining the portal's approval dialog is respected -- the app logs it
+and stops, it does not go on to write a keybinding after you said no.
+
+### The CLI: toggle, show, hide
+
+The binary doubles as its own remote control. The app runs as a
+single instance around one unix socket (in `$XDG_RUNTIME_DIR`):
+
+- `competent-search-thing` -- starts the app; a second plain launch
+  just shows the already-running instance's bar and exits 0.
+- `competent-search-thing toggle` -- what the global hotkey does:
+  hide when visible, summon when hidden. Starts the app when it is
+  not running (the bar shows once the frontend is ready).
+- `competent-search-thing show` -- like toggle but never hides a
+  visible bar (idempotent; also starts the app when needed).
+- `competent-search-thing hide` -- hides the running instance's bar;
+  unlike the others it never starts the app (prints a notice and
+  exits 1 when nothing is running).
+- `competent-search-thing --version` -- prints the app version.
+
+Any keybinding mechanism that can run a command can therefore summon
+the bar. That is the whole Wayland story in one line: bind a key to
+`competent-search-thing toggle`.
+
+### GNOME (Wayland)
+
+On GNOME Wayland sessions whose portal lacks GlobalShortcuts (GNOME
+47 and older, including Ubuntu 24.04's GNOME 46), the app installs a
+regular GNOME custom keybinding that runs
+`competent-search-thing toggle`. Two GNOME defaults matter here:
+GNOME itself owns Alt+Space (the window menu) and Super+Space
+(input-source switching), and GNOME/mutter silently ignores a
+conflicting custom binding rather than reporting it. The app
+therefore checks the standard GNOME keybinding schemas first and
+falls back automatically, in order: the configured `hotkey`, then
+Ctrl+Alt+Space, then Super+Space -- the first free combination wins.
+The startup log names the effective key, e.g.:
+
+    hotkey: GNOME keybinding active: <Control><Alt>space (requested <Alt>space is taken by GNOME; using fallback)
+
+The binding appears in GNOME Settings > Keyboard > Custom Shortcuts
+as "Competent Search (summon)", and from then on it is yours: edit
+the key there and the app respects the edit on every restart (it logs
+`hotkey: using existing GNOME keybinding ...` and never rewrites it;
+only the stored command is refreshed when the binary moves). To
+remove it, delete the shortcut in GNOME Settings, or -- if it is your
+only custom shortcut -- reset the whole custom-keybindings list:
+
+    gsettings reset org.gnome.settings-daemon.plugins.media-keys custom-keybindings
+
+(GNOME 48 and newer take the portal path instead; none of this
+section applies there.)
+
+### Manual bindings (sway and friends)
+
+`xdg-desktop-portal-wlr` does not implement GlobalShortcuts, so on
+sway, river, labwc, Wayfire and similar compositors the app logs a
+hint and leaves the binding to you -- one line in the compositor
+config. (i3 users: i3 is X11, the built-in hotkey just works.)
+
+sway:
+
+    bindsym Mod1+space exec competent-search-thing toggle
+
+Hyprland (normally served by the portal via
+`xdg-desktop-portal-hyprland`; the manual line is the fallback):
+
+    bind = ALT, SPACE, exec, competent-search-thing toggle
+
+Anything else: bind any key to `competent-search-thing toggle`.
+
+### Environment overrides
+
+For debugging and unusual setups:
+
+- `COMPETENT_SEARCH_HOTKEY_BACKEND` -- force one summon backend:
+  `auto` (default), `x11`, `portal`, `gsettings`, or `none` (no
+  global hotkey; the CLI commands keep working).
+- `COMPETENT_SEARCH_SOCKET` -- override the single-instance socket
+  path (default `$XDG_RUNTIME_DIR/competent-search-thing.sock`).
+
+### What Wayland does not allow
+
+These are Wayland design constraints, not bugs:
+
+- **Placement**: the compositor decides where windows go. The bar
+  cannot position itself on the display the cursor is on (it asks to
+  be centered, best-effort), and always-on-top is not enforced.
+- **Portal requirements**: the portal path needs `xdg-desktop-portal`
+  plus a desktop backend that implements GlobalShortcuts (KDE, GNOME
+  48+, and Hyprland ship one; `xdg-desktop-portal-wlr` does not).
+- **App context**: the plugin system's focused/running app context
+  comes from X11/EWMH and is absent (or XWayland-only) on Wayland --
+  see the per-platform table under
+  [the wire protocol](#the-wire-protocol).
+
 ## Known caveats
 
-- **Wayland**: the hotkey and cursor layers speak X11 (pure-Go, via
-  XWayland when available). On a Wayland-only session without an
-  XWayland `DISPLAY` there is no global hotkey (the failure is logged
-  once and the app keeps running) and the cursor position cannot be
-  read, so the bar centers on the current monitor instead of following
-  the cursor. Under XWayland the hotkey works for X11 clients, but
-  some compositors do not forward keys grabbed this way from native
-  Wayland windows.
+- **Wayland**: global summoning works -- via the portal, an automatic
+  GNOME keybinding, or one manual bind to
+  `competent-search-thing toggle`; see [Wayland](#wayland) for the
+  per-desktop mechanisms. What Wayland's design still rules out: the
+  compositor owns window placement, so the bar centers instead of
+  following the cursor between displays, always-on-top is not
+  enforced, and the plugin system's focused/running app context is
+  X11/XWayland-only.
 - **Linux HiDPI**: with a GDK scale factor > 1 the X11 pixel
   coordinates and GTK's logical coordinates disagree, which can offset
   the bar's position on scaled multi-monitor setups.

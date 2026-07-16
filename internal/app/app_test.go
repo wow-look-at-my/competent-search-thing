@@ -15,8 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/config"
+	"github.com/wow-look-at-my/competent-search-thing/internal/gsettings"
 	"github.com/wow-look-at-my/competent-search-thing/internal/index"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
+	"github.com/wow-look-at-my/competent-search-thing/internal/portal"
 	"github.com/wow-look-at-my/competent-search-thing/internal/watch"
 )
 
@@ -120,6 +122,21 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	a.plat.startHotkey = func(platform.Hotkey, func()) (func(), error) {
 		r.call("startHotkey")
 		return func() { r.call("stopHotkey") }, nil
+	}
+	// Ambient bits pinned down: no real env reads, a fixed executable
+	// path, and an unknown session -- which keeps every test on the
+	// pre-Wayland native hotkey and positioning paths unless a test
+	// overrides detectSession itself.
+	a.plat.getenv = func(string) string { return "" }
+	a.plat.executable = func() (string, error) { return "/test/bin/competent-search-thing", nil }
+	a.plat.detectSession = func() platform.Session { return platform.Session{} }
+	a.plat.startPortal = func(context.Context, platform.Hotkey, func()) (portalHandle, error) {
+		r.call("startPortal")
+		return nil, portal.ErrNoPortal
+	}
+	a.plat.ensureGnomeBinding = func(context.Context, platform.Hotkey, string) (gsettings.Applied, error) {
+		r.call("ensureGnomeBinding")
+		return gsettings.Applied{}, errors.New("ensureGnomeBinding not stubbed")
 	}
 	a.plat.cursorInfo = func() (int, int, []platform.Display, bool) {
 		r.mu.Lock()
