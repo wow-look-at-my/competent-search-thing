@@ -502,12 +502,10 @@ func TestEnsureBindingSimWritesEntryBeforeList(t *testing.T) {
 		listings: map[string]string{},
 	}
 	sim.onListWrite = func() {
-		if sim.values[entrySchemaPath+"\x00binding"] == "" {
-			t.Fatal("the list was updated before the entry's binding was written")
-		}
-		if sim.values[entrySchemaPath+"\x00command"] == "" {
-			t.Fatal("the list was updated before the entry's command was written")
-		}
+		require.NotEqual(t, "", sim.values[entrySchemaPath+"\x00binding"])
+
+		require.NotEqual(t, "", sim.values[entrySchemaPath+"\x00command"])
+
 	}
 
 	_, err := EnsureBinding(context.Background(), sim.run, mustParse(t, "alt+space"), "/usr/bin/cst toggle")
@@ -523,9 +521,9 @@ func TestEnsureBindingVerifyCatchesMissingListMembership(t *testing.T) {
 	scriptFreshWorld(s, nil)
 	s.on("", "set", entrySchemaPath, "name", "'Competent Search (summon)'")
 	s.on("", "set", entrySchemaPath, "command", "'cst toggle'")
-	s.on("", "set", entrySchemaPath, "binding", "'<Alt>space'")
+	s.on("", "set", entrySchemaPath, "binding", "'<Control><Alt>space'")
 	s.on("", "set", mediaKeysSchema, customListKey, "['"+OurPath+"']")
-	scriptVerify(s, "@as []", "'<Alt>space'", "'cst toggle'")
+	scriptVerify(s, "@as []", "'<Control><Alt>space'", "'cst toggle'")
 
 	applied, err := EnsureBinding(context.Background(), s.run, mustParse(t, "alt+space"), "cst toggle")
 	require.NoError(t, err, "verification failures degrade, they do not error")
@@ -539,9 +537,9 @@ func TestEnsureBindingVerifyCatchesCommandMismatch(t *testing.T) {
 	scriptFreshWorld(s, nil)
 	s.on("", "set", entrySchemaPath, "name", "'Competent Search (summon)'")
 	s.on("", "set", entrySchemaPath, "command", "'cst toggle'")
-	s.on("", "set", entrySchemaPath, "binding", "'<Alt>space'")
+	s.on("", "set", entrySchemaPath, "binding", "'<Control><Alt>space'")
 	s.on("", "set", mediaKeysSchema, customListKey, "['"+OurPath+"']")
-	scriptVerify(s, "['"+OurPath+"']", "'<Alt>space'", "'other-app doit'")
+	scriptVerify(s, "['"+OurPath+"']", "'<Control><Alt>space'", "'other-app doit'")
 
 	applied, err := EnsureBinding(context.Background(), s.run, mustParse(t, "alt+space"), "cst toggle")
 	require.NoError(t, err)
