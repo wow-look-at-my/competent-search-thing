@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -151,12 +153,12 @@ func TestPortalUnavailableFallsBackToGnomeBinding(t *testing.T) {
 	cmdCh := make(chan string, 1)
 	a.plat.ensureGnomeBinding = func(_ context.Context, hk platform.Hotkey, command string) (gsettings.Applied, error) {
 		cmdCh <- command
-		return gsettings.Applied{
+		return verifiedApplied(gsettings.Applied{
 			Binding:   "<Control><Alt>space",
 			Requested: "<Alt>space",
 			FellBack:  true,
 			Changed:   true,
-		}, nil
+		}, command), nil
 	}
 	a.Startup(context.Background())
 
@@ -165,7 +167,18 @@ func TestPortalUnavailableFallsBackToGnomeBinding(t *testing.T) {
 	require.Equal(t, gsettings.ToggleCommand("/test/bin/competent-search-thing"), <-cmdCh,
 		"the keybinding runs the executable seam's binary with the toggle subcommand")
 	require.True(t, r.has("startPortal"), "the portal was tried first")
+	require.True(t, r.has("mediaKeysDaemon"), "the daemon self-check ran")
 	require.False(t, r.has("startHotkey"))
+}
+
+// verifiedApplied fills the read-back fields the way a healthy dconf
+// world would: everything on disk matches what was written.
+func verifiedApplied(a gsettings.Applied, command string) gsettings.Applied {
+	a.InList = true
+	a.DiskBinding = a.Binding
+	a.DiskCommand = command
+	a.Verified = true
+	return a
 }
 
 func TestPortalDeniedStopsWithoutGnomeBinding(t *testing.T) {
@@ -217,12 +230,112 @@ func TestGnomeBindingFailureEndsInManualInstructions(t *testing.T) {
 func TestExistingGnomeBindingBecomesDescription(t *testing.T) {
 	a, _ := newTestApp(t, nil, Options{Hotkey: "alt+space"})
 	a.plat.detectSession = func() platform.Session { return waylandGNOME() }
-	a.plat.ensureGnomeBinding = func(context.Context, platform.Hotkey, string) (gsettings.Applied, error) {
-		return gsettings.Applied{Binding: "<Shift><Super>t", Requested: "<Alt>space", Existing: true}, nil
+	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string) (gsettings.Applied, error) {
+		return verifiedApplied(gsettings.Applied{Binding: "<Shift><Super>t", Requested: "<Alt>space", Existing: true}, command), nil
 	}
 	a.Startup(context.Background())
 	require.Eventually(t, func() bool { return a.hotkeyDescription() == "<Shift><Super>t" },
 		5*time.Second, 5*time.Millisecond, "a user-edited binding is reported as-is")
+}
+
+func TestUnverifiedGnomeBindingClaimsNoHotkey(t *testing.T) {
+	// gsettings reported success but the read-back could not confirm
+	// the entry: the app must not advertise a summon key it cannot
+	// stand behind (the old behavior logged "active" here).
+	a, r := newTestApp(t, nil, Options{Hotkey: "alt+space"})
+	a.plat.detectSession = func() platform.Session { return waylandGNOME() }
+	called := make(chan struct{})
+	a.plat.ensureGnomeBinding = func(context.Context, platform.Hotkey, string) (gsettings.Applied, error) {
+		close(called)
+		return gsettings.Applied{
+			Binding:    "<Control><Alt>space",
+			Requested:  "<Alt>space",
+			FellBack:   true,
+			Changed:    true,
+			VerifyNote: "the entry is not in the custom-keybindings list",
+		}, nil
+	}
+	a.Startup(context.Background())
+
+	select {
+	case <-called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gsettings backend was never tried")
+	}
+	require.Never(t, func() bool { return a.hotkeyDescription() != "" },
+		300*time.Millisecond, 20*time.Millisecond,
+		"an unverified binding never becomes the summon description")
+	require.False(t, r.has("mediaKeysDaemon"), "the daemon probe is pointless when the entry is already unverified")
+}
+
+func TestMissingMediaKeysDaemonClaimsNoHotkey(t *testing.T) {
+	// The entry verified on disk but nothing owns the media-keys bus
+	// name: no process exists to grab the key, so the app must warn
+	// instead of claiming an active hotkey.
+	a, r := newTestApp(t, nil, Options{Hotkey: "alt+space"})
+	a.plat.detectSession = func() platform.Session { return waylandGNOME() }
+	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string) (gsettings.Applied, error) {
+		return verifiedApplied(gsettings.Applied{Binding: "<Control><Alt>space", Requested: "<Alt>space", Changed: true, FellBack: true}, command), nil
+	}
+	a.plat.mediaKeysDaemon = func(context.Context) (bool, error) {
+		r.call("mediaKeysDaemon")
+		return false, nil
+	}
+	a.Startup(context.Background())
+
+	require.Eventually(t, func() bool { return r.has("mediaKeysDaemon") }, 5*time.Second, 5*time.Millisecond)
+	require.Never(t, func() bool { return a.hotkeyDescription() != "" },
+		300*time.Millisecond, 20*time.Millisecond)
+}
+
+func TestDaemonProbeErrorIsIgnored(t *testing.T) {
+	// No session bus (headless CI): the probe errors and the check is
+	// skipped -- a verified binding is still reported as active.
+	a, _ := newTestApp(t, nil, Options{Hotkey: "alt+space"})
+	a.plat.detectSession = func() platform.Session { return waylandGNOME() }
+	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string) (gsettings.Applied, error) {
+		return verifiedApplied(gsettings.Applied{Binding: "<Control><Alt>space", Requested: "<Alt>space", Changed: true}, command), nil
+	}
+	a.plat.mediaKeysDaemon = func(context.Context) (bool, error) {
+		return false, errors.New("no session bus")
+	}
+	a.Startup(context.Background())
+	require.Eventually(t, func() bool { return a.hotkeyDescription() == "<Control><Alt>space" },
+		5*time.Second, 5*time.Millisecond)
+}
+
+func TestRelativeExecutableIsResolvedForGnomeBinding(t *testing.T) {
+	// gsd runs the command with its own working directory, so a
+	// relative executable path would break the keybinding: the app
+	// must resolve it before writing.
+	a, _ := newTestApp(t, nil, Options{Hotkey: "alt+space"})
+	a.plat.detectSession = func() platform.Session { return waylandGNOME() }
+	a.plat.executable = func() (string, error) { return "rel/competent-search-thing", nil }
+	cmdCh := make(chan string, 1)
+	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string) (gsettings.Applied, error) {
+		cmdCh <- command
+		return verifiedApplied(gsettings.Applied{Binding: "<Control><Alt>space", Requested: "<Alt>space", Changed: true}, command), nil
+	}
+	a.Startup(context.Background())
+
+	select {
+	case command := <-cmdCh:
+		exe := strings.TrimSuffix(command, " toggle")
+		require.True(t, filepath.IsAbs(exe), "the written command names the binary absolutely, got %q", command)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gsettings backend was never tried")
+	}
+}
+
+func TestEmptyExecutableSkipsGnomeBinding(t *testing.T) {
+	a, r := newTestApp(t, nil, Options{Hotkey: "alt+space"})
+	a.plat.detectSession = func() platform.Session { return waylandGNOME() }
+	a.plat.executable = func() (string, error) { return "", nil }
+	a.Startup(context.Background())
+
+	require.Eventually(t, func() bool { return r.has("startPortal") }, 5*time.Second, 5*time.Millisecond)
+	require.Never(t, func() bool { return r.has("ensureGnomeBinding") }, 300*time.Millisecond, 20*time.Millisecond,
+		"an empty executable path is refused, never written into a keybinding")
 }
 
 func TestExecutableFailureSkipsGnomeBinding(t *testing.T) {

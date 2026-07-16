@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"path/filepath"
 	"strings"
 
 	"github.com/godbus/dbus/v5"
@@ -224,7 +225,12 @@ func (a *App) startPortalHotkey(ctx context.Context, hk platform.Hotkey) bool {
 
 // startGnomeBinding tries the GNOME custom-keybinding backend; true
 // means the chain is finished. The one loud summary line here is what
-// a GNOME-Wayland user reads to learn their effective summon key.
+// a GNOME-Wayland user reads to learn their effective summon key --
+// and it is only the confident "active" wording when the read-back
+// verified the entry on disk AND gsd-media-keys (the process that
+// turns the entry into a compositor grab) is reachable; a gsettings
+// write returning success proves neither, and claiming a hotkey that
+// cannot fire is worse than saying so.
 func (a *App) startGnomeBinding(ctx context.Context, hk platform.Hotkey) bool {
 	if a.plat.ensureGnomeBinding == nil || a.plat.executable == nil {
 		return false
@@ -234,7 +240,23 @@ func (a *App) startGnomeBinding(ctx context.Context, hk platform.Hotkey) bool {
 		log.Printf("hotkey: locating the executable for the GNOME keybinding: %v", err)
 		return false
 	}
-	applied, err := a.plat.ensureGnomeBinding(ctx, hk, gsettings.ToggleCommand(exe))
+	// The keybinding runs outside the app's environment (gsd spawns it
+	// with GLib's shell parsing and its own PATH), so the command must
+	// name the binary absolutely -- never rely on a relative argv[0].
+	if exe == "" {
+		log.Printf("hotkey: the executable path is empty; cannot write a GNOME keybinding command")
+		return false
+	}
+	if !filepath.IsAbs(exe) {
+		abs, aerr := filepath.Abs(exe)
+		if aerr != nil {
+			log.Printf("hotkey: cannot resolve executable path %q for the GNOME keybinding: %v", exe, aerr)
+			return false
+		}
+		exe = abs
+	}
+	command := gsettings.ToggleCommand(exe)
+	applied, err := a.plat.ensureGnomeBinding(ctx, hk, command)
 	if err != nil {
 		if ctx.Err() != nil {
 			return true
@@ -242,6 +264,26 @@ func (a *App) startGnomeBinding(ctx context.Context, hk platform.Hotkey) bool {
 		log.Printf("hotkey: installing a GNOME keybinding failed: %v", err)
 		return false
 	}
+
+	// The evidence line: exactly what the read-back found on disk.
+	log.Printf("hotkey: GNOME keybinding entry %s: binding %q, command %q, in custom-keybindings list: %v",
+		gsettings.OurPath, applied.DiskBinding, applied.DiskCommand, applied.InList)
+
+	if !applied.Verified {
+		log.Printf("hotkey: WARNING: the GNOME keybinding could not be verified (%s) -- the summon key is probably NOT active; bind a key to '%s' in GNOME Settings > Keyboard, or see the README's GNOME Wayland troubleshooting section", applied.VerifyNote, command)
+		return true
+	}
+	if a.plat.mediaKeysDaemon != nil {
+		if running, derr := a.plat.mediaKeysDaemon(ctx); derr == nil && !running {
+			// No error + no owner: the session bus is fine but GNOME's
+			// media-keys daemon is gone, so nothing will grab the key.
+			// (An error means no usable session bus -- headless CI --
+			// and the check is skipped without noise.)
+			log.Printf("hotkey: WARNING: the keybinding is on disk but GNOME's media-keys daemon (%s) is not running, so %s will not summon anything; bind a key to '%s' manually or restart the session", gsettings.DaemonName, applied.Binding, command)
+			return true
+		}
+	}
+
 	switch {
 	case applied.Existing:
 		log.Printf("hotkey: using existing GNOME keybinding %s (edit in GNOME Settings > Keyboard)", applied.Binding)
