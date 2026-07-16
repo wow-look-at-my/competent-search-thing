@@ -472,8 +472,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   runningApplications with regular activation policy; Title always
   empty -- titles need the AX API), InstalledApps = /Applications +
   ~/Applications *.app scan (Exec = `open -a "<path>"`).
-  windows/darwin files compile only on their OSes -- CI is linux/amd64
-  -- so keep them boring and conventional.
+  windows/darwin files compile only on their OSes -- CI builds
+  linux/amd64 + a windows/amd64 cross-compile but only ever RUNS the
+  linux binary, and darwin is never compiled at all -- so keep them
+  boring and conventional.
 - `wails.json` -- Wails CLI project config (app name, frontend
   install/build commands) read by `wails dev`/`wails build` only; the
   no-CLI go-toolchain path does not use it.
@@ -631,16 +633,50 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   a PR can merge to master. Do not rename it.
 - The job: checkout -> apt install gtk/webkit/x11 dev packages plus
   xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run build`
-  in `frontend/` -> `wow-look-at-my/go-toolchain@v1` with
-  `targets: linux/amd64`, `cgo: 'true'`, `autorelease: 'false'`,
-  `timeout: '20'`, and env
-  `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> screenshot
-  capture -> `actions/upload-artifact@v4`.
-- `targets: linux/amd64` because the default target matrix
-  (linux,darwin,windows x amd64,arm64) cannot cross-compile a cgo/webkit
-  app from a Linux runner.
-- `autorelease: 'false'` because buildhost publishing needs the
-  `actions: read` permission this workflow does not grant.
+  in `frontend/` -> `echo gomemlimit_gen.go >> .git/info/exclude` (the
+  transient guard go-toolchain injects would otherwise stamp every
+  published binary vcs.modified/+dirty) -> `wow-look-at-my/go-toolchain@v1`
+  with `targets: linux/amd64,windows/amd64`, `cgo: 'true'`,
+  `autorelease: 'true'`, `timeout: '20'`, and env
+  `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> deb build +
+  publish (next bullet) -> screenshot capture ->
+  `actions/upload-artifact@v4`.
+- Deb packaging: buildhost's own `fmt=deb`/APT-repo debs carry NO
+  `Depends` (hardcoded control in buildhost internal/repackage/deb.go),
+  so on a machine without the WebKitGTK/GTK runtime libs the app dies
+  at the dynamic loader (`libwebkit2gtk-4.1.so.0: cannot open shared
+  object file` -- real user report, 2026-07-16). CI therefore builds a
+  proper .deb itself (dpkg-deb; `Depends: libwebkit2gtk-4.1-0,
+  libgtk-3-0, libglib2.0-0, libgdk-pixbuf-2.0-0, libsoup-3.0-0,
+  libjavascriptcoregtk-4.1-0, libc6 (>= 2.34)` = the binary's direct
+  NEEDED libs; names resolve on Ubuntu 22.04 AND 24.04 -- noble's t64
+  packages Provide the unsuffixed names; deb Version =
+  `0.<run_number>+g<sha7>`) and publishes it to the separate buildhost
+  project `competent-search-thing/deb` (kind=archive, raw download =
+  byte-identical passthrough) via the first-party
+  `wow-look-at-my/buildhost/.github/actions/buildhost-{create-release,
+  upload-artifact,publish-release}@master` actions (OIDC, same
+  `id-token: write` the workflow already grants). If the app ever
+  gains new direct library deps (check `objdump -p` NEEDED), update
+  that Depends line + README's dep table together. The install path
+  was verified in clean Ubuntu 24.04/22.04 chroots that never had the
+  build deps -- keep it that way when changing packaging: an
+  in-build-container run proves nothing about user machines.
+- Targets: linux/amd64 is the only cgo (gtk/webkit) target;
+  windows/amd64 cross-compiles pure-Go from the Linux runner (Wails
+  uses WebView2 on windows, and Go auto-disables cgo for non-host
+  targets) but is never RUN in CI. darwin needs cgo against the Apple
+  SDK, so it cannot be built here -- never add darwin targets.
+- `autorelease: 'true'` publishes the `build/` binaries (built with the
+  full GOFLAGS tags, so they are runnable) to buildhost (pazer.build)
+  on EVERY branch push, with the git branch recorded: project
+  `competent-search-thing` (the app) plus `competent-search-thing/server`
+  (the color-http example server, per the multi-binary naming
+  convention). Versions auto-increment; the bare `latest` download URL
+  resolves the repo's default branch (master). Requires the
+  `actions: read` permission (to fetch the `go-build` run artifact) on
+  top of `id-token: write` (OIDC auth to buildhost) -- both are in the
+  workflow's permissions block. Install commands: README "Install".
 - `frontend/package-lock.json` is committed (required by `npm ci`).
 
 ## CI screenshots
