@@ -959,18 +959,26 @@ the bar. That is the whole Wayland story in one line: bind a key to
 ### GNOME (Wayland)
 
 On GNOME Wayland sessions whose portal lacks GlobalShortcuts (GNOME
-47 and older, including Ubuntu 24.04's GNOME 46), the app installs a
-regular GNOME custom keybinding that runs
-`competent-search-thing toggle`. Two GNOME defaults matter here:
+47 and older, including Ubuntu 24.04's GNOME 46 and Ubuntu 22.04's
+GNOME 42), the app installs a regular GNOME custom keybinding that
+runs `competent-search-thing toggle`. Two GNOME defaults matter here:
 GNOME itself owns Alt+Space (the window menu) and Super+Space
 (input-source switching), and GNOME/mutter silently ignores a
 conflicting custom binding rather than reporting it. The app
 therefore checks the standard GNOME keybinding schemas first and
 falls back automatically, in order: the configured `hotkey`, then
 Ctrl+Alt+Space, then Super+Space -- the first free combination wins.
-The startup log names the effective key, e.g.:
 
+After writing the keybinding the app re-reads everything from disk
+and logs the evidence plus a verdict, e.g.:
+
+    hotkey: GNOME keybinding entry /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/competent-search-thing/: binding "<Control><Alt>space", command "/home/you/Downloads/competent-search-thing toggle", in custom-keybindings list: true
     hotkey: GNOME keybinding active: <Control><Alt>space (requested <Alt>space is taken by GNOME; using fallback)
+
+The "active" line only appears when the read-back confirmed the entry
+AND GNOME's media-keys daemon (`org.gnome.SettingsDaemon.MediaKeys`)
+is running -- otherwise the app logs a WARNING naming exactly what is
+missing, because a keybinding GNOME never grabbed summons nothing.
 
 The binding appears in GNOME Settings > Keyboard > Custom Shortcuts
 as "Competent Search (summon)", and from then on it is yours: edit
@@ -984,6 +992,49 @@ only custom shortcut -- reset the whole custom-keybindings list:
 
 (GNOME 48 and newer take the portal path instead; none of this
 section applies there.)
+
+#### Troubleshooting: the key does nothing
+
+The startup log said "active" but pressing the combination does
+nothing? Work through these, in order:
+
+1. **Dump what is on disk** (what the app wrote and GNOME reads):
+
+       gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings
+       gsettings list-recursively org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/competent-search-thing/
+
+   The first must contain `.../competent-search-thing/`; the second
+   must show your `binding` and a `command` whose path points at the
+   binary's current absolute location.
+
+2. **Check for a refused grab.** mutter refuses a combination that
+   any other GNOME shortcut or app already holds, and only the
+   settings daemon's journal says so. Look for the exact warning:
+
+       journalctl --user -b -g "Failed to grab accelerator"
+
+   A line like `Failed to grab accelerator for keybinding
+   custom:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/competent-search-thing/`
+   means the key is taken: pick a different one in GNOME Settings >
+   Keyboard > Custom Shortcuts (the app respects your edit). A
+   `Failed to grab accelerators:` line instead means the settings
+   daemon could not talk to the shell at all.
+
+3. **Test the command itself.** Run the exact `command` value from
+   step 1 in a terminal while the app is running -- the bar must
+   toggle. If it does, the command is fine and the problem is the
+   grab (step 2).
+
+4. **Moved or deleted the binary?** The keybinding stores an absolute
+   path, so moving the binary breaks it until the app is started once
+   from the new location (it refreshes the stored command
+   automatically and logs the refresh).
+
+5. **Force a backend** for debugging with
+   `COMPETENT_SEARCH_HOTKEY_BACKEND` (see
+   [Environment overrides](#environment-overrides)); `gsettings`
+   forces this keybinding path, `none` disables summoning to isolate
+   IPC issues (`competent-search-thing toggle` keeps working).
 
 ### Manual bindings (sway and friends)
 

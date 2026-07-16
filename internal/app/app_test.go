@@ -138,6 +138,13 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 		r.call("ensureGnomeBinding")
 		return gsettings.Applied{}, errors.New("ensureGnomeBinding not stubbed")
 	}
+	// The daemon probe answers "running" so gsettings-backend tests
+	// exercise the verified-summary path unless they override it; the
+	// real probe would touch the session bus.
+	a.plat.mediaKeysDaemon = func(context.Context) (bool, error) {
+		r.call("mediaKeysDaemon")
+		return true, nil
+	}
 	a.plat.cursorInfo = func() (int, int, []platform.Display, bool) {
 		r.mu.Lock()
 		defer r.mu.Unlock()

@@ -69,6 +69,29 @@ type Applied struct {
 	// Existing is true when the app's entry already existed and its
 	// (possibly user-edited) binding was deliberately left untouched.
 	Existing bool
+
+	// The read-back verification: after the writes (or the sticky
+	// no-op), the parent list and the entry's binding/command are
+	// re-read in fresh gsettings invocations, so the fields below
+	// describe what is actually on disk -- not what was attempted. A
+	// gsettings set that returns success proves nothing about whether
+	// gnome-settings-daemon will see (let alone grab) the binding, so
+	// callers must only claim success when Verified is true.
+
+	// InList is true when OurPath was read back as a member of the
+	// custom-keybindings list.
+	InList bool
+	// DiskBinding is the entry's binding as re-read from disk.
+	DiskBinding string
+	// DiskCommand is the entry's command as re-read from disk.
+	DiskCommand string
+	// Verified is true when the read-back confirmed everything a
+	// working keybinding needs: list membership, a non-empty binding
+	// matching Binding, and the exact command that was requested.
+	Verified bool
+	// VerifyNote explains, in one human-readable sentence, what the
+	// read-back found missing or mismatched ("" when Verified).
+	VerifyNote string
 }
 
 // EnsureBinding makes sure a GNOME custom keybinding exists that runs
@@ -84,6 +107,22 @@ type Applied struct {
 // combinations that are already bound. When every candidate is taken,
 // ErrAllTaken is returned and nothing is written. A second run with an
 // unchanged world performs zero writes.
+//
+// Write order is load-bearing: the entry's name/command/binding are
+// written FIRST and the path is appended to the custom-keybindings
+// list LAST. gnome-settings-daemon reacts to the list change by
+// reading the entry immediately (gsd-media-keys-manager.c,
+// media_key_new_for_path) and DROPS an entry whose command and binding
+// are both still empty ("Key binding (%s) is incomplete"); a command
+// written after that drop is silently lost (update_custom_binding_
+// command only touches keys that exist). Appending the path last means
+// the one notification gsd is guaranteed to see -- the list change on
+// the schema object it has watched since startup -- finds a complete
+// entry, with no reliance on per-entry signal timing.
+//
+// Both the fresh and the existing path end with a read-back
+// verification (see the Applied fields): every conclusion offered to
+// the caller was re-read from disk, never inferred from write success.
 func EnsureBinding(ctx context.Context, run Runner, hk platform.Hotkey, command string) (Applied, error) {
 	requested, err := ConvertHotkey(hk)
 	if err != nil {
@@ -101,7 +140,11 @@ func EnsureBinding(ctx context.Context, run Runner, hk platform.Hotkey, command 
 	}
 
 	if slices.Contains(paths, OurPath) {
-		return ensureExisting(ctx, run, applied, command)
+		applied, err = ensureExisting(ctx, run, applied, command)
+		if err != nil {
+			return applied, err
+		}
+		return verifyOnDisk(ctx, run, applied, command), nil
 	}
 
 	taken := collectTaken(ctx, run, paths)
@@ -116,10 +159,6 @@ func EnsureBinding(ctx context.Context, run Runner, hk platform.Hotkey, command 
 		return applied, fmt.Errorf("%w (tried %s)", ErrAllTaken, strings.Join(candidates(requested), ", "))
 	}
 
-	if _, err := run(ctx, "set", mediaKeysSchema, customListKey, quoteVariantArray(append(paths, OurPath))); err != nil {
-		return applied, fmt.Errorf("gsettings: appending to %s: %w", customListKey, err)
-	}
-	applied.Changed = true
 	for _, kv := range [][2]string{
 		{"name", BindingName},
 		{"command", command},
@@ -128,10 +167,61 @@ func EnsureBinding(ctx context.Context, run Runner, hk platform.Hotkey, command 
 		if _, err := run(ctx, "set", customKeybindingSchema+":"+OurPath, kv[0], quoteVariantString(kv[1])); err != nil {
 			return applied, fmt.Errorf("gsettings: setting %s: %w", kv[0], err)
 		}
+		applied.Changed = true
+	}
+	if _, err := run(ctx, "set", mediaKeysSchema, customListKey, quoteVariantArray(append(paths, OurPath))); err != nil {
+		return applied, fmt.Errorf("gsettings: appending to %s: %w", customListKey, err)
 	}
 	applied.Binding = chosen
 	applied.FellBack = !sameAccel(chosen, requested)
-	return applied, nil
+	return verifyOnDisk(ctx, run, applied, command), nil
+}
+
+// verifyOnDisk re-reads the parent list plus the entry's binding and
+// command in fresh gsettings invocations and fills Applied's read-back
+// fields. Read failures never fail EnsureBinding -- the writes already
+// happened -- they just leave Verified false with a note, so the
+// caller warns instead of claiming success.
+func verifyOnDisk(ctx context.Context, run Runner, applied Applied, command string) Applied {
+	note := func(format string, args ...any) Applied {
+		applied.VerifyNote = fmt.Sprintf(format, args...)
+		return applied
+	}
+
+	listOut, err := run(ctx, "get", mediaKeysSchema, customListKey)
+	if err != nil {
+		return note("re-reading %s failed: %v", customListKey, err)
+	}
+	paths, ok := parseStringArray(listOut)
+	if !ok {
+		return note("re-read %s is unparseable: %q", customListKey, strings.TrimSpace(listOut))
+	}
+	applied.InList = slices.Contains(paths, OurPath)
+
+	bindingOut, err := run(ctx, "get", customKeybindingSchema+":"+OurPath, "binding")
+	if err != nil {
+		return note("re-reading the binding failed: %v", err)
+	}
+	applied.DiskBinding, _ = parseVariantStringValue(bindingOut)
+
+	commandOut, err := run(ctx, "get", customKeybindingSchema+":"+OurPath, "command")
+	if err != nil {
+		return note("re-reading the command failed: %v", err)
+	}
+	applied.DiskCommand, _ = parseVariantStringValue(commandOut)
+
+	switch {
+	case !applied.InList:
+		return note("the entry is not in the %s list", customListKey)
+	case applied.DiskBinding == "":
+		return note("the binding on disk is empty")
+	case applied.DiskBinding != applied.Binding:
+		return note("the binding on disk is %q, expected %q", applied.DiskBinding, applied.Binding)
+	case applied.DiskCommand != command:
+		return note("the command on disk is %q, expected %q", applied.DiskCommand, command)
+	}
+	applied.Verified = true
+	return applied
 }
 
 // ensureExisting handles an entry the app created earlier: the binding
