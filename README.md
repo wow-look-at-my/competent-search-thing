@@ -210,7 +210,8 @@ The file is created with defaults on first run:
   "maxResults": 50,
   "theme": "dark",
   "plugins": { "disabled": false, "entries": {} },
-  "bangs": { "sigils": ["!", "/", "@"], "aliases": {} }
+  "bangs": { "sigils": ["!", "/", "@"], "aliases": {} },
+  "tray": { "disabled": false }
 }
 ```
 
@@ -263,6 +264,9 @@ Field reference:
   defaults). `aliases` maps extra names onto registered bangs, e.g.
   `{ "aliases": { "math": "calc" } }` makes `!math` target the plugin
   that registered `calc`.
+- `tray` -- the [tray icon](#tray-icon). `disabled` (default `false`)
+  turns it off. Leaving it on costs nothing on desktops without a
+  status-icon host: the app just never shows one.
 
 The full format is formally described by
 [`schemas/config.schema.json`](schemas/config.schema.json) -- add a
@@ -879,6 +883,46 @@ HTTP mode), a persistent JSON-Lines command mode (one process per
 query is the only command mode), remote icons, plugin-supplied
 HTML/CSS, Wayland focused-window support, and untargeted installed-app
 results.
+
+## Tray icon
+
+The app puts a small magnifier icon in the system tray -- on Ubuntu's
+GNOME desktop that is the top-right status area -- with a menu:
+
+- **Show/Hide** -- toggle the searchbar (same path as the hotkey)
+- **Rescan now** -- request a full re-index
+- **Open config** -- open `config.json` in your editor
+- **Quit** -- exit the app
+
+The bar itself stays hidden until summoned, so the tray icon is the
+one always-visible handle on the running app. Under GNOME's
+AppIndicator extension a left click opens the menu; a double or
+middle click toggles the bar directly.
+
+Implementation notes and requirements:
+
+- The icon is a **StatusNotifierItem** (the AppIndicator protocol)
+  spoken directly over D-Bus -- no GTK tray library involved. It
+  needs an SNI host on the session bus. **Ubuntu ships one enabled by
+  default** on every GNOME release (the
+  `ubuntu-appindicators@ubuntu.com` shell extension); KDE Plasma,
+  Cinnamon, Xfce (with the ayatana plugin), and waybar (`tray`
+  module) work out of the box too. Stock Fedora GNOME needs the
+  [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/)
+  installed.
+- If the extension loads after the app (session autostart) or GNOME
+  Shell restarts, the icon (re-)registers automatically.
+- Without any SNI host the app logs one line
+  (`tray: no StatusNotifierItem host ...`) and runs on exactly as
+  before -- the tray is an extra, never a requirement.
+- Linux-only for now (the user-facing ask was GNOME); windows/darwin
+  builds simply skip it.
+- Turn it off with `"tray": { "disabled": true }` in
+  [`config.json`](#configuration).
+
+If the icon does not appear on Ubuntu, check that the extension is
+enabled: `gnome-extensions info ubuntu-appindicators@ubuntu.com`
+(enable with `gnome-extensions enable ubuntu-appindicators@ubuntu.com`).
 
 ## Wails v2 vs v3
 
