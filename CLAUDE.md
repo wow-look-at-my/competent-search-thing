@@ -310,8 +310,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   runningApplications with regular activation policy; Title always
   empty -- titles need the AX API), InstalledApps = /Applications +
   ~/Applications *.app scan (Exec = `open -a "<path>"`).
-  windows/darwin files compile only on their OSes -- CI is linux/amd64
-  -- so keep them boring and conventional.
+  windows/darwin files compile only on their OSes -- CI builds
+  linux/amd64 + a windows/amd64 cross-compile but only ever RUNS the
+  linux binary, and darwin is never compiled at all -- so keep them
+  boring and conventional.
 - `wails.json` -- Wails CLI project config (app name, frontend
   install/build commands) read by `wails dev`/`wails build` only; the
   no-CLI go-toolchain path does not use it.
@@ -469,16 +471,28 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   a PR can merge to master. Do not rename it.
 - The job: checkout -> apt install gtk/webkit/x11 dev packages plus
   xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run build`
-  in `frontend/` -> `wow-look-at-my/go-toolchain@v1` with
-  `targets: linux/amd64`, `cgo: 'true'`, `autorelease: 'false'`,
-  `timeout: '20'`, and env
+  in `frontend/` -> `echo gomemlimit_gen.go >> .git/info/exclude` (the
+  transient guard go-toolchain injects would otherwise stamp every
+  published binary vcs.modified/+dirty) -> `wow-look-at-my/go-toolchain@v1`
+  with `targets: linux/amd64,windows/amd64`, `cgo: 'true'`,
+  `autorelease: 'true'`, `timeout: '20'`, and env
   `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> screenshot
   capture -> `actions/upload-artifact@v4`.
-- `targets: linux/amd64` because the default target matrix
-  (linux,darwin,windows x amd64,arm64) cannot cross-compile a cgo/webkit
-  app from a Linux runner.
-- `autorelease: 'false'` because buildhost publishing needs the
-  `actions: read` permission this workflow does not grant.
+- Targets: linux/amd64 is the only cgo (gtk/webkit) target;
+  windows/amd64 cross-compiles pure-Go from the Linux runner (Wails
+  uses WebView2 on windows, and Go auto-disables cgo for non-host
+  targets) but is never RUN in CI. darwin needs cgo against the Apple
+  SDK, so it cannot be built here -- never add darwin targets.
+- `autorelease: 'true'` publishes the `build/` binaries (built with the
+  full GOFLAGS tags, so they are runnable) to buildhost (pazer.build)
+  on EVERY branch push, with the git branch recorded: project
+  `competent-search-thing` (the app) plus `competent-search-thing/server`
+  (the color-http example server, per the multi-binary naming
+  convention). Versions auto-increment; the bare `latest` download URL
+  resolves the repo's default branch (master). Requires the
+  `actions: read` permission (to fetch the `go-build` run artifact) on
+  top of `id-token: write` (OIDC auth to buildhost) -- both are in the
+  workflow's permissions block. Install commands: README "Install".
 - `frontend/package-lock.json` is committed (required by `npm ci`).
 
 ## CI screenshots

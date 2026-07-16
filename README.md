@@ -19,9 +19,58 @@ against the deterministic fixture tree CI uses (see `.github/scripts/`).
 CI re-captures three screenshots like this on every push and uploads
 them as run artifacts for visual comparison.
 
+## Install
+
+Every CI run publishes the built binaries to
+[buildhost](https://github.com/wow-look-at-my/buildhost) (the org's
+package registry at pazer.build). Downloads are anonymous; `latest`
+(the URL without a version) serves the newest build of the default
+branch (master).
+
+### Linux (x86_64)
+
+```
+curl -fL --compressed "https://dl.pazer.build/competent-search-thing?os=linux&arch=amd64" \
+  -o competent-search-thing && chmod +x competent-search-thing
+```
+
+Running it needs the GTK 3 and WebKitGTK 4.1 runtime libraries (the
+same stacks the build links against):
+
+```
+sudo apt-get install -y libgtk-3-0t64 libwebkit2gtk-4.1-0
+```
+
+(Ubuntu 24.04 / Debian 13 package names; on older distros the gtk
+package is `libgtk-3-0`.) The global hotkey needs an X11 session --
+see [Known caveats](#known-caveats) below.
+
+### Windows (x86_64)
+
+```
+curl -fL --compressed "https://dl.pazer.build/competent-search-thing?os=windows&arch=amd64" -o competent-search-thing.exe
+```
+
+The Windows binary is cross-compiled (pure Go, WebView2-based) and
+uploaded by the same Linux CI run, but CI only *runs* the Linux build
+(the screenshot tests) -- treat Windows builds as best-effort. WebView2
+is preinstalled on Windows 11 and current Windows 10.
+
+### Not published
+
+- **macOS**: the darwin build needs cgo against the Apple SDK, which
+  CI's Linux runner does not have. Build from source on a Mac instead
+  (see [Building](#building)).
+
+Other URL forms: `?v=N` pins a release permanently, `?branch=<name>`
+follows a branch (URL-encode slashes), and `&fmt=tar.gz`/`zip`
+repackages on the fly. See <https://pazer.build/llms.txt> for the full
+download and package-manager (APT, Homebrew, npm, OCI) reference.
+
 ## Status
 
-Feature-complete for v1 (release packaging still pending):
+Feature-complete for v1; every CI run publishes installable builds to
+buildhost (see [Install](#install)):
 
 - [x] Window shell (frameless, always-on-top, hidden until summoned) + CI
 - [x] Index engine: compact in-memory store, parallel walker, parallel
@@ -842,13 +891,14 @@ container load; the shape holds.
   window's current screen and cannot target another display); it falls
   back to centering. The global hotkey needs the app to be trusted
   under System Settings > Privacy & Security > Accessibility.
-  CI builds linux/amd64 only, so the macOS code is never compiled or
-  tested in CI (a cgo Cocoa target cannot be cross-compiled from the
-  Linux runner); treat it as best-effort until exercised on a real Mac.
+  The macOS code is never compiled or tested in CI (a cgo Cocoa
+  target cannot be cross-compiled from the Linux runner); treat it as
+  best-effort until exercised on a real Mac.
 - **Windows**: hotkey via RegisterHotKey and monitors via user32; the
-  bar positions against the current monitor's work area. Like macOS,
-  the Windows code is never compiled or tested in CI (linux/amd64
-  only).
+  bar positions against the current monitor's work area. CI
+  cross-compiles and publishes the Windows binary (pure Go) but never
+  runs it -- only the Linux build is exercised (the screenshot tests);
+  treat it as best-effort until exercised on a real Windows machine.
 - **Watch limits / event overflow**: every live indexed directory
   holds one fsnotify watch (inotify on Linux), so very large trees can
   exhaust `fs.inotify.max_user_watches`. Degradation is graceful and

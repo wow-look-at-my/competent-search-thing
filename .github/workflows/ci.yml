@@ -6,6 +6,9 @@ on:
 permissions:
   id-token: write
   contents: read
+  # actions: read lets go-toolchain's autorelease step download the go-build
+  # run artifact it publishes to buildhost.
+  actions: read
 
 jobs:
   all-builds:
@@ -20,6 +23,13 @@ jobs:
         working-directory: frontend
         run: npm ci && npm run build
 
+      - name: Keep the version stamp clean for published binaries
+        # go-toolchain injects a transient gomemlimit_gen.go during the build;
+        # as an untracked file it would make Go's VCS stamping mark every
+        # published binary vcs.modified (+dirty). .git/info/exclude is local
+        # to the checkout and never committed.
+        run: echo gomemlimit_gen.go >> .git/info/exclude
+
       - uses: wow-look-at-my/go-toolchain@v1
         env:
           # desktop,production are Wails v2's manual-build tags: without them
@@ -27,9 +37,16 @@ jobs:
           # step below actually runs the built app.
           GOFLAGS: "-tags=webkit2_41,desktop,production"
         with:
-          targets: linux/amd64
+          # linux/amd64 is the only cgo (gtk/webkit) target; windows/amd64
+          # cross-compiles pure-Go from this runner (Wails uses WebView2 on
+          # windows, and Go auto-disables cgo for non-host targets). darwin
+          # needs cgo against the Apple SDK, so it cannot be built here.
+          targets: linux/amd64,windows/amd64
           cgo: 'true'
-          autorelease: 'false'
+          # Publish the binaries built above (with the GOFLAGS tags) to
+          # buildhost on every push: project competent-search-thing (the app)
+          # plus competent-search-thing/server (the color-http example).
+          autorelease: 'true'
           timeout: '20'
 
       - name: Capture UI screenshots under Xvfb
