@@ -2,12 +2,15 @@ package app
 
 import (
 	"context"
+	"log"
+	"os"
 	goruntime "runtime"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
+	"github.com/wow-look-at-my/competent-search-thing/internal/gsettings"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform/native"
 )
@@ -46,32 +49,51 @@ func defaultRuntimeSeams() runtimeSeams {
 }
 
 // platformSeams carries the platform-layer hooks (hotkey, displays,
-// open/reveal/run, app-context source) plus the ambient bits (GOOS,
-// clock) tests pin down.
+// open/reveal/run, app-context source, the Wayland hotkey backends)
+// plus the ambient bits (GOOS, clock, env, executable path, session
+// detection) tests pin down.
 type platformSeams struct {
-	goos        string
-	now         func() time.Time
-	startHotkey func(hk platform.Hotkey, onDown func()) (stop func(), err error)
-	cursorInfo  func() (cx, cy int, ds []platform.Display, ok bool)
-	moveWindow  func(x, y int) bool
-	open        func(path string) error
-	reveal      func(path string) error
-	run         func(argv []string) error
-	appSource   appctx.Source
+	goos          string
+	now           func() time.Time
+	getenv        func(string) string
+	executable    func() (string, error)
+	detectSession func() platform.Session
+	startHotkey   func(hk platform.Hotkey, onDown func()) (stop func(), err error)
+	// startPortal registers the summon shortcut through the XDG portal
+	// (may block on interactive approval; ctx aborts); production is
+	// startPortalShortcut in hotkey.go.
+	startPortal func(ctx context.Context, hk platform.Hotkey, onActivated func()) (portalHandle, error)
+	// ensureGnomeBinding installs/refreshes the GNOME custom
+	// keybinding running command; production wraps
+	// gsettings.EnsureBinding with the real gsettings CLI runner.
+	ensureGnomeBinding func(ctx context.Context, hk platform.Hotkey, command string) (gsettings.Applied, error)
+	cursorInfo         func() (cx, cy int, ds []platform.Display, ok bool)
+	moveWindow         func(x, y int) bool
+	open               func(path string) error
+	reveal             func(path string) error
+	run                func(argv []string) error
+	appSource          appctx.Source
 }
 
 func defaultPlatformSeams() platformSeams {
 	launcher := platform.NewLauncher()
 	return platformSeams{
-		goos:        goruntime.GOOS,
-		now:         time.Now,
-		startHotkey: native.StartHotkey,
-		cursorInfo:  native.CursorDisplays,
-		moveWindow:  native.MoveWindow,
-		open:        launcher.Open,
-		reveal:      launcher.Reveal,
-		run:         launcher.Run,
-		appSource:   native.AppSource(),
+		goos:          goruntime.GOOS,
+		now:           time.Now,
+		getenv:        os.Getenv,
+		executable:    os.Executable,
+		detectSession: func() platform.Session { return platform.DetectSession(os.Getenv) },
+		startHotkey:   native.StartHotkey,
+		startPortal:   startPortalShortcut,
+		ensureGnomeBinding: func(ctx context.Context, hk platform.Hotkey, command string) (gsettings.Applied, error) {
+			return gsettings.EnsureBinding(ctx, gsettings.Run, hk, command)
+		},
+		cursorInfo: native.CursorDisplays,
+		moveWindow: native.MoveWindow,
+		open:       launcher.Open,
+		reveal:     launcher.Reveal,
+		run:        launcher.Run,
+		appSource:  native.AppSource(),
 	}
 }
 
@@ -169,13 +191,22 @@ func (a *App) showIfHidden() {
 // showOnCursorDisplay positions the bar on the display the cursor is
 // on (falling back to centering when the platform cannot say), marks
 // it visible, shows it, and tells the frontend so it can focus the
-// input. A no-op before Startup.
+// input. A no-op before Startup. On a Wayland session the
+// cursor-display positioning is skipped entirely: the app is a native
+// Wayland client there, gtk_window_move and friends are silent no-ops,
+// and the compositor owns placement -- centering is requested
+// best-effort and the situation is logged once.
 func (a *App) showOnCursorDisplay() {
 	ctx := a.runtimeCtx()
 	if ctx == nil {
 		return
 	}
-	if !a.positionOnCursorDisplay(ctx) {
+	if a.session().Kind == platform.SessionWayland {
+		a.waylandPlaceOnce.Do(func() {
+			log.Printf("hotkey: wayland session: window placement is decided by the compositor")
+		})
+		a.rt.center(ctx)
+	} else if !a.positionOnCursorDisplay(ctx) {
 		a.rt.center(ctx)
 	}
 	a.mu.Lock()

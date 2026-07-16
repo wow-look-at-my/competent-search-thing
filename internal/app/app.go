@@ -84,11 +84,18 @@ type App struct {
 	buildOnce sync.Once
 	hkOnce    sync.Once
 
-	mu           sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, lastThemeErr, domReady, pendingShow
+	mu           sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, lastThemeErr, domReady, pendingShow
 	ctx          context.Context
 	visible      bool
 	lastToggle   time.Time
 	hotkeyStop   func()
+	// hotkeyCancel aborts the async portal/gsettings backend chain;
+	// portalHK is the active portal shortcut (nil otherwise);
+	// hotkeyDesc describes the effective summon trigger (see
+	// hotkey.go).
+	hotkeyCancel context.CancelFunc
+	portalHK     portalHandle
+	hotkeyDesc   string
 	lastThemeErr string
 	// domReady flips when the Wails OnDomReady hook fires; before
 	// that the frontend cannot render, so summons (ShowOnStartup, an
@@ -96,6 +103,13 @@ type App struct {
 	// pendingShow and executed once by DomReady.
 	domReady    bool
 	pendingShow bool
+
+	// sessionOnce caches desktop session detection (hotkey backend
+	// selection and the Wayland show path both consume it);
+	// waylandPlaceOnce guards the one-time compositor-placement log.
+	sessionOnce      sync.Once
+	sessionVal       platform.Session
+	waylandPlaceOnce sync.Once
 
 	themeOnce    sync.Once
 	watchMu      sync.Mutex
@@ -139,7 +153,8 @@ func New(m *index.Manager, opt Options) *App {
 }
 
 // Startup is wired to the Wails OnStartup hook: it saves the runtime
-// context, registers the global hotkey (best effort), wires the
+// context, brings up the global hotkey through the session's backend
+// plan (best effort; see hotkey.go), wires the
 // single-instance IPC handlers (when Options.IPC is set), brings the
 // plugin layer up (app-context cache + registry; cheap file IO),
 // starts theme hot reload (best effort, see theme.go), and kicks off
@@ -190,31 +205,6 @@ func (a *App) DomReady(ctx context.Context) {
 		a.captureAppContext()
 		a.showOnCursorDisplay()
 	}
-}
-
-// registerHotkey parses the configured hotkey and starts the OS
-// listener with toggle as the callback. Any failure -- bad spec, no X
-// server, combination taken -- is logged once and the app runs on
-// without a global hotkey.
-func (a *App) registerHotkey() {
-	spec := strings.TrimSpace(a.opt.Hotkey)
-	if spec == "" || a.plat.startHotkey == nil {
-		return
-	}
-	hk, err := platform.ParseHotkey(spec)
-	if err != nil {
-		log.Printf("hotkey: %v (running without a global hotkey)", err)
-		return
-	}
-	stop, err := a.plat.startHotkey(hk, a.toggle)
-	if err != nil {
-		log.Printf("hotkey: registering %s failed: %v (running without a global hotkey)", hk, err)
-		return
-	}
-	log.Printf("hotkey: %s summons the searchbar", hk)
-	a.mu.Lock()
-	a.hotkeyStop = stop
-	a.mu.Unlock()
 }
 
 // buildIndex runs the full disk walk -- forwarding progress to the log
@@ -285,13 +275,15 @@ func (a *App) emitDegraded(s watch.Stats) {
 
 // Shutdown is wired to the Wails OnShutdown hook. It closes the
 // single-instance IPC server first (no new summons during teardown;
-// closing also unlinks the socket), releases the global hotkey,
-// cancels the in-flight plugin generation and closes the registry,
-// and stops the rescanner first (it may be mid-rescan and calls back
-// into the watcher to resync watches), then the watcher, then the
-// theme hot-reload watcher. Safe to call at any point, even before
-// the watch layer came up; a still-running initial build then skips
-// starting it.
+// closing also unlinks the socket), releases the global hotkey
+// (stopping the native listener, aborting a still-running
+// portal/gsettings backend chain, and closing an active portal
+// shortcut), cancels the in-flight plugin generation and closes the
+// registry, and stops the rescanner first (it may be mid-rescan and
+// calls back into the watcher to resync watches), then the watcher,
+// then the theme hot-reload watcher. Safe to call at any point, even
+// before the watch layer came up; a still-running initial build then
+// skips starting it.
 func (a *App) Shutdown(_ context.Context) {
 	if a.opt.IPC != nil {
 		if err := a.opt.IPC.Close(); err != nil {
@@ -302,9 +294,21 @@ func (a *App) Shutdown(_ context.Context) {
 	a.mu.Lock()
 	hkStop := a.hotkeyStop
 	a.hotkeyStop = nil
+	hkCancel := a.hotkeyCancel
+	a.hotkeyCancel = nil
+	ph := a.portalHK
+	a.portalHK = nil
 	a.mu.Unlock()
+	if hkCancel != nil {
+		hkCancel()
+	}
 	if hkStop != nil {
 		hkStop()
+	}
+	if ph != nil {
+		if err := ph.Close(); err != nil {
+			log.Printf("hotkey: closing the portal shortcut: %v", err)
+		}
 	}
 
 	a.pluginMu.Lock()

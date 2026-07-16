@@ -16,8 +16,34 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/DomReady/
   Shutdown/QueryPlugins/RunPluginAction). Bound methods appear in JS as
   `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
-  saves the runtime ctx, registers the global hotkey (once; parse or
-  register failure = log once, run on without it), wires the
+  saves the runtime ctx, brings up the global hotkey once through a
+  session-dependent backend plan (hotkey.go: empty spec = skip, parse
+  failure = log once + run on; `hotkeyPlan(session, override)` picks
+  x11 session -> [x11], wayland+GNOME -> [portal, gsettings], wayland
+  other -> [portal, manual], unknown session (headless CI, windows,
+  darwin) -> [x11]; the `COMPETENT_SEARCH_HOTKEY_BACKEND` env var
+  (auto/x11/portal/gsettings/none, case-insensitive) forces exactly
+  one backend -- none = nothing, IPC still summons -- and an unknown
+  value warns once and acts as auto. The x11 backend is the
+  pre-Wayland native path, behavior-identical (plat.startHotkey with
+  toggle, "hotkey: %s summons the searchbar"); portal+gsettings run
+  sequentially on ONE goroutine (portal Register can block minutes on
+  the interactive approval) under a hotkeyCtx cancelled in Shutdown:
+  portal success stores the handle + logs the bound trigger,
+  ErrNoPortal/ErrNoGlobalShortcuts logs one line and falls through,
+  ErrDenied STOPS the chain (never write a keybinding after the user
+  said no), the gsettings backend calls
+  gsettings.EnsureBinding(hotkeyCtx, run, hk,
+  gsettings.ToggleCommand(executable seam)) and logs EXACTLY ONE loud
+  summary ("hotkey: GNOME keybinding active: <accel>", with
+  "(requested <accel> is taken by GNOME; using fallback)" when it
+  fell back, or "hotkey: using existing GNOME keybinding <accel>
+  (edit in GNOME Settings > Keyboard)"), and a plan that runs dry
+  logs the manual bind-a-key-to-'competent-search-thing toggle'
+  instructions. The effective summon description (hk.String(), the
+  portal's bound-trigger description, or the installed accelerator)
+  is stored on the App (a.hotkeyDesc, read via hotkeyDescription())
+  for future UI use), wires the
   single-instance IPC handlers when Options.IPC is set (Toggle =
   toggle, Show = showIfHidden, Hide = Hide; Options.ShowOnStartup
   latches a pending show), brings the plugin
@@ -34,7 +60,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   goroutine; when the walk finishes, `startWatch` brings up a
   `watch.Watcher` + `watch.Rescanner` pair; `Shutdown` (wired to
   Wails OnShutdown) closes the IPC server first (when present),
-  releases the hotkey, cancels the in-flight plugin
+  releases the hotkey (native stop func, cancel of the async
+  portal/gsettings chain, idempotent+nil-safe close of the active
+  portal handle -- a handle the chain stores after Shutdown ran is
+  closed by the chain itself), cancels the in-flight plugin
   generation + Close()s the registry, and stops rescanner+watcher
   plus the theme watcher cleanly, also flagging a still-running
   initial build to skip starting them. Summons that arrive before
@@ -60,7 +89,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   WindowSetPosition is RELATIVE to the window's current monitor -- and
   to the WORK AREA origin on Windows -- while WindowGetPosition is
   absolute; verified in the v2.13.0 sources), any failure -> WindowCenter;
-  then WindowShow + "app:shown". `QueryPlugins(query string, gen
+  then WindowShow + "app:shown". EXCEPTION: on a detected Wayland
+  session (platform.DetectSession via the detectSession seam, cached
+  once per process) the whole cursor-display flow is skipped --
+  Wails is a native Wayland client there and gtk_window_move /
+  keep-above are silent no-ops, the compositor owns placement -- so
+  the show path is WindowCenter (best-effort) + WindowShow, with a
+  once-per-run "placement is decided by the compositor" log; the
+  X11/unknown path is untouched (CI's Xvfb has DISPLAY set and no
+  XDG_SESSION_TYPE, which detects as x11). `QueryPlugins(query string, gen
   int) plugin.TargetInfo` stores gen (atomic), cancels the previous
   generation's context (aborting plugin subprocesses/HTTP/debounces;
   empty query or nil registry = cancel only, zero TargetInfo),
@@ -85,11 +122,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   {plugin,name,gen,results}). ALL Wails
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
-  incl. run/appSource, in window.go; defaults in New, plus the
-  `newRegistry` seam); unit tests MUST replace them (see newTestApp,
-  which also nils appSource and stubs newRegistry so no config or
-  X11 IO happens) -- real runtime funcs abort the process without a
-  Wails context. Open/Reveal call the platform launcher and hide the
+  incl. run/appSource plus getenv/executable/detectSession/
+  startPortal/ensureGnomeBinding, in window.go; defaults in New, plus
+  the `newRegistry` seam); unit tests MUST replace them (see
+  newTestApp, which also nils appSource, stubs newRegistry so no
+  config or X11 IO happens, pins getenv to "" and detectSession to
+  the unknown session -- keeping every test on the native
+  hotkey/positioning path unless it overrides detectSession -- and
+  makes startPortal/ensureGnomeBinding recording fakes) -- real
+  runtime funcs abort the process without a Wails context. Open/Reveal call the platform launcher and hide the
   bar on success. `app.Result` is a type alias of `index.Result`
   (the JSON tags path/name/isDir live in internal/index). The app
   `Version` constant lives in plugins.go. Unit-tested.
@@ -337,10 +378,42 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   never closes the conn. Tested headlessly against an in-package fake
   portal service on a throwaway `dbus-daemon --session` per test
   (spawned and killed strictly by PID; t.Skip when the binary is
-  absent -- present in CI's ubuntu-24.04). NOTE: until something
-  reachable from main imports this package, go-toolchain's coverage
-  report/gate skips it (reachability filter); measured ~90% via the
-  raw profile.
+  absent -- present in CI's ubuntu-24.04). Consumed by internal/app's
+  hotkey.go (startPortalShortcut: Dial -> Available -> TriggerString
+  -> Register with ShortcutID "toggle", which must stay stable across
+  runs -- the portal keys remembered approvals on it).
+- `internal/gsettings` -- the GNOME custom-keybinding fallback for
+  Wayland GNOME sessions whose portal lacks GlobalShortcuts (GNOME <
+  48, e.g. Ubuntu 24.04/GNOME 46): pure logic over an injectable
+  `Runner` seam (production `Run` execs the gsettings CLI, no shell,
+  3s/call timeout, stderr folded into errors; unit tests script argv
+  -> output). `ConvertHotkey` maps platform.Hotkey to GTK accelerator
+  syntax (<Control><Alt>space; keys per gdk_keyval_from_name: space,
+  lowercase letters/digits, F1, Return, Escape, Tab, Up/Down/...);
+  accelerator normalization treats <Primary>/<Ctrl>/<Ctl> as control,
+  ignores modifier order and case (conflict detection).
+  `EnsureBinding(ctx, run, hk, command)` -> `Applied{Binding,
+  Requested, FellBack, Changed, Existing}`: reads the media-keys
+  custom-keybindings list; if the app's entry (fixed path ...
+  /custom-keybindings/competent-search-thing/) exists it is STICKY --
+  the binding is never rewritten (user edits in GNOME Settings
+  survive; Existing=true, zero writes) and only a stale command
+  (moved binary) is refreshed; a fresh entry gets the first free
+  candidate of [configured, <Control><Alt>space, <Super>space]
+  (normalization-deduped) checked against every accelerator in the
+  wm/mutter/mutter.wayland/shell/media-keys schemas
+  (`list-recursively`, arrays-of-strings only) plus every OTHER
+  custom entry's binding (capped 64) -- because mutter silently
+  refuses conflicting grabs and GNOME 46 defaults take BOTH Alt+Space
+  (activate-window-menu) and Super+Space (switch-input-source); all
+  candidates taken = sentinel ErrAllTaken, nothing written. Writes
+  are GVariant text (single-quoted, parsed+serialized by tiny
+  in-package helpers, incl. the "@as []" empty form); the scan
+  tolerates missing schemas/entries but list/entry read and all write
+  failures are fatal. `ToggleCommand(exe)` builds the GLib-shell-safe
+  "<exe> toggle" command. Exhaustively unit-tested against scripted
+  runners (exact argv sequences, idempotent second run = zero sets)
+  plus a LookPath-guarded smoke test of the real CLI.
 - `internal/platform` -- the PURE half of the platform layer, fully
   unit-tested headlessly: `ParseHotkey` ("alt+space", "ctrl+shift+k";
   modifiers ctrl/control, shift, alt/option, super/win/cmd/meta; keys
