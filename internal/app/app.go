@@ -84,11 +84,11 @@ type App struct {
 	buildOnce sync.Once
 	hkOnce    sync.Once
 
-	mu           sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, lastThemeErr, domReady, pendingShow
-	ctx          context.Context
-	visible      bool
-	lastToggle   time.Time
-	hotkeyStop   func()
+	mu         sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, lastThemeErr, domReady, pendingShow
+	ctx        context.Context
+	visible    bool
+	lastToggle time.Time
+	hotkeyStop func()
 	// hotkeyCancel aborts the async portal/gsettings backend chain;
 	// portalHK is the active portal shortcut (nil otherwise);
 	// hotkeyDesc describes the effective summon trigger (see
