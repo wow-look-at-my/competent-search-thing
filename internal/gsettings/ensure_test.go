@@ -87,10 +87,10 @@ func (s *scriptedRunner) setCalls() [][]string {
 func scriptFreshWorld(s *scriptedRunner, overrides map[string]string) {
 	s.on("@as []", "get", mediaKeysSchema, customListKey)
 	listings := map[string]string{
-		"org.gnome.desktop.wm.keybindings":         gnomeDefaultWM,
-		"org.gnome.mutter.keybindings":             "",
-		"org.gnome.mutter.wayland.keybindings":     "",
-		"org.gnome.shell.keybindings":              "",
+		"org.gnome.desktop.wm.keybindings":             gnomeDefaultWM,
+		"org.gnome.mutter.keybindings":                 "",
+		"org.gnome.mutter.wayland.keybindings":         "",
+		"org.gnome.shell.keybindings":                  "",
 		"org.gnome.settings-daemon.plugins.media-keys": gnomeDefaultMediaKeys,
 	}
 	for schema, listing := range overrides {
