@@ -58,6 +58,16 @@ func backendEnv(value string) func(string) string {
 	}
 }
 
+// verifiedApplied fills the read-back fields the way a healthy dconf
+// world would: everything on disk matches what was written.
+func verifiedApplied(a gsettings.Applied, command string) gsettings.Applied {
+	a.InList = true
+	a.DiskBinding = a.Binding
+	a.DiskCommand = command
+	a.Verified = true
+	return a
+}
+
 func TestHotkeyPlan(t *testing.T) {
 	x11 := platform.Session{Kind: platform.SessionX11, Desktop: "ubuntu:GNOME"}
 	unknown := platform.Session{}
@@ -169,16 +179,6 @@ func TestPortalUnavailableFallsBackToGnomeBinding(t *testing.T) {
 	require.True(t, r.has("startPortal"), "the portal was tried first")
 	require.True(t, r.has("mediaKeysDaemon"), "the daemon self-check ran")
 	require.False(t, r.has("startHotkey"))
-}
-
-// verifiedApplied fills the read-back fields the way a healthy dconf
-// world would: everything on disk matches what was written.
-func verifiedApplied(a gsettings.Applied, command string) gsettings.Applied {
-	a.InList = true
-	a.DiskBinding = a.Binding
-	a.DiskCommand = command
-	a.Verified = true
-	return a
 }
 
 func TestPortalDeniedStopsWithoutGnomeBinding(t *testing.T) {
