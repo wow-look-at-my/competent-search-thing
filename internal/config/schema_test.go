@@ -70,6 +70,7 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 			Sigils:  []string{"!", "/", "@"},
 			Aliases: map[string]string{"math": "calc"},
 		},
+		Tray: TrayConfig{Disabled: true},
 	}
 	data, err = json.Marshal(full)
 	require.NoError(t, err)
@@ -92,6 +93,8 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"bad plugin entry id":    `{"plugins":{"entries":{"Bad ID":{}}}}`,
 		"non-object settings":    `{"plugins":{"entries":{"calc":{"settings":"loud"}}}}`,
 		"unknown top-level typo": `{"maxResluts":50}`,
+		"tray disabled typo":     `{"tray":{"disabld":true}}`,
+		"non-bool tray disabled": `{"tray":{"disabled":"yes"}}`,
 	}
 	for name, doc := range cases {
 		require.Error(t, validateConfigJSON(sch, []byte(doc)), "case %q must fail validation", name)
@@ -161,4 +164,6 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json $defs/pluginEntry out of sync with PluginEntry")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(BangsConfig{})), configSchemaProperties(t, "bangsConfig"),
 		"config.schema.json $defs/bangsConfig out of sync with BangsConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(TrayConfig{})), configSchemaProperties(t, "trayConfig"),
+		"config.schema.json $defs/trayConfig out of sync with TrayConfig")
 }

@@ -45,7 +45,8 @@
       "description": "The UI theme: a builtin ('dark', 'light') or the name of a user theme file at <configDir>/themes/<name>.json (see theme.schema.json). An unknown or invalid theme is logged and falls back to 'dark'. An empty value means the default."
     },
     "plugins": { "$ref": "#/$defs/pluginsConfig" },
-    "bangs": { "$ref": "#/$defs/bangsConfig" }
+    "bangs": { "$ref": "#/$defs/bangsConfig" },
+    "tray": { "$ref": "#/$defs/trayConfig" }
   },
   "additionalProperties": false,
   "$defs": {
@@ -81,6 +82,18 @@
         "settings": {
           "type": "object",
           "description": "Opaque JSON object forwarded verbatim to this plugin in every request (its 'settings' field), so plugins can be configured without editing their manifest."
+        }
+      },
+      "additionalProperties": false
+    },
+    "trayConfig": {
+      "title": "Tray icon configuration",
+      "type": "object",
+      "properties": {
+        "disabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "true turns the tray icon (StatusNotifierItem) off. The default keeps it on; sessions without an SNI host (no AppIndicator extension, headless) just never show it."
         }
       },
       "additionalProperties": false
@@ -134,7 +147,8 @@
       "bangs": {
         "sigils": ["!", "/", "@"],
         "aliases": { "math": "calc" }
-      }
+      },
+      "tray": { "disabled": false }
     }
   ]
 }

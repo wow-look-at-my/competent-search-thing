@@ -270,17 +270,16 @@ func (a *App) RunPluginAction(pluginID string, action plugin.Action) error {
 }
 
 // runBuiltin executes one app-level builtin command (the actions
-// behind the !rescan/!reload/!config/!version/!quit bangs).
+// behind the !rescan/!reload/!config/!version/!quit bangs). The bang
+// flow ends with the bar hidden; the underlying behaviors live in
+// requestRescan/openConfigFile so the tray menu (which has no bar
+// interaction to end) can share them without the hide.
 func (a *App) runBuiltin(value string) error {
 	switch value {
 	case builtinRescan:
-		a.watchMu.Lock()
-		r := a.rescanner
-		a.watchMu.Unlock()
-		if r == nil {
-			return errors.New("rescan: the index is still building; try again when it finishes")
+		if err := a.requestRescan(); err != nil {
+			return err
 		}
-		r.Request()
 		a.Hide()
 		return nil
 	case builtinReload:
@@ -288,11 +287,11 @@ func (a *App) runBuiltin(value string) error {
 		a.Hide()
 		return nil
 	case builtinConfig:
-		p, err := config.Path()
-		if err != nil {
+		if err := a.openConfigFile(); err != nil {
 			return err
 		}
-		return a.Open(p)
+		a.Hide()
+		return nil
 	case builtinVersion:
 		return a.clipboardCopy(Version)
 	case builtinQuit:
@@ -305,6 +304,31 @@ func (a *App) runBuiltin(value string) error {
 	default:
 		return fmt.Errorf("unknown builtin command %q", value)
 	}
+}
+
+// requestRescan asks the live-update layer for a full rebuild; while
+// the initial index build is still running there is no rescanner yet,
+// which surfaces as a friendly error.
+func (a *App) requestRescan() error {
+	a.watchMu.Lock()
+	r := a.rescanner
+	a.watchMu.Unlock()
+	if r == nil {
+		return errors.New("rescan: the index is still building; try again when it finishes")
+	}
+	r.Request()
+	return nil
+}
+
+// openConfigFile opens config.json with the operating system's
+// default handler, leaving bar visibility alone (callers decide
+// whether their flow ends with a hide).
+func (a *App) openConfigFile() error {
+	p, err := config.Path()
+	if err != nil {
+		return err
+	}
+	return a.plat.open(p)
 }
 
 // clipboardCopy puts text on the system clipboard via the Wails

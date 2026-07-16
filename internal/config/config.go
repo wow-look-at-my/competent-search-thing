@@ -53,6 +53,8 @@ type Config struct {
 	Plugins PluginsConfig `json:"plugins"`
 	// Bangs configures bang parsing (sigils and aliases).
 	Bangs BangsConfig `json:"bangs"`
+	// Tray configures the tray icon (see internal/tray).
+	Tray TrayConfig `json:"tray"`
 }
 
 // PluginsConfig configures the plugin system. The zero value means
@@ -81,6 +83,15 @@ type BangsConfig struct {
 	Sigils []string `json:"sigils"`
 	// Aliases map extra names onto registered bangs.
 	Aliases map[string]string `json:"aliases"`
+}
+
+// TrayConfig configures the tray icon (StatusNotifierItem). The zero
+// value -- the default -- means enabled: the icon degrades away by
+// itself on sessions without a StatusNotifierItem host, so only users
+// who actively dislike it need the switch.
+type TrayConfig struct {
+	// Disabled turns the tray icon off.
+	Disabled bool `json:"disabled"`
 }
 
 // DefaultBangSigils returns the default bang sigil set. It returns a
