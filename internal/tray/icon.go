@@ -26,13 +26,13 @@ func iconPixmaps() []pixmap {
 // centered upper-left and a round-capped handle running to the
 // lower-right corner area.
 const (
-	iconGray      = 0xf2  // the light gray all opaque pixels share
-	lensCenter    = 0.40  // lens center x = y
-	lensRadius    = 0.26  // lens outer ring center-line radius
-	strokeWidth   = 0.12  // ring and handle thickness
-	handleEnd     = 0.82  // handle far end x = y
-	minStrokePx   = 1.6   // stroke floor so tiny sizes stay visible
-	aaBand        = 1.0   // antialiasing band, in pixels
+	iconGray    = 0xf2 // the light gray all opaque pixels share
+	lensCenter  = 0.40 // lens center x = y
+	lensRadius  = 0.26 // lens outer ring center-line radius
+	strokeWidth = 0.12 // ring and handle thickness
+	handleEnd   = 0.82 // handle far end x = y
+	minStrokePx = 1.6  // stroke floor so tiny sizes stay visible
+	aaBand      = 1.0  // antialiasing band, in pixels
 )
 
 // drawMagnifier rasterizes the magnifier at size s. Coverage per
