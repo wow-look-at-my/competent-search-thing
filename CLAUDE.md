@@ -191,7 +191,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   os.UserConfigDir(); the `COMPETENT_SEARCH_CONFIG_DIR` env var
   overrides the directory (tests rely on this); `Dir()` exposes that
   directory (the plugins/ and themes/ dirs live inside it, next to
-  config.json). `Load` never crashes: missing file -> defaults
+  config.json). The app's OTHER env knobs live with their owners:
+  `COMPETENT_SEARCH_SOCKET` (internal/ipc, the single-instance socket
+  path) and `COMPETENT_SEARCH_HOTKEY_BACKEND` (internal/app hotkey.go,
+  backend override) -- all three are documented in the README. `Load` never crashes: missing file -> defaults
   written, corrupt file -> defaults + error returned for logging.
   `Normalize` repairs zero values (empty theme -> dark, nil plugin
   entries/bang aliases -> empty maps, empty sigils -> the ! / @
@@ -678,7 +681,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   The binary is `build/competent-search-thing_linux_amd64` in CI
   (go-toolchain matrix naming) or `build/competent-search-thing`
   locally; the script tries both and runs a THROWAWAY COPY, never the
-  build/ artifact itself.
+  build/ artifact itself. The script launches the binary with ZERO
+  CLI arguments -- internal/cli's bare-invocation path must keep
+  booting the GUI or every capture breaks. It leaves
+  COMPETENT_SEARCH_SOCKET unset, so the per-theme app processes share
+  the default socket path: that works because each theme's process is
+  stopped (SIGTERM then SIGKILL) before the next starts and
+  ipc.Listen recovers the stale socket file; a still-running previous
+  instance would make the next launch exit "already running" and fail
+  the capture loudly.
 - To capture locally: `apt-get install -y xvfb xdotool imagemagick
   x11-utils openbox`, build with the full GOFLAGS above, then follow
   the same sequence (the script is directly readable as the runbook).
