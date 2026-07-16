@@ -322,7 +322,7 @@ func TestSyncWatchesReconciles(t *testing.T) {
 	w := newTestWatcher(t, m, f)
 
 	// Before Start, syncWatches is a guarded no-op.
-	w.syncWatches()
+	w.syncWatches(context.Background())
 	require.Equal(t, 0, w.Stats().WatchedDirs)
 
 	startWatcher(t, w)
@@ -336,7 +336,7 @@ func TestSyncWatchesReconciles(t *testing.T) {
 	_, _, err := m.BuildFromDisk(context.Background(), nil)
 	require.NoError(t, err)
 
-	w.syncWatches()
+	w.syncWatches(context.Background())
 	require.True(t, f.has(fresh), "new live dir gains a watch")
 	require.False(t, f.has(paths["vanishes/"]), "vanished dir loses its watch")
 	require.True(t, f.has(paths["stays/"]))
@@ -344,5 +344,5 @@ func TestSyncWatchesReconciles(t *testing.T) {
 
 	// After Stop it degrades to a no-op again.
 	w.Stop()
-	w.syncWatches()
+	w.syncWatches(context.Background())
 }

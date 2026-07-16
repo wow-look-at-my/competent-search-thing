@@ -2,6 +2,7 @@ package watch
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -51,6 +52,10 @@ type Rescanner struct {
 	w   *Watcher
 	opt RescanOptions
 
+	// build runs one full rebuild; a seam over mgr.BuildFromDisk so
+	// tests can hold a rescan in flight deterministically.
+	build func(ctx context.Context) (int, time.Duration, error)
+
 	requests chan struct{}
 	lc       lifecycle
 
@@ -72,6 +77,9 @@ func NewRescanner(m *index.Manager, w *Watcher, opt RescanOptions) *Rescanner {
 		w:        w,
 		opt:      opt,
 		requests: make(chan struct{}, 1),
+	}
+	r.build = func(ctx context.Context) (int, time.Duration, error) {
+		return m.BuildFromDisk(ctx, nil)
 	}
 	if w != nil {
 		w.setRescanRequester(r.Request)
@@ -100,9 +108,13 @@ func (r *Rescanner) Start() error {
 	return nil
 }
 
-// Stop cancels the loop -- aborting any in-flight BuildFromDisk, whose
-// error path keeps the previous store -- and blocks until it exits.
-// Idempotent and safe before Start.
+// Stop cancels the loop and blocks until it exits, which is prompt at
+// every point of the rescan cycle: an in-flight BuildFromDisk aborts
+// mid-walk (its error path discards the partial store and keeps the
+// previous one, logged as "watch: rescan cancelled"), an in-flight
+// watch resync stops between directories, a MinGap wait is cut short,
+// and any still-queued request is dropped. Idempotent and safe before
+// Start.
 func (r *Rescanner) Stop() { r.lc.end() }
 
 // Stats returns a snapshot of the Rescanner's activity.
@@ -160,13 +172,18 @@ func (r *Rescanner) waitMinGap(ctx context.Context) bool {
 }
 
 // rescan runs one full rebuild and, on success, resyncs the watch set
-// to the fresh store's live directories.
+// to the fresh store's live directories. Cancellation (Stop during
+// shutdown) is logged as "watch: rescan cancelled", never as a
+// completion: a walk aborted mid-build discards the partial store and
+// keeps the previous one, and a cancelled resync stops between
+// directories (the rebuilt store is already swapped in at that point,
+// which is fine -- it is complete, only the watch bookkeeping is not).
 func (r *Rescanner) rescan(ctx context.Context) {
 	r.statsMu.Lock()
 	r.stats.Running = true
 	r.statsMu.Unlock()
 
-	count, dur, err := r.mgr.BuildFromDisk(ctx, nil)
+	count, dur, err := r.build(ctx)
 
 	r.statsMu.Lock()
 	r.stats.Running = false
@@ -179,11 +196,20 @@ func (r *Rescanner) rescan(ctx context.Context) {
 	r.statsMu.Unlock()
 
 	if err != nil {
-		log.Printf("watch: rescan failed (previous index kept): %v", err)
+		if errors.Is(err, context.Canceled) {
+			log.Printf("watch: rescan cancelled (previous index kept)")
+		} else {
+			log.Printf("watch: rescan failed (previous index kept): %v", err)
+		}
 		return
 	}
 	if r.w != nil {
-		r.w.syncWatches()
+		r.w.syncWatches(ctx)
+	}
+	if ctx.Err() != nil {
+		log.Printf("watch: rescan cancelled (%d entries rebuilt in %s; watch resync incomplete)",
+			count, dur.Round(time.Millisecond))
+		return
 	}
 	log.Printf("watch: rescan complete: %d entries in %s", count, dur.Round(time.Millisecond))
 }
