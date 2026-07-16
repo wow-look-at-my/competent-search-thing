@@ -1,8 +1,6 @@
 package tray
 
 import (
-	"fmt"
-	"os"
 	"strconv"
 
 	"github.com/godbus/dbus/v5"
@@ -171,7 +169,6 @@ func (h menuHandler) GetLayout(parentID, recursionDepth int32, propertyNames []s
 // GetGroupProperties returns the property maps for ids (empty ids
 // means every node, per the dbusmenu spec); unknown ids are skipped.
 func (h menuHandler) GetGroupProperties(ids []int32, propertyNames []string) ([]idProps, *dbus.Error) {
-	fmt.Fprintf(os.Stderr, "DEBUG GetGroupProperties ids=%v propertyNames=%v\n", ids, propertyNames) // TEMP
 	if len(ids) == 0 {
 		ids = make([]int32, len(h.m.nodes))
 		for i := range h.m.nodes {

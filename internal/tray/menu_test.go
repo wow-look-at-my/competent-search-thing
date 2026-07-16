@@ -124,37 +124,46 @@ func TestGetGroupProperties(t *testing.T) {
 	items, _ := appMenu()
 	rig := startedTray(t, Options{Menu: items})
 
+	// Each reply gets a FRESH destination: dbus.Store reuses a non-nil
+	// dest slice's backing array and merges into existing maps
+	// (storeSliceIntoSlice/storeMapIntoMap), so decoding a second
+	// reply into the same variable would smear the first reply's
+	// properties into it.
+
 	// Explicit ids (what the extension sends), empty filter = all
 	// properties.
-	var got []idProps
+	var all []idProps
 	require.NoError(t, rig.menuObj().Call(
-		menuIface+".GetGroupProperties", 0, []int32{1, 4, 5}, []string{}).Store(&got))
-	require.Len(t, got, 3)
-	require.Equal(t, int32(1), got[0].ID)
-	require.Equal(t, "Show/Hide", propStr(t, got[0].Props, "label"))
-	require.Equal(t, "separator", propStr(t, got[1].Props, "type"))
-	require.Equal(t, "Quit", propStr(t, got[2].Props, "label"))
+		menuIface+".GetGroupProperties", 0, []int32{1, 4, 5}, []string{}).Store(&all))
+	require.Len(t, all, 3)
+	require.Equal(t, int32(1), all[0].ID)
+	require.Equal(t, "Show/Hide", propStr(t, all[0].Props, "label"))
+	require.Equal(t, "separator", propStr(t, all[1].Props, "type"))
+	require.Equal(t, "Quit", propStr(t, all[2].Props, "label"))
 
-	enabled, ok := got[0].Props["enabled"].Value().(bool)
+	enabled, ok := all[0].Props["enabled"].Value().(bool)
 	require.True(t, ok)
 	require.True(t, enabled)
-	visible, ok := got[0].Props["visible"].Value().(bool)
+	visible, ok := all[0].Props["visible"].Value().(bool)
 	require.True(t, ok)
 	require.True(t, visible)
 
 	// A property filter narrows the maps.
+	var filtered []idProps
 	require.NoError(t, rig.menuObj().Call(
-		menuIface+".GetGroupProperties", 0, []int32{1}, []string{"label"}).Store(&got))
-	require.Len(t, got, 1)
-	require.Equal(t, map[string]dbus.Variant{"label": dbus.MakeVariant("Show/Hide")}, got[0].Props)
+		menuIface+".GetGroupProperties", 0, []int32{1}, []string{"label"}).Store(&filtered))
+	require.Len(t, filtered, 1)
+	require.Equal(t, map[string]dbus.Variant{"label": dbus.MakeVariant("Show/Hide")}, filtered[0].Props)
 
 	// Empty ids = every node (dbusmenu spec); unknown ids are skipped.
+	var everyNode []idProps
 	require.NoError(t, rig.menuObj().Call(
-		menuIface+".GetGroupProperties", 0, []int32{}, []string{}).Store(&got))
-	require.Len(t, got, 6, "root + 5 items")
+		menuIface+".GetGroupProperties", 0, []int32{}, []string{}).Store(&everyNode))
+	require.Len(t, everyNode, 6, "root + 5 items")
+	var skipped []idProps
 	require.NoError(t, rig.menuObj().Call(
-		menuIface+".GetGroupProperties", 0, []int32{2, 99}, []string{}).Store(&got))
-	require.Len(t, got, 1)
+		menuIface+".GetGroupProperties", 0, []int32{2, 99}, []string{}).Store(&skipped))
+	require.Len(t, skipped, 1)
 }
 
 func TestGetProperty(t *testing.T) {
