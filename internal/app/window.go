@@ -73,11 +73,11 @@ type platformSeams struct {
 	// the check could not run (no session bus) and is skipped quietly.
 	mediaKeysDaemon func(ctx context.Context) (bool, error)
 	cursorInfo      func() (cx, cy int, ds []platform.Display, ok bool)
-	moveWindow         func(x, y int) bool
-	open               func(path string) error
-	reveal             func(path string) error
-	run                func(argv []string) error
-	appSource          appctx.Source
+	moveWindow      func(x, y int) bool
+	open            func(path string) error
+	reveal          func(path string) error
+	run             func(argv []string) error
+	appSource       appctx.Source
 }
 
 func defaultPlatformSeams() platformSeams {
@@ -95,11 +95,11 @@ func defaultPlatformSeams() platformSeams {
 		},
 		mediaKeysDaemon: gsettings.DaemonRunning,
 		cursorInfo:      native.CursorDisplays,
-		moveWindow: native.MoveWindow,
-		open:       launcher.Open,
-		reveal:     launcher.Reveal,
-		run:        launcher.Run,
-		appSource:  native.AppSource(),
+		moveWindow:      native.MoveWindow,
+		open:            launcher.Open,
+		reveal:          launcher.Reveal,
+		run:             launcher.Run,
+		appSource:       native.AppSource(),
 	}
 }
 
