@@ -1,7 +1,7 @@
 package tray
 
 import (
-	"strconv"
+	"fmt"
 
 	"github.com/godbus/dbus/v5"
 	"github.com/godbus/dbus/v5/prop"
@@ -161,7 +161,7 @@ type menuHandler struct {
 func (h menuHandler) GetLayout(parentID, recursionDepth int32, propertyNames []string) (uint32, layoutNode, *dbus.Error) {
 	n := h.m.node(parentID)
 	if n == nil {
-		return 0, layoutNode{}, dbus.MakeFailedError(errUnknownID(parentID))
+		return 0, layoutNode{}, errUnknownID(parentID)
 	}
 	return layoutRevision, h.m.layout(n, recursionDepth, propertyNames), nil
 }
@@ -190,11 +190,11 @@ func (h menuHandler) GetGroupProperties(ids []int32, propertyNames []string) ([]
 func (h menuHandler) GetProperty(id int32, name string) (dbus.Variant, *dbus.Error) {
 	n := h.m.node(id)
 	if n == nil {
-		return dbus.Variant{}, dbus.MakeFailedError(errUnknownID(id))
+		return dbus.Variant{}, errUnknownID(id)
 	}
 	v, ok := h.m.properties(n, nil)[name]
 	if !ok {
-		return dbus.Variant{}, dbus.MakeFailedError(errUnknownProperty(name))
+		return dbus.Variant{}, dbus.MakeFailedError(fmt.Errorf("no menu item property %q", name))
 	}
 	return v, nil
 }
@@ -205,12 +205,12 @@ func (h menuHandler) GetProperty(id int32, name string) (dbus.Variant, *dbus.Err
 func (h menuHandler) Event(id int32, eventID string, data dbus.Variant, timestamp uint32) *dbus.Error {
 	if eventID != eventClicked {
 		if h.m.node(id) == nil {
-			return dbus.MakeFailedError(errUnknownID(id))
+			return errUnknownID(id)
 		}
 		return nil
 	}
 	if !h.m.click(id) {
-		return dbus.MakeFailedError(errUnknownID(id))
+		return errUnknownID(id)
 	}
 	return nil
 }
@@ -235,7 +235,7 @@ func (h menuHandler) EventGroup(events []menuEvent) ([]int32, *dbus.Error) {
 // before showing id: never, the menu is static.
 func (h menuHandler) AboutToShow(id int32) (bool, *dbus.Error) {
 	if h.m.node(id) == nil {
-		return false, dbus.MakeFailedError(errUnknownID(id))
+		return false, errUnknownID(id)
 	}
 	return false, nil
 }
@@ -254,9 +254,6 @@ func (h menuHandler) AboutToShowGroup(ids []int32) ([]int32, []int32, *dbus.Erro
 
 // menuPropSpec builds the com.canonical.dbusmenu property set.
 func menuPropSpec() map[string]*prop.Prop {
-	ro := func(v interface{}) *prop.Prop {
-		return &prop.Prop{Value: v, Writable: false, Emit: prop.EmitFalse}
-	}
 	return map[string]*prop.Prop{
 		"Version":       ro(dbusmenuVersion),
 		"TextDirection": ro("ltr"),
@@ -265,14 +262,8 @@ func menuPropSpec() map[string]*prop.Prop {
 	}
 }
 
-// errUnknownID and errUnknownProperty give MakeFailedError stable
-// messages.
-type errUnknownID int32
-
-func (e errUnknownID) Error() string {
-	return "no menu item with id " + strconv.Itoa(int(e))
+// errUnknownID builds the D-Bus error every method returns for a menu
+// id that does not exist.
+func errUnknownID(id int32) *dbus.Error {
+	return dbus.MakeFailedError(fmt.Errorf("no menu item with id %d", id))
 }
-
-type errUnknownProperty string
-
-func (e errUnknownProperty) Error() string { return "no menu item property " + string(e) }

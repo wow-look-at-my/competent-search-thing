@@ -28,6 +28,12 @@ type tooltip struct {
 	Text       string
 }
 
+// ro builds a static read-only property (no PropertiesChanged
+// emission; SNI hosts listen to the New* signals instead).
+func ro(v interface{}) *prop.Prop {
+	return &prop.Prop{Value: v, Writable: false, Emit: prop.EmitFalse}
+}
+
 // itemProps wraps the exported property set of the item object so the
 // tooltip text can be refreshed after export.
 type itemProps struct {
@@ -147,9 +153,6 @@ func (t *Tray) export(conn *dbus.Conn) error {
 // would either shadow the drawn icon or spam lookup warnings, while a
 // pixmap renders deterministically on every host.
 func sniPropSpec(id, title, tooltipText string) map[string]*prop.Prop {
-	ro := func(v interface{}) *prop.Prop {
-		return &prop.Prop{Value: v, Writable: false, Emit: prop.EmitFalse}
-	}
 	return map[string]*prop.Prop{
 		"Category":            ro("ApplicationStatus"),
 		"Id":                  ro(id),
