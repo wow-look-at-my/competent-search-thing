@@ -1,8 +1,14 @@
 package watch
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -117,6 +123,118 @@ func TestRescannerLifecycle(t *testing.T) {
 	fresh := NewRescanner(m, nil, RescanOptions{})
 	fresh.Stop() // stop before start is a no-op
 	require.False(t, fresh.Stats().Running)
+}
+
+// TestRescannerStopCancelsInFlightRescan is the fast-quit contract for
+// the rebuild half: Stop during an in-flight build must cancel it and
+// return promptly (the build seam would otherwise hold the rescan for
+// 30s), log the cancellation -- never a completion or a failure -- and
+// leave the previous store serving queries.
+func TestRescannerStopCancelsInFlightRescan(t *testing.T) {
+	m := index.NewManager(nil, nil, 0)
+	require.NoError(t, m.Add("/pre", "keepme.txt", false))
+	r := NewRescanner(m, nil, RescanOptions{MinGap: time.Millisecond})
+
+	inFlight := make(chan struct{})
+	r.build = func(ctx context.Context) (int, time.Duration, error) {
+		close(inFlight)
+		select {
+		case <-ctx.Done():
+			return 0, 0, ctx.Err()
+		case <-time.After(30 * time.Second):
+			return 0, 0, errors.New("cancellation never arrived")
+		}
+	}
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	require.NoError(t, r.Start())
+	r.Request()
+	<-inFlight
+
+	start := time.Now()
+	r.Stop()
+	elapsed := time.Since(start)
+
+	require.Less(t, elapsed, 5*time.Second, "Stop must cancel the in-flight rescan, not wait it out")
+	require.Contains(t, buf.String(), "watch: rescan cancelled", "cancellation is logged as such")
+	require.NotContains(t, buf.String(), "rescan complete")
+	require.NotContains(t, buf.String(), "rescan failed")
+	require.True(t, hasPath(m, "/pre/keepme.txt"), "the previous store still answers queries")
+	s := r.Stats()
+	require.Equal(t, 0, s.Completed, "a cancelled rescan never counts as completed")
+	require.Equal(t, 1, s.Failed, "it counts on the errored side (previous index kept)")
+	require.False(t, s.Running)
+}
+
+// TestRescannerStopDropsQueuedRequest covers the queued half: a request
+// that arrived while a rescan was in flight sits in the 1-slot channel;
+// Stop must drop it, not run it.
+func TestRescannerStopDropsQueuedRequest(t *testing.T) {
+	m := index.NewManager(nil, nil, 0)
+	r := NewRescanner(m, nil, RescanOptions{MinGap: time.Millisecond})
+
+	var builds atomic.Int32
+	inFlight := make(chan struct{})
+	r.build = func(ctx context.Context) (int, time.Duration, error) {
+		if builds.Add(1) == 1 {
+			close(inFlight)
+		}
+		<-ctx.Done()
+		return 0, 0, ctx.Err()
+	}
+
+	require.NoError(t, r.Start())
+	r.Request()
+	<-inFlight
+	r.Request() // queued behind the in-flight rescan
+
+	r.Stop() // Stop returns only after the loop exited: builds is final
+
+	require.Equal(t, int32(1), builds.Load(), "the queued request is dropped, never started")
+}
+
+// TestRescannerStopCancelsWatchResync is the motivating bug end to end:
+// after a successful rebuild the rescan loop resyncs the watch set,
+// which on a huge index means minutes of notifier calls, and Stop used
+// to wait ALL of them out (the 18.6M-file Ctrl+C hang). Here 200
+// out-of-band directories at 20ms per fake watch add would hold Stop
+// for ~4s if cancellation did not interrupt the resync between
+// directories.
+func TestRescannerStopCancelsWatchResync(t *testing.T) {
+	root := t.TempDir()
+	m := buildManager(t, root, nil)
+	f := newFakeNotifier()
+	f.addDelay = 20 * time.Millisecond
+	w := newTestWatcher(t, m, f)
+	r := NewRescanner(m, w, RescanOptions{MinGap: time.Millisecond})
+	startWatcher(t, w)
+	require.NoError(t, r.Start())
+	t.Cleanup(r.Stop)
+
+	var layout []string
+	for i := 0; i < 200; i++ {
+		layout = append(layout, fmt.Sprintf("late%03d/", i))
+	}
+	mkTree(t, root, layout...)
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	r.Request()
+	waitFor(t, func() bool { return w.Stats().WatchedDirs > 1 }, "the post-rebuild resync is in flight")
+
+	start := time.Now()
+	r.Stop()
+	elapsed := time.Since(start)
+
+	require.Less(t, elapsed, 2*time.Second, "Stop interrupts the watch resync between directories")
+	require.Less(t, w.Stats().WatchedDirs, 201, "the resync did not run to completion")
+	require.Contains(t, buf.String(), "watch: rescan cancelled", "an aborted resync is not logged as a completion")
+	require.NotContains(t, buf.String(), "rescan complete")
 }
 
 func TestOverflowDegradationReconcilesEndToEnd(t *testing.T) {

@@ -65,7 +65,7 @@ func (w *Watcher) run(ctx context.Context) {
 // checks the context between adds, so Stop can interrupt a long
 // registration pass at any point.
 func (w *Watcher) addInitialWatches(ctx context.Context) {
-	for _, d := range w.desiredDirs() {
+	for _, d := range w.desiredDirs(ctx) {
 		if ctx.Err() != nil {
 			return
 		}
