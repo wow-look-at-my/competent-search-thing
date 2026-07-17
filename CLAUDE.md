@@ -220,7 +220,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   makes startPortal/ensureGnomeBinding recording fakes) -- real
   runtime funcs abort the process without a Wails context. Open/Reveal call the platform launcher and hide the
   bar on success. `app.Result` is a type alias of `index.Result`
-  (the JSON tags path/name/isDir live in internal/index). The app
+  (the JSON tags path/name/isDir plus the optional hint live in
+  internal/index). Search with an absolute-path query and ZERO index
+  results may return ONE synthetic hint result (hint.go): the path
+  must Clean to abs, exist on disk via the `lstat` platform seam
+  (production os.Lstat; newTestApp pins it to not-exist), and lie
+  OUTSIDE every configured root (pathWithinAny, ported isWithin
+  semantics) -- then Result{path, base, IsDir, Hint: "outside indexed
+  roots -- add <top dir> to roots in config.json"} with <top dir> the
+  first path component; inside-roots existing paths stay hint-free
+  (indexing gap, not scope gap), and the frontend renders the hint in
+  the dim parent-dir slot. Startup also logs each
+  Options.ConfigNotes line once with a "config:" prefix (the roots
+  migration notes wired from cfg.MigrationNotes in main.go). The app
   `Version` constant lives in plugins.go. Unit-tested.
 - `internal/cli` -- the cobra command line, the real process entry
   point (main.go calls cli.Execute(app.Version, runGUI)). Bare
@@ -279,11 +291,28 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   but never descended, permission errors counted not fatal, throttled
   progress callbacks. `Manager`: owns the RWMutex contract (queries
   RLock, mutations Lock); `BuildFromDisk` walks into a fresh store and
-  swaps it in, so queries keep working during rebuilds; `Add`/`Remove`
-  are the watcher-phase entry points. A bare `Store` is NOT
+  swaps it in, so queries keep working during rebuilds -- and first
+  recomputes the mount skip list (mounts.go: `SystemMountSkips` reads
+  /proc/self/mounts, linux-only, nil on any failure; pure
+  `ParseMountSkips` returns mountpoints strictly under the roots whose
+  fstype is kernel-virtual or network -- all fuse/fuse.* skipped,
+  overlay deliberately KEPT (container roots) -- octal escapes
+  decoded, "/" never returned, glob-metachar mountpoints dropped,
+  capped at 256, a mountpoint equal to a configured root never
+  skipped = the index-it-anyway escape hatch), appending it to the
+  excludes as full-path patterns and logging the list; the `mountSkips`
+  package var is the test seam. `Add`/`Remove`
+  are the watcher-phase entry points. `Store.Footprint()` /
+  `Manager.Footprint()` (footprint.go): exact byte accounting of every
+  column/blob (len-based; 16B string headers; lowered-dir bytes
+  counted only where lowering changed content) plus documented
+  approximations for the dirIndex and children maps, and
+  BytesPerEntry -- diagnostics for the whole-filesystem sizing work.
+  A bare `Store` is NOT
   thread-safe. Benchmarks build synthetic 100k/1M-entry stores in
   memory (see bench_test.go) and a ~50k-entry disk tree.
-- `internal/config` -- config.json load/save (roots, excludes, hotkey,
+- `internal/config` -- config.json load/save (roots, rootsVersion,
+  excludes, hotkey,
   rescanIntervalMinutes, maxResults, theme, plugins {disabled, entries
   {<id>: {disabled, settings}}}, bangs {sigils, aliases}, tray
   {disabled}, history {persistDisabled}, window {translucent -- the
@@ -302,8 +331,22 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   inside it, next to config.json). The app's OTHER env knobs live with their owners:
   `COMPETENT_SEARCH_SOCKET` (internal/ipc, the single-instance socket
   path) and `COMPETENT_SEARCH_HOTKEY_BACKEND` (internal/app hotkey.go,
-  backend override) -- all three are documented in the README. `Load` never crashes: missing file -> defaults
-  written, corrupt file -> defaults + error returned for logging.
+  backend override) -- all three are documented in the README. Default
+  roots are the WHOLE FILESYSTEM (migrate.go: defaultRootsFor -- "/"
+  on linux/darwin, %SystemDrive% with C:\ fallback on windows; goos +
+  getenv are parameters so tests cover the windows shape headlessly)
+  and default excludes add the system trees (/proc /sys /dev /run
+  /tmp /var/tmp full-path + lost+found by name; unix-likes only --
+  windows keeps just .git/node_modules/.cache). rootsVersion (0 =
+  legacy) drives the one-shot Load migration: pre-v2 configs whose
+  roots are exactly the legacy home default (or empty) get the new
+  default roots + the missing system excludes appended (user patterns
+  untouched); customized roots are stamped only; either way version 2
+  is Saved back, and every user-visible change lands in the
+  non-serialized MigrationNotes (json:"-") that internal/app logs
+  loudly at startup -- the scope never changes silently. `Load` never crashes: missing file -> defaults
+  written, corrupt file -> current defaults + error returned for
+  logging, failed migration rewrite -> migrated config + error.
   `Normalize` repairs zero values (empty theme -> dark, nil plugin
   entries/bang aliases -> empty maps, empty sigils -> the ! / @
   defaults; history needs nothing -- its zero value means persistence
@@ -872,7 +915,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the cheat sheet; plugins re-query through the same path),
   "index:progress" -> status text, "watch:degraded" -> warning chip)
   + `src/render.ts` (pure text-node DOM builders, no innerHTML
-  anywhere: file rows with highlighted match + dim parent dir; plugin
+  anywhere: file rows with highlighted match + dim parent dir (a
+  non-empty result hint replaces the parent-dir text -- the
+  outside-indexed-roots note); plugin
   sections -- unselectable header, rows with icon/title/dim
   subtitle/badge/"label: value" fields; the builtin icon-name -> glyph
   map (calculator globe clock star info warning link terminal text

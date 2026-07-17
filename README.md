@@ -104,6 +104,72 @@ package-manager (APT, Homebrew, npm, OCI) reference. Avoid the
 debs are generated server-side without `Depends`, which is exactly the
 missing-libraries trap the CI-built `.deb` exists to fix.
 
+## Indexing scope
+
+By default the app indexes your **whole filesystem**, Everything-style:
+`/` on Linux and macOS, the system drive (usually `C:\`) on Windows.
+Every file and directory name is searchable instantly; nothing else is
+read -- no contents, no metadata beyond the name and kind.
+
+A whole-system walk needs guardrails, and they are on by default:
+
+- **System excludes.** Fresh configs exclude the virtual and volatile
+  trees `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/var/tmp` (full-path
+  patterns) and `lost+found` (by name), on top of the long-standing
+  `.git`, `node_modules`, `.cache` name patterns. On Windows only the
+  three name patterns apply (it has no such virtual trees).
+- **Mount skipping.** At every index build and rescan the app reads
+  `/proc/self/mounts` (Linux) and skips mountpoints under the roots
+  whose filesystem type is kernel-virtual (`proc`, `sysfs`, `tmpfs`,
+  `cgroup2`, `devtmpfs`, ...) or remote (`nfs`, `cifs`/SMB, `9p`,
+  `sshfs`, `glusterfs`, `ceph`, `davfs`, ...). **All FUSE mounts**
+  (`fuse` and every `fuse.*` type) are skipped as well -- the common
+  FUSE mounts are network-backed (sshfs, rclone, gvfs), and a hung
+  server must never hang your index. `overlay` is deliberately NOT
+  skipped (container roots are overlay mounts). The skip list is
+  recomputed on every rebuild, so mounts that come and go are handled;
+  each rebuild logs what it skipped.
+- **Indexing a skipped mount anyway:** add the mountpoint to `roots`
+  in config.json. A mountpoint that is itself a configured root is
+  never auto-skipped -- that is the escape hatch for local FUSE
+  filesystems or a NAS you genuinely want indexed.
+
+To narrow the scope, edit `roots` in config.json (see
+[Configuration](#configuration)):
+
+```json
+{
+  "roots": ["/home/me", "/etc"],
+  "rootsVersion": 2
+}
+```
+
+**Upgrading from an older version:** configs written before
+whole-filesystem indexing carry no `rootsVersion` stamp. On first load
+the app migrates them once -- if `roots` is still the old default
+(your home directory), it becomes the whole-filesystem default and the
+missing system excludes are appended (patterns you added yourself are
+never touched); if you customized `roots`, nothing changes. Either way
+`"rootsVersion": 2` is written back so the check never re-runs. The
+migration is loud -- watch for these startup log lines:
+
+```
+config: index roots upgraded to the whole-filesystem default (/); edit roots in config.json to revert -- the first rescan will re-walk everything
+config: system exclude patterns added for whole-filesystem indexing: /proc, /sys, /dev, /run, /tmp, /var/tmp, lost+found
+```
+
+To revert, set `roots` back to what you want (e.g. `["/home/me"]`) and
+keep the `rootsVersion` stamp; customized roots are yours forever.
+
+**Outside-roots hint.** If you narrowed `roots` and then search for an
+absolute path that exists but is not covered -- say `/etc/hosts` with
+`roots: ["/home/me"]` -- the bar does not show a silent empty list: it
+returns that one real file with a hint in place of the parent-dir line
+(`outside indexed roots -- add /etc to roots in config.json`). Enter
+opens it like any other row. Paths that exist *inside* your roots
+never get the hint (that is an indexing gap -- typically the initial
+build still running -- not a scope gap).
+
 ## Status
 
 Feature-complete for v1; every CI run publishes installable builds to
@@ -242,8 +308,9 @@ The file is created with defaults on first run:
 
 ```json
 {
-  "roots": ["<your home directory>"],
-  "excludes": [".git", "node_modules", ".cache"],
+  "roots": ["/"],
+  "rootsVersion": 2,
+  "excludes": [".git", "node_modules", ".cache", "/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"],
   "hotkey": "alt+space",
   "rescanIntervalMinutes": 0,
   "maxResults": 50,
@@ -267,16 +334,28 @@ The file is created with defaults on first run:
 
 Field reference:
 
-- `roots` -- the directories to index (default: your home directory).
-  Relative paths are made absolute; an empty list falls back to the
-  default. Symlinks are indexed as entries but never descended.
+- `roots` -- the directories to index (default: the whole filesystem,
+  `/` on Linux/macOS and the system drive on Windows -- see
+  [Indexing scope](#indexing-scope)). Relative paths are made
+  absolute; an empty list falls back to the default. Symlinks are
+  indexed as entries but never descended. Network and virtual
+  filesystem mountpoints under a root are skipped automatically; list
+  such a mountpoint here explicitly to index it anyway.
+- `rootsVersion` -- the roots-defaults version stamp the app writes
+  (currently `2`). `0` or absent marks a config from before
+  whole-filesystem indexing and triggers the one-time migration
+  described under [Indexing scope](#indexing-scope). Not a knob --
+  leave it alone unless you want the migration to run again.
 - `excludes` -- patterns pruned from indexing (default `.git`,
-  `node_modules`, `.cache`). A pattern without a path separator is
+  `node_modules`, `.cache` plus, on Linux/macOS, the system entries
+  `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/var/tmp` and
+  `lost+found`). A pattern without a path separator is
   matched against each entry's base name (`node_modules`, `*.tmp`):
   matching directories are pruned, matching files skipped. A pattern
   containing a separator is matched against the full path
   (`/home/*/secret`). `*` never crosses a separator and there is no
-  `**`. The same exclude semantics apply to the initial walk, to live
+  `**`. An explicitly empty list means "exclude nothing". The same
+  exclude semantics apply to the initial walk, to live
   filesystem events, and to rescans.
 - `hotkey` -- the global summon shortcut (default `alt+space`):
   "+"-separated, case- and whitespace-insensitive; modifiers
