@@ -4,6 +4,15 @@ package native
 
 /*
 #cgo LDFLAGS: -framework Cocoa -framework CoreGraphics
+// UniformTypeIdentifiers is not used by this package: Wails v2's darwin
+// frontend (internal/frontend/desktop/darwin, pulled in by the
+// desktop,production tags) references UTType for file-dialog filters
+// but omits the framework from its own LDFLAGS, and the strict ld in
+// newer Xcode SDKs (seen: Xcode 26.5 on the macos-latest runner) fails
+// the final link with "_OBJC_CLASS_$_UTType" undefined. cgo LDFLAGS
+// aggregate across the whole binary, so declaring it here fixes every
+// production darwin build. The framework exists on macOS 11+.
+#cgo LDFLAGS: -framework UniformTypeIdentifiers
 #include "platform_darwin.h"
 */
 import "C"

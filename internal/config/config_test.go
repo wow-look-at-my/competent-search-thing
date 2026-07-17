@@ -39,10 +39,16 @@ func TestDirIsParentOfConfigFile(t *testing.T) {
 
 func TestPathDefaultsToUserConfigDir(t *testing.T) {
 	t.Setenv(EnvConfigDir, "")
+	// Honored by os.UserConfigDir on linux; darwin/windows ignore XDG
+	// and resolve their native dir, so the expectation is derived from
+	// os.UserConfigDir itself -- the documented contract is "under
+	// os.UserConfigDir()", not "under XDG_CONFIG_HOME".
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	base, err := os.UserConfigDir()
+	require.NoError(t, err)
 	p, err := Path()
 	require.NoError(t, err)
-	require.Equal(t, filepath.Join(os.Getenv("XDG_CONFIG_HOME"), appDirName, "config.json"), p)
+	require.Equal(t, filepath.Join(base, appDirName, "config.json"), p)
 }
 
 func TestLoadWritesDefaultWhenMissing(t *testing.T) {
@@ -200,10 +206,15 @@ func TestDirUsesEnvOverride(t *testing.T) {
 
 func TestDirDefaultsToUserConfigDir(t *testing.T) {
 	t.Setenv(EnvConfigDir, "")
+	// Same as TestPathDefaultsToUserConfigDir: XDG_CONFIG_HOME only
+	// steers os.UserConfigDir on linux, so compare against the real
+	// os.UserConfigDir value instead of the env var.
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	base, err := os.UserConfigDir()
+	require.NoError(t, err)
 	got, err := Dir()
 	require.NoError(t, err)
-	require.Equal(t, filepath.Join(os.Getenv("XDG_CONFIG_HOME"), appDirName), got)
+	require.Equal(t, filepath.Join(base, appDirName), got)
 
 	p, err := Path()
 	require.NoError(t, err)
