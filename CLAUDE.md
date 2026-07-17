@@ -1010,9 +1010,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   removed in the 2026-07-17 ci.yml cleanup (#25).
 - The `linux` job: checkout -> apt install gtk/webkit/x11 dev packages plus
   xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run build`
-  in `frontend/` -> `echo gomemlimit_gen.go >> .git/info/exclude` (the
-  transient guard go-toolchain injects would otherwise stamp the
-  deb-shipped binary vcs.modified/+dirty) -> `wow-look-at-my/go-toolchain@v1`
+  in `frontend/` -> `wow-look-at-my/go-toolchain@v1`
   with `targets: linux/amd64,windows/amd64`, `cgo: 'true'`,
   `timeout: '20'`, and env
   `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> deb build +
