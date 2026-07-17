@@ -342,7 +342,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   provider disabled = zero Emission) -- the app binds it for the
   frontend's empty-query cheat sheet. `Close()` drops idle
   HTTP connections; reload = build a new Registry, swap atomically,
-  Close the old. Builtins (targeted-only, in-process, no sanitizer):
+  Close the old. Builtins (in-process, no sanitizer; targeted-only
+  except apps-search and windows):
   builtin_bangs.go "bangs"/Commands -- bang completions (resolved
   bang first, primary-sigil titles, typed-sigil set_query preserving
   the query rest, cap 12); builtin_app.go "app"/App Commands --
@@ -351,9 +352,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   "apps"/Launch -- !app/!launch over the Options.InstalledApps
   snapshot (empty query = first 15 alphabetical, prefix 100 /
   substring 80, cap 15, run_command argv via `parseDesktopExec`:
-  quotes, backslash escapes, %-field codes stripped);
-  builtin_openwindows.go "windows"/Open Windows -- the ONE builtin in
-  the normal fan-out (no bangs; own all-queries match, min 2 runes of
+  quotes, backslash escapes, %-field codes stripped; the shared
+  scoring/sort/cap/result-build helper is `collectAppResults`);
+  builtin_apps_search.go "apps-search"/Apps -- installed apps in
+  NORMAL results: no bangs, a real all_queries Trigger (match
+  override on builtinBase, effective min 2 runes), ranking exact 100
+  / prefix 90 / word-start 75 (words = letter/digit runs, so spaces,
+  hyphens, dots split) / substring 60, cap 6, same run_command
+  launch; bang routing keeps it exclusive with the targeted !app
+  path, and a nil/empty snapshot emits nothing;
+  builtin_openwindows.go "windows"/Open Windows -- also in the normal
+  fan-out (no bangs; own all-queries match, min 2 runes of
   the trimmed query) over the Options.OpenWindows snapshot
   (plugin-local WindowInfo, ID as STRING to survive JSON), registered
   ONLY when that seam is non-nil (the app layer's session gate);

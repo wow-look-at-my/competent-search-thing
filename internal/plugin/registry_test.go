@@ -297,7 +297,7 @@ func TestNewBuildsProvidersAndCollectsErrors(t *testing.T) {
 
 	require.Contains(t, r.byID, "alpha")
 	require.Contains(t, r.byID, "beta")
-	require.Len(t, r.providers, 4, "two manifests + the app and apps builtins")
+	require.Len(t, r.providers, 5, "two manifests + the app, apps and apps-search builtins")
 
 	joined := errors.Join(r.Errors()...).Error()
 	require.Contains(t, joined, "plugins/broken/manifest.json")
@@ -357,7 +357,7 @@ func TestNewDuplicateManifestIDSkipped(t *testing.T) {
 		Logf:      func(string, ...any) {},
 	})
 	defer r.Close()
-	require.Len(t, r.providers, 3, "one manifest survives beside the two builtins")
+	require.Len(t, r.providers, 4, "one manifest survives beside the three fan-out builtins")
 	require.ErrorContains(t, errors.Join(r.Errors()...), "already taken")
 }
 
@@ -392,7 +392,8 @@ func TestNewRegistersBuiltins(t *testing.T) {
 	require.Contains(t, r.byID, "bangs")
 	require.Contains(t, r.byID, "app")
 	require.Contains(t, r.byID, "apps")
-	require.Len(t, r.providers, 2, "the suggestions provider stays out of the normal fan-out")
+	require.Contains(t, r.byID, "apps-search")
+	require.Len(t, r.providers, 3, "the suggestions provider stays out of the normal fan-out")
 	require.Empty(t, r.Errors())
 
 	pid, bang, ok := r.bangs.Resolve("launch")
@@ -489,12 +490,17 @@ func TestDispatchOpenWindowsPanickingGetterIsolated(t *testing.T) {
 
 func TestNewDisablesBuiltinsPerID(t *testing.T) {
 	r := New(Options{
-		Entries: map[string]Entry{"bangs": {Disabled: true}, "apps": {Disabled: true}},
-		Logf:    func(string, ...any) {},
+		Entries: map[string]Entry{
+			"bangs":       {Disabled: true},
+			"apps":        {Disabled: true},
+			"apps-search": {Disabled: true},
+		},
+		Logf: func(string, ...any) {},
 	})
 	defer r.Close()
 	require.Nil(t, r.suggest)
 	require.NotContains(t, r.byID, "apps")
+	require.NotContains(t, r.byID, "apps-search")
 	require.Contains(t, r.byID, "app")
 	_, _, ok := r.bangs.Resolve("launch")
 	require.False(t, ok, "disabled builtins register no bangs")

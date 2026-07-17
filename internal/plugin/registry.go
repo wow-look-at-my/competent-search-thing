@@ -238,9 +238,10 @@ func New(opts Options) *Registry {
 }
 
 // builtinBase supplies the boring provider methods shared by the
-// builtin providers: fixed id/name/bangs, no debounce, and -- because
-// builtins are bang-targeted or registry-special-cased only -- no
-// non-targeted matching.
+// builtin providers: fixed id/name/bangs, no debounce, and no
+// non-targeted matching (the builtins are bang-targeted or
+// registry-special-cased, except apps-search, which overrides match
+// with its all_queries trigger).
 type builtinBase struct {
 	pid   string
 	name  string
@@ -254,7 +255,8 @@ func (b *builtinBase) debounce() time.Duration                    { return 0 }
 func (b *builtinBase) match(string, *AppInfo) (string, int, bool) { return "", 0, false }
 
 // addBuiltins registers the builtin providers (bang suggestions, app
-// commands, installed-app launcher, open-windows search) unless
+// commands, installed-app launcher, untargeted app search,
+// open-windows search) unless
 // individually disabled -- the open-windows search additionally needs
 // its Options.OpenWindows seam, which is nil on sessions that cannot
 // enumerate windows. Builtins register BEFORE external plugins so a
@@ -272,6 +274,9 @@ func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
 	}
 	if !disabled(builtinAppsID) {
 		r.register(newAppsProvider(opts.InstalledApps))
+	}
+	if !disabled(builtinAppsSearchID) {
+		r.register(newAppsSearchProvider(opts.InstalledApps))
 	}
 	if opts.OpenWindows != nil && !disabled(builtinWindowsID) {
 		r.register(newWindowsProvider(opts.OpenWindows))

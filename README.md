@@ -137,6 +137,10 @@ buildhost (see [Install](#install)):
       opt-in app-context awareness (focused/running/installed apps),
       built-in commands (`!rescan`, `!reload`, `!config`, `!version`,
       `!quit`, `!app`) and three documented example plugins
+- [x] Installed apps in normal results: matching apps show up as an
+      async Apps section below the file results for plain queries
+      (exact/prefix/word-start/substring ranking, capped at 6; see
+      [Apps in normal results](#apps-in-normal-results))
 - [x] Empty-query cheat sheet: an empty bar lists the available
       commands (the same list a bare `!` shows) with no row
       pre-selected; it disappears the moment you type, and no plugin
@@ -258,7 +262,8 @@ Field reference:
   `entries` maps a provider id to per-plugin config:
   `{ "entries": { "calc": { "disabled": false, "settings": { } } } }`.
   `disabled` turns that one provider off (the built-in ids `bangs`,
-  `app` and `apps` work here too); `settings` is an opaque JSON object
+  `app`, `apps`, `apps-search` and `windows` work here too);
+  `settings` is an opaque JSON object
   passed verbatim to that plugin in every request (its `settings`
   field), so plugins can be configured without editing their manifest.
 - `bangs` -- bang parsing. `sigils` lists the characters that may start
@@ -734,11 +739,11 @@ be shadowed.
 
 ### Built-in commands
 
-Four built-in providers ship inside the app and go through the same
+Five built-in providers ship inside the app and go through the same
 pipeline (disable them like any plugin via `plugins.entries` with ids
-`bangs`, `app`, `apps`, `windows` -- the last is the bang-less
-[Open windows](#open-windows) search, listed here only for its
-disable knob):
+`bangs`, `app`, `apps`, `apps-search`, `windows` -- the last is the
+bang-less [Open windows](#open-windows) search, listed here only for
+its disable knob):
 
 | bang | does |
 |------|------|
@@ -758,9 +763,31 @@ prefix matches score 100 and substring matches 80, capped at 15.
 Selecting a row launches the app via its parsed `.desktop` `Exec`
 line (freedesktop field codes like `%u` stripped), detached from the
 searchbar. This is `.desktop`-based and therefore Linux-first; Windows
-and macOS enumeration is best-effort. Installed apps currently appear
-only when targeted -- surfacing them as untargeted results for plain
-queries is a possible future config knob.
+and macOS enumeration is best-effort.
+
+### Apps in normal results
+
+Installed apps also surface in plain queries -- no bang needed. Typing
+`fire` shows an **Apps** section (below the file results, like any
+plugin section) with Firefox in it; Enter launches the selection
+exactly like `!app` does. This is the fourth built-in provider,
+`apps-search`:
+
+- It fires on every query of 2+ characters and matches app names
+  case-insensitively. Ranking: exact name match, then name prefix,
+  then word start (`code` matches `Visual Studio Code`), then
+  substring; ties break alphabetically. The section caps at 6 results
+  to stay out of the way -- use `!app` / `!launch` for the full list
+  of 15.
+- Bang routing keeps the two paths mutually exclusive: a `!app ...` /
+  `!launch ...` query dispatches only the targeted launcher, so apps
+  never render twice.
+- To turn the untargeted section off (the targeted `!app` / `!launch`
+  bangs are unaffected):
+
+```json
+{ "plugins": { "entries": { "apps-search": { "disabled": true } } } }
+```
 
 ### Trust model
 
