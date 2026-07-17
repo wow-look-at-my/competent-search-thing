@@ -190,13 +190,16 @@ async function stop(p: Proc): Promise<void> {
 }
 
 // Per-theme assertion bounds, derived from real local captures on the same
-// fixture (do not guess -- re-derive if the UI changes). Measured values:
-//   dark  01/02/03 = 3556/37898/37912 bytes, means  6712/ 8354/ 8342
-//   light 01/02/03 = 7357/38363/38335 bytes, means 62146/61033/61039
+// fixture (do not guess -- re-derive if the UI changes). Measured values
+// (re-derived 2026-07-17, when 01 gained the empty-query cheat sheet):
+//   dark  01/02/03 = 22420/38510/38518 bytes, means  7149/ 8338/ 8329
+//   light 01/02/03 = 22652/38920/38885 bytes, means 61601/61052/61055
 // A dead/black webview captures near mean 0; solid white near 65535. The
 // light theme sits ~61k, so its band must clear 60k yet still reject a
 // blank-white window; the size floors do the rest (a flat rectangle
-// compresses to a few hundred bytes).
+// compresses to a few hundred bytes). The 01 floors also assert the
+// cheat sheet actually rendered: a summoned-but-empty bar compresses to
+// ~3.6k (dark) / ~7.4k (light), well under the 10000/12000 floors.
 interface ThemeSpec {
   name: string;
   meanMin: number;
@@ -208,13 +211,13 @@ const themes: ThemeSpec[] = [
     name: "dark",
     meanMin: 500,
     meanMax: 60000,
-    floors: { "01-summoned.png": 2500, "02-results.png": 10000, "03-selection.png": 10000 },
+    floors: { "01-summoned.png": 10000, "02-results.png": 10000, "03-selection.png": 10000 },
   },
   {
     name: "light",
     meanMin: 30000,
     meanMax: 64000,
-    floors: { "01-summoned.png": 4000, "02-results.png": 12000, "03-selection.png": 12000 },
+    floors: { "01-summoned.png": 12000, "02-results.png": 12000, "03-selection.png": 12000 },
   },
 ];
 
