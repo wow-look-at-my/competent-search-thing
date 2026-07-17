@@ -55,6 +55,9 @@ type Config struct {
 	Bangs BangsConfig `json:"bangs"`
 	// Tray configures the tray icon (see internal/tray).
 	Tray TrayConfig `json:"tray"`
+	// History configures the query history behind the bar's Up/Down
+	// recall (see internal/history).
+	History HistoryConfig `json:"history"`
 }
 
 // PluginsConfig configures the plugin system. The zero value means
@@ -92,6 +95,15 @@ type BangsConfig struct {
 type TrayConfig struct {
 	// Disabled turns the tray icon off.
 	Disabled bool `json:"disabled"`
+}
+
+// HistoryConfig configures the query history (see internal/history).
+type HistoryConfig struct {
+	// PersistDisabled true keeps the history in memory only: nothing
+	// is read from or written to <configDir>/history.json, while
+	// in-session Up/Down recall keeps working. The zero value keeps
+	// persistence on (matching the tray.disabled convention).
+	PersistDisabled bool `json:"persistDisabled"`
 }
 
 // DefaultBangSigils returns the default bang sigil set. It returns a

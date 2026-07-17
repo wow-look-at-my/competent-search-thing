@@ -70,7 +70,8 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 			Sigils:  []string{"!", "/", "@"},
 			Aliases: map[string]string{"math": "calc"},
 		},
-		Tray: TrayConfig{Disabled: true},
+		Tray:    TrayConfig{Disabled: true},
+		History: HistoryConfig{PersistDisabled: true},
 	}
 	data, err = json.Marshal(full)
 	require.NoError(t, err)
@@ -95,6 +96,8 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"unknown top-level typo": `{"maxResluts":50}`,
 		"tray disabled typo":     `{"tray":{"disabld":true}}`,
 		"non-bool tray disabled": `{"tray":{"disabled":"yes"}}`,
+		"history persist typo":   `{"history":{"persistDisabld":true}}`,
+		"non-bool history persistDisabled": `{"history":{"persistDisabled":"yes"}}`,
 	}
 	for name, doc := range cases {
 		require.Error(t, validateConfigJSON(sch, []byte(doc)), "case %q must fail validation", name)
@@ -166,4 +169,6 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json $defs/bangsConfig out of sync with BangsConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(TrayConfig{})), configSchemaProperties(t, "trayConfig"),
 		"config.schema.json $defs/trayConfig out of sync with TrayConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(HistoryConfig{})), configSchemaProperties(t, "historyConfig"),
+		"config.schema.json $defs/historyConfig out of sync with HistoryConfig")
 }

@@ -303,6 +303,25 @@ func TestTrayConfig(t *testing.T) {
 	require.True(t, got.Tray.Disabled)
 }
 
+func TestHistoryConfig(t *testing.T) {
+	setConfigDir(t)
+	require.False(t, Default().History.PersistDisabled, "history persistence is on by default")
+
+	// A config predating the history block loads as persisting...
+	var c Config
+	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
+	c.Normalize()
+	require.False(t, c.History.PersistDisabled)
+
+	// ...and an explicit opt-out round-trips.
+	in := Default()
+	in.History.PersistDisabled = true
+	require.NoError(t, Save(in))
+	got, err := Load()
+	require.NoError(t, err)
+	require.True(t, got.History.PersistDisabled)
+}
+
 func TestDefaultBangSigilsReturnsFreshSlice(t *testing.T) {
 	a := DefaultBangSigils()
 	a[0] = "X"

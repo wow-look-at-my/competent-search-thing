@@ -141,6 +141,17 @@ buildhost (see [Install](#install)):
       commands (the same list a bare `!` shows) with no row
       pre-selected; it disappears the moment you type, and no plugin
       processes run for an empty query
+- [x] Clear on dismiss + history recall: the bar always summons empty
+      -- the pre-hide text is deliberately dropped. Up recalls older
+      history entries when the query is blank or still exactly what a
+      previous Up/Down recall filled in (you have not typed since);
+      Down then moves forward, and moving forward past the newest
+      entry clears the bar back to the empty state (the cheat sheet).
+      The moment you type or pick a completion, Up/Down go back to
+      navigating the result list. Only queries whose activation
+      actually ran are recorded (capped at 100, newest kept), persisted
+      to `<configDir>/history.json` -- or memory-only with
+      `history.persistDisabled` (see [Configuration](#configuration))
 - [x] Theming: design tokens as CSS custom properties, builtin dark +
       light themes, validated user JSON themes with live reload, and a
       custom.css escape hatch (see [Theming](#theming))
@@ -215,7 +226,8 @@ The file is created with defaults on first run:
   "theme": "dark",
   "plugins": { "disabled": false, "entries": {} },
   "bangs": { "sigils": ["!", "/", "@"], "aliases": {} },
-  "tray": { "disabled": false }
+  "tray": { "disabled": false },
+  "history": { "persistDisabled": false }
 }
 ```
 
@@ -271,6 +283,15 @@ Field reference:
 - `tray` -- the [tray icon](#tray-icon). `disabled` (default `false`)
   turns it off. Leaving it on costs nothing on desktops without a
   status-icon host: the app just never shows one.
+- `history` -- the query history behind the bar's Up/Down recall.
+  A query is recorded only when its activation actually runs (a file
+  is opened or revealed, a plugin action executes); the newest 100
+  entries are kept (exact repeats move to the newest slot instead of
+  duplicating) and stored at `<configDir>/history.json`, created with
+  `0600` permissions. `persistDisabled` (default `false`) keeps the
+  history in memory only: nothing is read from or written to
+  `history.json`, while in-session Up/Down recall keeps working.
+  Delete `history.json` to forget previously saved entries.
 
 The full format is formally described by
 [`schemas/config.schema.json`](schemas/config.schema.json) -- add a

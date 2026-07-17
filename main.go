@@ -54,9 +54,10 @@ func runGUI(opts cli.RunOptions) error {
 	a := app.New(index.NewManager(cfg.Roots, cfg.Excludes, cfg.MaxResults), app.Options{
 		RescanEvery:   time.Duration(cfg.RescanIntervalMinutes) * time.Minute,
 		Hotkey:        cfg.Hotkey,
-		IPC:           opts.Server,
-		ShowOnStartup: opts.ShowOnStartup,
-		TrayDisabled:  cfg.Tray.Disabled,
+		IPC:                    opts.Server,
+		ShowOnStartup:          opts.ShowOnStartup,
+		TrayDisabled:           cfg.Tray.Disabled,
+		HistoryPersistDisabled: cfg.History.PersistDisabled,
 	})
 
 	return wails.Run(&options.App{

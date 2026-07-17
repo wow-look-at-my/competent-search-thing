@@ -70,6 +70,13 @@ interface WailsAppBindings {
   // synchronous Emission with gen 0 and results possibly empty
   // (never null Go-side; main.ts still tolerates it defensively).
   CheatSheet(): Promise<PluginEmission>;
+  // The committed query history, oldest -> newest (never null
+  // Go-side; main.ts still tolerates it defensively). Fetched at
+  // wire-up and refetched after every AddHistory.
+  GetHistory(): Promise<string[] | null>;
+  // Record one executed query (called after an activation actually
+  // ran; Go trims it, skips blanks, and dedups exact repeats).
+  AddHistory(entry: string): Promise<void>;
   // Resolved theme tokens: every internal/theme.TokenNames key mapped
   // to a validated CSS value (theme.ts sets each as --sb-<key>).
   GetTheme(): Promise<Record<string, string>>;

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
+	"github.com/wow-look-at-my/competent-search-thing/internal/history"
 	"github.com/wow-look-at-my/competent-search-thing/internal/index"
 	"github.com/wow-look-at-my/competent-search-thing/internal/ipc"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
@@ -76,6 +77,10 @@ type Options struct {
 	// TrayDisabled turns the tray icon off (wire config's
 	// tray.disabled here); the default zero value keeps it on.
 	TrayDisabled bool
+	// HistoryPersistDisabled keeps the query history in memory only
+	// (wire config's history.persistDisabled here); the default zero
+	// value persists it to <configDir>/history.json. See history.go.
+	HistoryPersistDisabled bool
 }
 
 // App is the Wails-bound application object. It carries the Wails
@@ -88,7 +93,7 @@ type App struct {
 	buildOnce sync.Once
 	hkOnce    sync.Once
 
-	mu         sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, lastThemeErr, domReady, pendingShow
+	mu         sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, lastThemeErr, domReady, pendingShow, history
 	ctx        context.Context
 	visible    bool
 	lastToggle time.Time
@@ -144,6 +149,12 @@ type App struct {
 	trayOnce sync.Once
 	newTray  func() trayHandle
 
+	// Query history (see history.go): built once at Startup, nil
+	// before that -- the bound methods degrade to no-ops, which keeps
+	// newTestApp working without extra wiring.
+	histOnce sync.Once
+	history  *history.Store
+
 	// rt and plat are seams over the Wails runtime and the platform
 	// layer. Production fills them in New; unit tests MUST replace
 	// every rt member before driving code that reaches it (the real
@@ -173,6 +184,7 @@ func New(m *index.Manager, opt Options) *App {
 // only, async, best effort; see tray.go), wires the
 // single-instance IPC handlers (when Options.IPC is set), brings the
 // plugin layer up (app-context cache + registry; cheap file IO),
+// builds the query-history store (best effort; see history.go),
 // starts theme hot reload (best effort, see theme.go), and kicks off
 // the initial index build in the background, so the window is
 // responsive immediately while the walk fills the index. An
@@ -195,6 +207,7 @@ func (a *App) Startup(ctx context.Context) {
 		})
 	}
 	a.pluginOnce.Do(a.startPlugins)
+	a.histOnce.Do(a.startHistory)
 	a.themeOnce.Do(a.startThemeWatch)
 	if a.manager == nil {
 		return

@@ -46,7 +46,8 @@
     },
     "plugins": { "$ref": "#/$defs/pluginsConfig" },
     "bangs": { "$ref": "#/$defs/bangsConfig" },
-    "tray": { "$ref": "#/$defs/trayConfig" }
+    "tray": { "$ref": "#/$defs/trayConfig" },
+    "history": { "$ref": "#/$defs/historyConfig" }
   },
   "additionalProperties": false,
   "$defs": {
@@ -128,6 +129,18 @@
         }
       },
       "additionalProperties": false
+    },
+    "historyConfig": {
+      "title": "Query history configuration",
+      "type": "object",
+      "properties": {
+        "persistDisabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "true keeps the query history in memory only: nothing is read from or written to <configDir>/history.json. In-session Up/Down recall still works; the list is simply forgotten when the app quits. The default persists the newest 100 committed queries to that file (created 0600)."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "examples": [
@@ -148,7 +161,8 @@
         "sigils": ["!", "/", "@"],
         "aliases": { "math": "calc" }
       },
-      "tray": { "disabled": false }
+      "tray": { "disabled": false },
+      "history": { "persistDisabled": false }
     }
   ]
 }
