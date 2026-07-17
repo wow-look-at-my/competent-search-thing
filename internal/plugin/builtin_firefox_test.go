@@ -166,6 +166,10 @@ func TestWordStart(t *testing.T) {
 		{"domain", "main", false},        // mid-word only
 		{"domain main", "main", true},    // later word-start occurrence wins
 		{"xx2main", "main", false},       // digits end a word too
+		{"main.go - code", "main", true}, // start of string
+		{"app - main.go", "main", true},  // after a space
+		{"", "main", false},
+		{"main", "nomatch", false},
 	}
 	for _, tt := range tests {
 		require.Equal(t, tt.want, wordStart(tt.s, tt.needle), "wordStart(%q, %q)", tt.s, tt.needle)
