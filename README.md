@@ -232,6 +232,7 @@ The file is created with defaults on first run:
   "bangs": { "sigils": ["!", "/", "@"], "aliases": {} },
   "tray": { "disabled": false },
   "history": { "persistDisabled": false },
+  "window": { "translucent": false },
   "firefox": {
     "frequentSites": {
       "minVisitsMonth": 11,
@@ -307,6 +308,13 @@ Field reference:
   history in memory only: nothing is read from or written to
   `history.json`, while in-session Up/Down recall keeps working.
   Delete `history.json` to forget previously saved entries.
+- `window` -- the native window layer. `translucent` (default `false`)
+  requests a per-pixel-alpha (RGBA) window so the area outside the
+  bar's rounded corners is truly see-through instead of a squared-off
+  opaque fill. It needs a running compositor -- every Wayland session
+  has one, but on a compositor-less X11 setup the corners render
+  solid black, which is why the flag is opt-in. Evidence and
+  per-desktop status: [Translucent window](#translucent-window).
 - `firefox` -- the Firefox-backed sections. `frequentSites` configures
   [Frequent sites (Firefox)](#frequent-sites-firefox): the visit
   thresholds (`minVisitsMonth`, `minVisitsWeek`), the cache refresh
@@ -1501,3 +1509,48 @@ These are Wayland design constraints, not bugs:
   shown as an error flash in the bar's status line instead of
   silently doing nothing. If Enter on a result appears to do nothing,
   run the app from a terminal and read the `open:`/`reveal:` lines.
+
+### Translucent window
+
+The bar's corners are rounded by CSS, but the window behind the page
+is a plain opaque rectangle, so the desktop shows small squared-off
+corner fills around the rounding (WebKitGTK's dark base color,
+measured `rgb(30,30,30)`). Setting `"window": { "translucent": true }`
+in `config.json` requests a per-pixel-alpha (RGBA) window with a fully
+transparent background, so whatever the page does not paint -- the
+corners -- is truly see-through.
+
+Whether that alpha reaches the screen is decided by the compositor,
+and the flag defaults to **off** (the opaque status quo) because a
+compositor-less X11 session makes it worse, not better. Measured
+behavior (the corner pixel of the composited screen, app shown over a
+solid `#ff00ff` desktop):
+
+| Session                                  | Flag off              | Flag on                              |
+| ---------------------------------------- | --------------------- | ------------------------------------ |
+| X11 without a compositor (Xvfb + openbox) | `rgb(30,30,30)` opaque | `rgb(0,0,0)` -- opaque, solid black  |
+| X11 with a compositor (picom, xrender)    | `rgb(30,30,30)` opaque | `rgb(255,0,255)` -- see-through      |
+| Wayland (sway headless, wlroots + pixman) | `rgb(30,30,30)` opaque | `rgb(255,0,255)` -- see-through      |
+| GNOME (mutter), X11 session               | unverified here       | unverified here                      |
+| GNOME (mutter), Wayland session           | unverified here       | unverified here                      |
+
+Notes, all verified on this codebase (Wails v2.13.0, WebKitGTK 4.1):
+
+- On X11 the compositor must already be running **when the app
+  starts**: the RGBA visual is chosen at window construction and GTK
+  gates it on `gdk_screen_is_composited()` at that moment. Starting a
+  compositor later does not retrofit transparency -- restart the app.
+- Without a compositor the flag turns the corner fills solid black
+  (the zero-alpha background flattens against nothing), which is
+  uglier than the default -- hence opt-in, default off.
+- Only *fully* transparent page regions punch through on the stacks
+  measured here. The bar's own background keeps its `bg-opacity`
+  (default 97%) as an in-page effect: the bar interior measures the
+  same flattened `rgb(23,23,27)` whatever is behind the window, i.e.
+  the desktop does not bleed through the bar itself, and the `blur`
+  token likewise stays an in-page backdrop-filter.
+- The GNOME/mutter rows could not be exercised in this (headless CI)
+  environment. mutter composites unconditionally on both session
+  types, so the flag is *expected* to behave like the verified
+  compositor rows -- if your GNOME session disagrees, file an issue
+  with a screenshot.

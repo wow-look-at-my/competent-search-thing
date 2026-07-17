@@ -145,6 +145,33 @@ func TestFirefoxProviderNoMatchesAndNoSource(t *testing.T) {
 	require.Empty(t, results, "a nil source is inert, never a panic")
 }
 
+func TestWordStart(t *testing.T) {
+	tests := []struct {
+		s, needle string
+		want      bool
+	}{
+		{"pull requests", "pull", true},
+		{"pull requests", "requests", true},
+		{"pull requests", "equests", false},
+		{"hacker-news daily", "news", true},
+		{"hacker-news daily", "acker", false},
+		{"go", "go", true},
+		{"a b", "", false},
+		{"", "x", false},
+		// Cases folded in from the open-windows provider's copy of
+		// wordStart when the duplicate was removed (both features
+		// share this one helper now).
+		{"foo-main", "main", true},       // after punctuation
+		{"[main] scratch", "main", true}, // after a bracket
+		{"domain", "main", false},        // mid-word only
+		{"domain main", "main", true},    // later word-start occurrence wins
+		{"xx2main", "main", false},       // digits end a word too
+	}
+	for _, tt := range tests {
+		require.Equal(t, tt.want, wordStart(tt.s, tt.needle), "wordStart(%q, %q)", tt.s, tt.needle)
+	}
+}
+
 func TestNewRegistersFirefoxProviderOnlyWithSource(t *testing.T) {
 	// No source: the provider does not exist (default Options keep the
 	// historical builtin set, which other tests count on).

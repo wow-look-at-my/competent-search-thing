@@ -27,6 +27,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/app"
 	"github.com/wow-look-at-my/competent-search-thing/internal/cli"
@@ -60,7 +61,7 @@ func runGUI(opts cli.RunOptions) error {
 		HistoryPersistDisabled: cfg.History.PersistDisabled,
 	})
 
-	return wails.Run(&options.App{
+	wailsOpts := &options.App{
 		Title:             "competent-search-thing",
 		Width:             app.WindowWidth,
 		Height:            app.WindowHeight,
@@ -74,5 +75,25 @@ func runGUI(opts cli.RunOptions) error {
 		OnDomReady:        a.DomReady,
 		OnShutdown:        a.Shutdown,
 		Bind:              []interface{}{a},
-	})
+	}
+	// window.translucent (config.json) requests a per-pixel-alpha
+	// window so the rounded bar corners are truly see-through where a
+	// compositor runs (README "Translucent window"). With the flag off
+	// BackgroundColour and Linux stay nil -- the exact pre-flag
+	// wails.Run call.
+	if app.WindowTranslucent() {
+		// The zero-value RGBA (alpha 0) makes the GTK #webview-box
+		// background fully transparent; WindowIsTranslucent requests
+		// the RGBA visual and forces the webview background alpha to
+		// 0 (both in wails v2.13 linux/window.c).
+		wailsOpts.BackgroundColour = &options.RGBA{}
+		wailsOpts.Linux = &linux.Options{
+			WindowIsTranslucent: true,
+			// Pin the nil-Linux default GPU policy: wails' #2977
+			// workaround (Never) lives only in the nil branch, so a
+			// non-nil Linux block would silently flip it to OnDemand.
+			WebviewGpuPolicy: linux.WebviewGpuPolicyNever,
+		}
+	}
+	return wails.Run(wailsOpts)
 }

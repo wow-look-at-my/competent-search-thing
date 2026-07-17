@@ -134,3 +134,7 @@ func (p *windowsProvider) query(_ context.Context, req Request) ([]Result, []str
 	}
 	return results, nil, nil
 }
+
+// The word-start matching this provider scores with lives in
+// builtin_firefox.go's wordStart -- one shared helper for the whole
+// package (a second same-named copy here is a compile error).
