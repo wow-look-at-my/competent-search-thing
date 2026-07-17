@@ -22,4 +22,11 @@ type Source interface {
 	// InstalledApps lists the installed applications (terminal-only
 	// apps pre-filtered where the OS marks them).
 	InstalledApps() ([]InstalledApp, bool)
+
+	// OpenWindows lists the open top-level windows with their titles,
+	// for the builtin window-title search. ok only where windows can
+	// genuinely be enumerated: X11 today; Wayland offers no sanctioned
+	// way to see other apps' windows, and windows/darwin are not
+	// implemented yet.
+	OpenWindows() ([]WindowInfo, bool)
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
 	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/index"
+	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/plugin"
 )
 
@@ -91,6 +92,8 @@ type fakeSource struct {
 	runningOK   bool
 	installed   []appctx.InstalledApp
 	installedOK bool
+	windows     []appctx.WindowInfo
+	windowsOK   bool
 }
 
 func (s *fakeSource) FocusedApp() (appctx.AppInfo, bool) {
@@ -106,6 +109,11 @@ func (s *fakeSource) RunningApps() ([]appctx.AppInfo, bool) {
 func (s *fakeSource) InstalledApps() ([]appctx.InstalledApp, bool) {
 	s.r.call("installedApps")
 	return s.installed, s.installedOK
+}
+
+func (s *fakeSource) OpenWindows() ([]appctx.WindowInfo, bool) {
+	s.r.call("openWindows")
+	return s.windows, s.windowsOK
 }
 
 // newPluginTestApp is newTestApp with a fake dispatcher installed
@@ -282,6 +290,28 @@ func TestPluginContextSafeBeforeStartup(t *testing.T) {
 	require.Empty(t, rc.RunningApps)
 	require.Empty(t, rc.InstalledApps)
 	require.Nil(t, a.installedApps())
+	require.Nil(t, a.openWindows())
+}
+
+func TestCaptureKicksWindowsRefreshAndConverts(t *testing.T) {
+	a, r := newTestApp(t, nil, Options{})
+	a.plat.appSource = &fakeSource{
+		r:         r,
+		windows:   []appctx.WindowInfo{{ID: 4294967295, Title: "Mozilla Firefox", App: "firefox", PID: 9}},
+		windowsOK: true,
+	}
+	a.Startup(context.Background())
+	a.captureAppContext()
+
+	require.Eventually(t, func() bool {
+		return len(a.openWindows()) == 1
+	}, 5*time.Second, 10*time.Millisecond, "the summon-time capture kicks the windows refresh")
+	require.Equal(t,
+		[]plugin.WindowInfo{{ID: "4294967295", Title: "Mozilla Firefox", App: "firefox", PID: 9}},
+		a.openWindows(),
+		"the registry getter sees string ids across the full uint32 range")
+	// (plugin.RequestContext has no windows field at all -- open
+	// windows structurally cannot leak to external plugins.)
 }
 
 func TestRunPluginActionCopyText(t *testing.T) {
@@ -380,6 +410,27 @@ func TestRunPluginActionRejectsUnknownTypes(t *testing.T) {
 		require.Error(t, a.RunPluginAction("p", plugin.Action{Type: typ, Value: "x"}), "type %q", typ)
 	}
 	require.Empty(t, r.callNames())
+}
+
+func TestRunPluginActionActivateWindow(t *testing.T) {
+	a, r, _ := newPluginTestApp(t)
+	require.NoError(t, a.RunPluginAction("windows", plugin.Action{Type: plugin.ActionActivateWindow, Window: "4294967295"}))
+	require.Equal(t, []string{"activateWindow:4294967295", "hide"}, r.callNames(),
+		"the seam gets the parsed id, then the bar hides")
+}
+
+func TestRunPluginActionActivateWindowValidation(t *testing.T) {
+	a, r, _ := newPluginTestApp(t)
+	for _, bad := range []string{"", "abc", "-1", "1.5", "0x10", "4294967296", " 7"} {
+		require.Error(t, a.RunPluginAction("windows", plugin.Action{Type: plugin.ActionActivateWindow, Window: bad}),
+			"window id %q", bad)
+	}
+	require.Empty(t, r.callNames(), "invalid window ids never reach the platform, and the bar stays")
+
+	boom := errors.New("no X server")
+	a.plat.activateWindow = func(uint32) error { return boom }
+	require.ErrorIs(t, a.RunPluginAction("windows", plugin.Action{Type: plugin.ActionActivateWindow, Window: "7"}), boom)
+	require.False(t, r.has("hide"), "a failed activation does not hide the bar")
 }
 
 func TestRunBuiltinRescanWithoutWatcher(t *testing.T) {
@@ -517,6 +568,80 @@ func TestBuildRegistryToleratesCorruptConfig(t *testing.T) {
 	require.NotNil(t, reg, "a corrupt config still yields a registry (defaults)")
 	require.Contains(t, buf.String(), "plugin: config:", "the parse error is logged")
 	reg.Close()
+}
+
+func TestOpenWindowsGetterSessionGating(t *testing.T) {
+	t.Run("x11 enables without probing", func(t *testing.T) {
+		a, r := newTestApp(t, nil, Options{})
+		a.plat.detectSession = func() platform.Session { return platform.Session{Kind: platform.SessionX11} }
+		a.plat.appSource = &fakeSource{r: r}
+		require.NotNil(t, a.openWindowsGetter())
+		require.False(t, r.has("openWindows"), "no probe on x11")
+	})
+
+	t.Run("wayland disables with one log line", func(t *testing.T) {
+		var buf bytes.Buffer
+		log.SetOutput(&buf)
+		defer log.SetOutput(os.Stderr)
+
+		a, r := newTestApp(t, nil, Options{})
+		a.plat.detectSession = func() platform.Session { return platform.Session{Kind: platform.SessionWayland} }
+		// The XWayland trap: an X probe WOULD succeed here, which is
+		// exactly why the gate must be the session type, not the probe.
+		a.plat.appSource = &fakeSource{r: r, windows: []appctx.WindowInfo{{ID: 1, Title: "w"}}, windowsOK: true}
+
+		require.Nil(t, a.openWindowsGetter(), "wayland never enables")
+		require.False(t, r.has("openWindows"), "the source is not even consulted")
+		require.Contains(t, buf.String(), "open-window search unavailable on wayland")
+
+		buf.Reset()
+		require.Nil(t, a.openWindowsGetter(), "still disabled on a registry reload")
+		require.NotContains(t, buf.String(), "wayland", "the log line fires exactly once")
+	})
+
+	t.Run("unknown session probes the source", func(t *testing.T) {
+		a, _ := newTestApp(t, nil, Options{}) // detectSession pinned to unknown, appSource nil
+		require.Nil(t, a.openWindowsGetter(), "nil source: nothing can list")
+
+		a2, r2 := newTestApp(t, nil, Options{})
+		a2.plat.appSource = &fakeSource{r: r2, windowsOK: false}
+		require.Nil(t, a2.openWindowsGetter(), "source cannot list (headless, windows, darwin): disabled")
+		require.True(t, r2.has("openWindows"), "the probe ran")
+
+		a3, r3 := newTestApp(t, nil, Options{})
+		a3.plat.appSource = &fakeSource{r: r3, windowsOK: true}
+		require.NotNil(t, a3.openWindowsGetter(), "source can list (CI's Xvfb-like case): enabled")
+	})
+}
+
+func TestOpenWindowsEndToEndOnX11(t *testing.T) {
+	a, r := newTestApp(t, nil, Options{})
+	a.plat.detectSession = func() platform.Session { return platform.Session{Kind: platform.SessionX11} }
+	a.plat.appSource = &fakeSource{
+		r:         r,
+		windows:   []appctx.WindowInfo{{ID: 42, Title: "Mozilla Firefox", App: "firefox", PID: 9}},
+		windowsOK: true,
+	}
+	a.newRegistry = a.buildRegistry // the real builder registers the provider on x11
+	a.Startup(context.Background())
+	t.Cleanup(func() { a.Shutdown(context.Background()) })
+
+	a.captureAppContext() // the summon path: kicks the async windows refresh
+	require.Eventually(t, func() bool { return len(a.openWindows()) == 1 },
+		5*time.Second, 10*time.Millisecond, "the refreshed snapshot reaches the getter")
+
+	a.QueryPlugins("firefox", 3)
+	require.Eventually(t, func() bool {
+		for _, e := range r.emitted(eventPluginResults) {
+			em, ok := e.payload[0].(plugin.Emission)
+			if ok && em.Plugin == "windows" && em.Gen == 3 && len(em.Results) == 1 {
+				res := em.Results[0]
+				return res.Title == "Mozilla Firefox" && res.Action != nil &&
+					res.Action.Type == plugin.ActionActivateWindow && res.Action.Window == "42"
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "the Open Windows section emits end to end on x11")
 }
 
 func TestShutdownClosesRegistryAndCancels(t *testing.T) {

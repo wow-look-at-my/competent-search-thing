@@ -157,6 +157,12 @@ type Options struct {
 	// InstalledApps supplies the installed-application snapshot for
 	// the builtin launcher; nil means the launcher returns nothing.
 	InstalledApps func() []InstalledApp
+	// OpenWindows supplies the open-window snapshot for the builtin
+	// window-title search. Unlike InstalledApps, nil means the
+	// provider is NOT REGISTERED at all: the app layer passes nil on
+	// sessions where windows cannot be enumerated (Wayland,
+	// windows/darwin for now), so the section never exists there.
+	OpenWindows func() []WindowInfo
 	// FrequentSites supplies the frequently-visited-sites snapshot for
 	// the builtin firefox-frequent provider; nil (no Firefox profile)
 	// means the provider is not registered at all.
@@ -263,10 +269,12 @@ func (b *builtinBase) debounce() time.Duration                    { return 0 }
 func (b *builtinBase) match(string, *AppInfo) (string, int, bool) { return "", 0, false }
 
 // addBuiltins registers the builtin providers (bang suggestions, app
-// commands, installed-app launcher, untargeted app search, frequent
-// sites, open tabs) unless
-// individually disabled. Builtins register BEFORE external plugins so
-// a manifest can never shadow an app bang or claim a builtin id.
+// commands, installed-app launcher, untargeted app search,
+// open-windows search, frequent sites, open tabs) unless
+// individually disabled -- the open-windows search additionally needs
+// its Options.OpenWindows seam, which is nil on sessions that cannot
+// enumerate windows. Builtins register BEFORE external plugins so a
+// manifest can never shadow an app bang or claim a builtin id.
 func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
 	if !disabled(builtinSuggestID) {
 		s := newBangSuggestProvider(r)
@@ -283,6 +291,9 @@ func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
 	}
 	if !disabled(builtinAppsSearchID) {
 		r.register(newAppsSearchProvider(opts.InstalledApps))
+	}
+	if opts.OpenWindows != nil && !disabled(builtinWindowsID) {
+		r.register(newWindowsProvider(opts.OpenWindows))
 	}
 	// The Firefox-backed providers exist only when the app layer found
 	// a Firefox profile and supplied their sources (see Options).
