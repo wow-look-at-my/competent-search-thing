@@ -293,8 +293,37 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   testFold helper) but keep independent stdlib-strings matching.
   `Store.Query`: case-insensitive substring
   search, sharded across NumCPU goroutines with per-shard bounded
-  top-K heaps; ranking exact > prefix > substring, dirs before files,
-  shorter then lexicographic paths. A query containing a path
+  top-K heaps; ranking exact > prefix > substring > fuzzy, dirs before
+  files, shorter then lexicographic paths. fuzzy.go is the fuzzy
+  (subsequence) tier for name-mode queries: entries holding the query
+  as an in-order-with-gaps subsequence (same fold regimes) match with
+  classFuzzy (ordinal 3, shared with classPathSub -- modes never mix;
+  cand gained score int32, 0 outside the fuzzy class, compared DESC
+  inside it before the usual tie-breaks). Two-phase queryNamesFuzzy:
+  phase 1 = the unchanged substring scan plus per-shard live-hit
+  counts and a pooled per-entry bitset (shards rounded to 64 entries,
+  word-disjoint writes); SKIP RULE: phase-1 total >= limit means no
+  fuzzy hit can enter the top-limit, so phase 2 never runs for common
+  queries (and never for single-unit patterns, whose subsequence ==
+  substring); phase 2 (ASCII) sweeps the blob via ciScan for the
+  pattern byte with the fewest ACTUAL blob occurrences (Store.byteFreq,
+  a 256-entry histogram updated in appendEntry -- the static
+  nameByteFreq table cannot see corpus-specific rarity), maps hits to
+  entries like scanRange, skips tombstoned/marked entries, subsequence-
+  checks survivors and scores passers; non-ASCII patterns take a
+  per-entry rune subsequence walk. Scoring (only on subsequence
+  passers, off the hot path): optimal-alignment DP, fzf-v2 style --
+  match base + bonuses for name start/word boundary ('-','_','.',' ',
+  letter<->digit)/camelCase step/consecutive run, minus capped affine
+  gap penalties -- for names <= 512 units, greedy leftmost alignment
+  beyond; tests pin score ORDERINGS, never absolute values, and the
+  naive reference (naiveQueryFuzzy in fuzzy_test.go) reuses the score
+  function but keeps matching/ordering independent.
+  `QueryWith(q, limit, QueryOptions{FuzzyDisabled})` is the toggle
+  path (config search.fuzzyDisabled -> main.go ->
+  Manager.SetFuzzyDisabled): disabled dispatches to queryNamesSub,
+  the pre-fuzzy scan, behavior-identical to the old engine. A query
+  containing a path
   separator (on windows '/' too, normalized) dispatches to path mode
   (path.go): matched against the FULL path via a per-query dir-table
   prematch (dirs whose folded path+sep contains the query -- every
@@ -338,14 +367,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   labeled coverage-instrumented) plus an un-instrumented walk bench;
   COMPETENT_SEARCH_MEASURE_HUGE=1 builds a shared 30M-entry synth
   store ENTIRELY in the benchmark phase (the test phase's 30s
-  per-test budget cannot fit the build) for name+path query latency
+  per-test budget cannot fit the build) for name+path+fuzzy query
+  latency
   (BenchmarkSearchHuge) then footprint/heap/forced-GC evidence
   (BenchmarkHugeStoreMeasure, declared last -- it releases the store);
   COMPETENT_SEARCH_MEASURE_OUT writes the JSON + .txt report to a
   file.
 - `internal/config` -- config.json load/save (roots, rootsVersion,
   excludes, hotkey,
-  rescanIntervalMinutes, maxResults, theme, plugins {disabled, entries
+  rescanIntervalMinutes, maxResults, search {fuzzyDisabled -- the
+  fuzzy-tier kill switch, zero value = fuzzy ON per the tray.disabled
+  convention; main.go wires it to Manager.SetFuzzyDisabled},
+  theme, plugins {disabled, entries
   {<id>: {disabled, settings}}}, bangs {sigils, aliases}, tray
   {disabled}, history {persistDisabled}, window {translucent -- the
   per-pixel-alpha window flag main.go reads via
