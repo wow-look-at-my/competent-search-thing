@@ -310,7 +310,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   BytesPerEntry -- diagnostics for the whole-filesystem sizing work.
   A bare `Store` is NOT
   thread-safe. Benchmarks build synthetic 100k/1M-entry stores in
-  memory (see bench_test.go) and a ~50k-entry disk tree.
+  memory (see bench_test.go) and a ~50k-entry disk tree. An env-gated
+  measurement harness (measure_test.go + gated benches in
+  bench_test.go; skip-by-default, CI-invisible) backs the efficiency
+  numbers in PR bodies: COMPETENT_SEARCH_MEASURE=1 walks the whole
+  container filesystem (BuildFromDisk-style excludes + mount skips)
+  and reports Footprint/heap/forced-GC evidence (test phase; timings
+  labeled coverage-instrumented) plus an un-instrumented walk bench;
+  COMPETENT_SEARCH_MEASURE_HUGE=1 builds a shared 30M-entry synth
+  store for footprint/GC (test) and name+path query latency
+  (BenchmarkSearchHuge); COMPETENT_SEARCH_MEASURE_OUT writes the
+  JSON + .txt report to a file.
 - `internal/config` -- config.json load/save (roots, rootsVersion,
   excludes, hotkey,
   rescanIntervalMinutes, maxResults, theme, plugins {disabled, entries
