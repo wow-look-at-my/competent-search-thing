@@ -102,6 +102,9 @@ func (s *Store) queryPath(pat []byte, limit int) []Result {
 	}
 	plan := s.buildPathPlan(string(pat))
 	defer pathPlanPool.Put(plan)
+	if planDead(plan) {
+		return nil
+	}
 
 	n := s.Len()
 	workers := runtime.NumCPU()
@@ -200,6 +203,21 @@ func (s *Store) buildPathPlan(qs string) *pathPlan {
 		}
 	}
 	return plan
+}
+
+// planDead reports a plan no entry can match: no dir contains the
+// query and no dir has a boundary split. Checking the dir table (one
+// bool per dir) is far cheaper than scanning every entry against it.
+func planDead(plan *pathPlan) bool {
+	if len(plan.rems) > 0 {
+		return false
+	}
+	for i := range plan.infos {
+		if plan.infos[i].full {
+			return false
+		}
+	}
+	return true
 }
 
 // matchDir computes one dir's dirPathInfo for query qs (seps = its
