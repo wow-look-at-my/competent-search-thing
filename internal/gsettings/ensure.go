@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -69,6 +71,15 @@ type Applied struct {
 	// Existing is true when the app's entry already existed and its
 	// (possibly user-edited) binding was deliberately left untouched.
 	Existing bool
+	// Repaired is true when an existing entry's stored command no
+	// longer launched the running binary -- its executable was gone,
+	// not absolute, unparseable, or resolved to a different file (a
+	// versioned install directory left behind by an upgrade) -- and
+	// the command key, never the binding, was rewritten.
+	Repaired bool
+	// PreviousCommand is the stored command a repair replaced ("" when
+	// Repaired is false).
+	PreviousCommand string
 
 	// The read-back verification: after the writes (or the sticky
 	// no-op), the parent list and the entry's binding/command are
@@ -99,10 +110,13 @@ type Applied struct {
 //
 // An entry the app created earlier is respected: its binding is never
 // rewritten -- a user edit in GNOME Settings survives restarts -- and
-// only a stale command (the binary moved) is refreshed. A fresh entry
-// gets the first conflict-free candidate of [configured hotkey,
-// Ctrl+Alt+Space, Super+Space]; "taken" is every accelerator found in
-// the standard GNOME keybinding schemas plus every other
+// the stored command is only rewritten when it no longer launches the
+// running binary (see commandNeedsRepair): dead or foreign commands
+// self-heal to the new command, while a still-working spelling --
+// even one that differs textually from command -- is left alone. A
+// fresh entry gets the first conflict-free candidate of [configured
+// hotkey, Ctrl+Alt+Space, Super+Space]; "taken" is every accelerator
+// found in the standard GNOME keybinding schemas plus every other
 // custom-keybinding entry, because mutter silently refuses grabs for
 // combinations that are already bound. When every candidate is taken,
 // ErrAllTaken is returned and nothing is written. A second run with an
@@ -140,11 +154,11 @@ func EnsureBinding(ctx context.Context, run Runner, hk platform.Hotkey, command 
 	}
 
 	if slices.Contains(paths, OurPath) {
-		applied, err = ensureExisting(ctx, run, applied, command)
+		applied, expected, err := ensureExisting(ctx, run, applied, command)
 		if err != nil {
 			return applied, err
 		}
-		return verifyOnDisk(ctx, run, applied, command), nil
+		return verifyOnDisk(ctx, run, applied, expected), nil
 	}
 
 	taken := collectTaken(ctx, run, paths)
@@ -179,9 +193,11 @@ func EnsureBinding(ctx context.Context, run Runner, hk platform.Hotkey, command 
 
 // verifyOnDisk re-reads the parent list plus the entry's binding and
 // command in fresh gsettings invocations and fills Applied's read-back
-// fields. Read failures never fail EnsureBinding -- the writes already
-// happened -- they just leave Verified false with a note, so the
-// caller warns instead of claiming success.
+// fields. command is the command expected on disk: what was written on
+// the fresh and repair paths, or the untouched stored command when an
+// existing entry was healthy. Read failures never fail EnsureBinding
+// -- the writes already happened -- they just leave Verified false
+// with a note, so the caller warns instead of claiming success.
 func verifyOnDisk(ctx context.Context, run Runner, applied Applied, command string) Applied {
 	note := func(format string, args ...any) Applied {
 		applied.VerifyNote = fmt.Sprintf(format, args...)
@@ -225,29 +241,70 @@ func verifyOnDisk(ctx context.Context, run Runner, applied Applied, command stri
 }
 
 // ensureExisting handles an entry the app created earlier: the binding
-// -- whatever the user made it -- is left alone, and only a stale
-// command is rewritten.
-func ensureExisting(ctx context.Context, run Runner, applied Applied, command string) (Applied, error) {
+// -- whatever the user made it -- is left alone, and the stored
+// command is rewritten only when it no longer launches the running
+// binary (commandNeedsRepair). It returns the command the read-back
+// verification should expect on disk: the stored one when it was left
+// alone, command after a repair.
+func ensureExisting(ctx context.Context, run Runner, applied Applied, command string) (_ Applied, expected string, err error) {
 	applied.Existing = true
 	bindingOut, err := run(ctx, "get", customKeybindingSchema+":"+OurPath, "binding")
 	if err != nil {
-		return applied, fmt.Errorf("gsettings: reading the existing binding: %w", err)
+		return applied, "", fmt.Errorf("gsettings: reading the existing binding: %w", err)
 	}
 	if v, ok := parseVariantStringValue(bindingOut); ok {
 		applied.Binding = v
 	}
 	commandOut, err := run(ctx, "get", customKeybindingSchema+":"+OurPath, "command")
 	if err != nil {
-		return applied, fmt.Errorf("gsettings: reading the existing command: %w", err)
+		return applied, "", fmt.Errorf("gsettings: reading the existing command: %w", err)
 	}
 	current, _ := parseVariantStringValue(commandOut)
-	if current != command {
-		if _, err := run(ctx, "set", customKeybindingSchema+":"+OurPath, "command", quoteVariantString(command)); err != nil {
-			return applied, fmt.Errorf("gsettings: refreshing the keybinding command: %w", err)
-		}
-		applied.Changed = true
+	if current == command || !commandNeedsRepair(current, command) {
+		return applied, current, nil
 	}
-	return applied, nil
+	if _, err := run(ctx, "set", customKeybindingSchema+":"+OurPath, "command", quoteVariantString(command)); err != nil {
+		return applied, "", fmt.Errorf("gsettings: repairing the keybinding command: %w", err)
+	}
+	applied.Changed = true
+	applied.Repaired = true
+	applied.PreviousCommand = current
+	return applied, command, nil
+}
+
+// commandNeedsRepair decides whether an existing entry's stored
+// command (current, textually different from the new command) must be
+// rewritten. The accelerator is the user's; the command is app-owned
+// -- but a spelling that still launches the running binary is left
+// alone, so a working entry is never churned. Repair triggers exactly
+// when current cannot launch that binary any more: it is empty or
+// unparseable, its executable path is not absolute (gsd runs commands
+// with its own cwd and PATH), the path no longer exists, or it exists
+// but is a different file than the one the new command names -- the
+// versioned install directory (Homebrew Cellar, Nix store) left
+// behind by an upgrade, or a foreign program. The comparison follows
+// symlinks (os.Stat + os.SameFile), so a stable shim and the resolved
+// path it points at count as the same binary.
+func commandNeedsRepair(current, command string) bool {
+	oldExe, ok := commandExecutable(current)
+	if !ok || oldExe == "" || !filepath.IsAbs(oldExe) {
+		return true
+	}
+	oldInfo, err := os.Stat(oldExe)
+	if err != nil {
+		return true // the stored executable is gone
+	}
+	newExe, ok := commandExecutable(command)
+	if !ok || newExe == "" {
+		return false // nothing sound to compare against; keep the live command
+	}
+	newInfo, err := os.Stat(newExe)
+	if err != nil {
+		// The replacement cannot be verified to exist: never overwrite
+		// a command whose executable is alive with a doubtful one.
+		return false
+	}
+	return !os.SameFile(oldInfo, newInfo)
 }
 
 // candidates returns the accelerators to try, first the configured

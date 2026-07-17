@@ -53,10 +53,15 @@ func defaultRuntimeSeams() runtimeSeams {
 // plus the ambient bits (GOOS, clock, env, executable path, session
 // detection) tests pin down.
 type platformSeams struct {
-	goos          string
-	now           func() time.Time
-	getenv        func(string) string
-	executable    func() (string, error)
+	goos       string
+	now        func() time.Time
+	getenv     func(string) string
+	executable func() (string, error)
+	// args0 returns the process's argv[0] -- the spelling the binary
+	// was launched by, possibly an unresolved symlink ("" when
+	// unknown); the stable-path selection for the GNOME keybinding
+	// command consumes it as a fallback candidate.
+	args0         func() string
 	detectSession func() platform.Session
 	startHotkey   func(hk platform.Hotkey, onDown func()) (stop func(), err error)
 	// startPortal registers the summon shortcut through the XDG portal
@@ -83,10 +88,16 @@ type platformSeams struct {
 func defaultPlatformSeams() platformSeams {
 	launcher := platform.NewLauncher()
 	return platformSeams{
-		goos:          goruntime.GOOS,
-		now:           time.Now,
-		getenv:        os.Getenv,
-		executable:    os.Executable,
+		goos:       goruntime.GOOS,
+		now:        time.Now,
+		getenv:     os.Getenv,
+		executable: os.Executable,
+		args0: func() string {
+			if len(os.Args) == 0 {
+				return ""
+			}
+			return os.Args[0]
+		},
 		detectSession: func() platform.Session { return platform.DetectSession(os.Getenv) },
 		startHotkey:   native.StartHotkey,
 		startPortal:   startPortalShortcut,
