@@ -103,6 +103,35 @@ func TestUnescapeMountPath(t *testing.T) {
 	}
 }
 
+func TestParseMountpoints(t *testing.T) {
+	mounts := strings.Join([]string{
+		"/dev/sda1 / ext4 rw,relatime 0 0",
+		"proc /proc proc rw,nosuid 0 0",
+		"tmpfs /run tmpfs rw,nosuid 0 0",
+		"server:/export /mnt/nfs nfs rw,vers=4.2 0 0",
+		"user@host:/ /mnt/ssh fuse.sshfs rw,nosuid 0 0",
+		"/dev/sdb1 /data ext4 rw 0 0",
+		"/dev/loop3 /snap/tool/42 squashfs ro 0 0",
+		"/dev/sdc1 /mnt/with\\040space btrfs rw 0 0",
+		"overlay / overlay rw,lowerdir=/a 0 0",
+		"weird relative-mountpoint ext4 rw 0 0",
+		"malformed-line-with-two f",
+	}, "\n")
+	got := ParseMountpoints(strings.NewReader(mounts))
+	require.Equal(t, []string{"/", "/data", "/snap/tool/42", "/mnt/with space", "/"}, got,
+		"real filesystems only (virtual/network/FUSE dropped), escapes decoded, relative and malformed lines ignored")
+}
+
+func TestRealMountpointsRealTable(t *testing.T) {
+	// Machine-dependent content, so only invariants are asserted: every
+	// mountpoint absolute and of a walkable type ("/" itself is a
+	// legitimate entry here, unlike the skip list). On non-linux this
+	// returns nil, which the loop trivially satisfies.
+	for _, mp := range RealMountpoints() {
+		require.True(t, filepath.IsAbs(mp), mp)
+	}
+}
+
 func TestSystemMountSkipsRealTable(t *testing.T) {
 	// Machine-dependent content, so only invariants are asserted: never
 	// "/", always absolute, always under the root. On non-linux this

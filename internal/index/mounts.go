@@ -116,6 +116,49 @@ func ParseMountSkips(r io.Reader, roots []string) []string {
 	return skips
 }
 
+// ParseMountpoints reads /proc/self/mounts-format lines (fields:
+// device mountpoint fstype options...) from r and returns the
+// mountpoints of REAL, walkable filesystems: everything skipFSType
+// would prune (virtual kernel filesystems, network filesystems, FUSE)
+// is dropped, mirroring the walk's own mount skipping, so a consumer
+// diffing successive snapshots never drags a network mount into the
+// index. Octal escapes are decoded, relative mountpoints and malformed
+// lines are ignored, and the order is the table's.
+func ParseMountpoints(r io.Reader) []string {
+	var out []string
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) < 3 || skipFSType(fields[2]) {
+			continue
+		}
+		mp := unescapeMountPath(fields[1])
+		if !filepath.IsAbs(mp) {
+			continue
+		}
+		out = append(out, filepath.Clean(mp))
+	}
+	return out
+}
+
+// RealMountpoints returns the current mount table's walkable
+// mountpoints from /proc/self/mounts (see ParseMountpoints). Linux
+// only; on other platforms, and on any read failure, it returns nil.
+// The watch layer's sweeper diffs successive snapshots to
+// force-reconcile mountpoints appearing or vanishing under the indexed
+// roots.
+func RealMountpoints() []string {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	f, err := os.Open("/proc/self/mounts")
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	return ParseMountpoints(f)
+}
+
 // SystemMountSkips returns the mountpoints under roots that
 // BuildFromDisk must exclude, read from /proc/self/mounts. Linux only;
 // on other platforms, and on any read failure, it returns nil -- mount

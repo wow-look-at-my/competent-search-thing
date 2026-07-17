@@ -404,10 +404,10 @@ Field reference:
   Holding the hotkey down does not flicker the bar: OS key autorepeat
   re-fires the shortcut, so toggles are rate-limited to one per ~250ms.
 - `rescanIntervalMinutes` -- optional periodic full re-index, a safety
-  net on top of the live fsnotify updates; `0` (the default) disables
-  the timer. Independent of this timer, a reconcile rescan runs
-  automatically when the kernel event queue overflows (see the watcher
-  degradation caveat below).
+  net on top of the live fsnotify updates and the always-on reconcile
+  sweeps; `0` (the default) disables the timer. Independent of this
+  timer, a reconcile sweep runs automatically when the kernel event
+  queue overflows (see the watcher degradation caveat below).
 - `maxResults` -- the maximum number of results one query returns
   (default 50; zero or negative values are reset to the default).
 - `search` -- search engine behavior. `fuzzyDisabled` (default
@@ -1644,18 +1644,25 @@ These are Wayland design constraints, not bugs:
   cross-compiles and publishes the Windows binary (pure Go) but never
   runs it -- only the Linux build is exercised (the screenshot tests);
   treat it as best-effort until exercised on a real Windows machine.
-- **Watch limits / event overflow**: every live indexed directory
-  holds one fsnotify watch (inotify on Linux), so very large trees can
-  exhaust `fs.inotify.max_user_watches`. Degradation is graceful and
-  never fatal: a refused watch is counted, logged once, and skipped
-  (that directory simply stops receiving live updates), and a kernel
-  event-queue overflow (lost events) automatically requests a full
-  reconcile rescan (requests are coalesced and spaced >= 30s apart, so
-  an overflow storm cannot cause back-to-back walks). Either condition
-  raises the staleness warning chip in the UI. If it happens
-  routinely, raise the limit (e.g.
-  `sudo sysctl fs.inotify.max_user_watches=524288`) and/or set
-  `rescanIntervalMinutes` as a periodic safety net.
+- **Watch limits / event overflow**: live watching runs on a bounded
+  HOT SET of fsnotify watches (inotify on Linux) -- by default half of
+  `fs.inotify.max_user_watches`, capped at 65536 -- filled with the
+  roots first, then the home directory's subtree, then everything
+  else, and rotated LRU-style toward recently active directories.
+  Directories outside the hot set are NOT stale-forever: an always-on
+  background sweep (every ~20 minutes) re-checks every indexed
+  directory's mtime and reconciles the ones that changed, so cold
+  directories converge within one sweep interval instead of never.
+  Degradation is graceful and never fatal: a watch the OS refuses is
+  counted, logged once, and skipped, and a kernel event-queue overflow
+  (lost events) automatically requests a reconcile sweep (requests are
+  coalesced and spaced apart, so an overflow storm cannot cause
+  back-to-back passes). Either condition raises the staleness warning
+  chip in the UI; hot-set evictions do not (they are normal
+  operation). `rescanIntervalMinutes` remains the optional deep safety
+  net -- it also covers the sweep's one documented blind spot,
+  mtime-backdated writes (e.g. `tar --preserve` into an existing
+  directory).
 - **Reveal on Linux**: prefers the freedesktop `FileManager1` D-Bus
   interface (the call waits for the reply) and falls back to opening
   the parent directory with xdg-open when `dbus-send` is missing,

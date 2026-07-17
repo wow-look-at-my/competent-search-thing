@@ -280,7 +280,7 @@ func TestStartupKicksOffIndexBuildAndEmitsProgress(t *testing.T) {
 func watchUp(a *App) bool {
 	a.watchMu.Lock()
 	defer a.watchMu.Unlock()
-	return a.watcher != nil && a.rescanner != nil
+	return a.watcher != nil && a.rescanner != nil && a.sweeper != nil
 }
 
 func TestStartupBringsUpWatcherAndAppliesEvents(t *testing.T) {
@@ -325,6 +325,37 @@ func TestStartWatchToleratesBadExcluder(t *testing.T) {
 	a.startWatch()
 	require.True(t, watchUp(a))
 	a.Shutdown(context.Background())
+}
+
+func TestStartWatchLogsTierSummary(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0o644))
+	m := index.NewManager([]string{dir}, nil, 0)
+	_, _, err := m.BuildFromDisk(context.Background(), nil)
+	require.NoError(t, err)
+
+	a, _ := newTestApp(t, m, Options{RescanEvery: 45 * time.Minute})
+	a.startWatch() // waits for the initial registration, so the numbers are real
+	require.True(t, watchUp(a))
+	out := buf.String()
+	require.Contains(t, out, "watch: backend inotify: 1/1 dirs live-watched (budget ",
+		"the summary announces the tier with real registration numbers")
+	require.Contains(t, out, "); sweep interval 20m0s; full rescan interval 45m0s")
+	a.Shutdown(context.Background())
+
+	// A zero rescan interval is announced as "off", never as 0s.
+	buf.Reset()
+	m2 := index.NewManager([]string{t.TempDir()}, nil, 0)
+	_, _, err = m2.BuildFromDisk(context.Background(), nil)
+	require.NoError(t, err)
+	a2, _ := newTestApp(t, m2, Options{})
+	a2.startWatch()
+	require.Contains(t, buf.String(), "full rescan interval off")
+	a2.Shutdown(context.Background())
 }
 
 func TestBuildIndexLogsAndSurvivesFailure(t *testing.T) {

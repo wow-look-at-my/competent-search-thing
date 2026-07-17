@@ -138,6 +138,7 @@ type App struct {
 	watchMu      sync.Mutex
 	watcher      *watch.Watcher
 	rescanner    *watch.Rescanner
+	sweeper      *watch.Sweeper
 	themeW       *themeWatcher
 	buildCancel  context.CancelFunc // cancels the initial build's walk
 	shuttingDown bool
@@ -289,12 +290,24 @@ func (a *App) buildIndex(ctx context.Context) {
 	a.startWatch()
 }
 
-// startWatch starts the fsnotify Watcher over the manager's roots --
-// filtering events through the same Excluder semantics the walks use,
-// reporting degradation to the frontend -- and the Rescanner for
-// periodic and degradation-triggered rebuilds. It is skipped when
-// Shutdown already ran.
+// defaultSweepInterval is the always-on sweep cadence (the
+// convergence bound for directories the bounded hot set does not
+// watch live); a config knob lands in a later stage.
+const defaultSweepInterval = 20 * time.Minute
+
+// startWatch starts the live-update layer: the fsnotify Watcher over
+// the manager's roots (bounded hot set; filtering events through the
+// same Excluder semantics the walks use, reporting degradation to the
+// frontend), the Rescanner for periodic and requested full rebuilds,
+// and the always-on Sweeper whose passes converge everything the hot
+// set does not cover (its watermark starts at this call's entry time
+// -- the just-finished initial build vouches for everything older).
+// After all three are up it waits for the watcher's initial
+// registration (ctx-abortable, so Shutdown cuts the wait) and logs
+// one loud behavior-contract summary. It is skipped when Shutdown
+// already ran.
 func (a *App) startWatch() {
+	watermark := time.Now()
 	ex, err := index.NewExcluder(a.manager.Excludes())
 	if err != nil {
 		// The initial build would have failed on the same patterns and
@@ -305,20 +318,42 @@ func (a *App) startWatch() {
 	}
 	w := watch.New(a.manager, a.manager.Roots(), ex, watch.Options{OnDegraded: a.emitDegraded})
 	r := watch.NewRescanner(a.manager, w, watch.RescanOptions{Interval: a.opt.RescanEvery})
+	s := watch.NewSweeper(a.manager, w, watch.SweepOptions{
+		Interval:         defaultSweepInterval,
+		InitialWatermark: watermark,
+	})
 
 	a.watchMu.Lock()
-	defer a.watchMu.Unlock()
 	if a.shuttingDown {
+		a.watchMu.Unlock()
 		return
 	}
-	if err := w.Start(); err != nil {
-		log.Printf("watch: live updates unavailable (rescans still work): %v", err)
+	wErr := w.Start()
+	if wErr != nil {
+		log.Printf("watch: live updates unavailable (sweeps and rescans still work): %v", wErr)
 	}
 	if err := r.Start(); err != nil {
 		log.Printf("watch: rescanner failed to start: %v", err)
 	}
-	a.watcher, a.rescanner = w, r
-	log.Printf("watch: live index updates started (periodic rescan every %v; 0s means off)", a.opt.RescanEvery)
+	if err := s.Start(); err != nil {
+		log.Printf("watch: sweeper failed to start: %v", err)
+	}
+	a.watcher, a.rescanner, a.sweeper = w, r, s
+	a.watchMu.Unlock()
+
+	if wErr == nil {
+		// The summary numbers are only real once the initial
+		// registration pass finished; the pass aborts promptly on
+		// Shutdown, which also unblocks this wait.
+		<-w.InitialRegistration()
+	}
+	st := w.Stats()
+	rescanDesc := "off"
+	if a.opt.RescanEvery > 0 {
+		rescanDesc = a.opt.RescanEvery.String()
+	}
+	log.Printf("watch: backend %s: %d/%d dirs live-watched (budget %d); sweep interval %s; full rescan interval %s",
+		st.Backend, st.WatchedDirs, st.IndexedDirs, st.Budget, defaultSweepInterval, rescanDesc)
 }
 
 // emitDegraded forwards watcher degradation to the frontend (the
@@ -343,12 +378,13 @@ func (a *App) emitDegraded(s watch.Stats) {
 // refresh mid-copy), cancels a still-running initial build (its walk aborts
 // and logs "index: initial build cancelled"), and stops the rescanner
 // first (it may be mid-rescan and calls back into the watcher to
-// resync watches), then the watcher, then the theme hot-reload
-// watcher. Every step is bounded: an in-flight rescan or watch resync
-// is cancelled, never waited out, so quit stays fast even mid-walk on
-// a huge index. Safe to call at any point, even before the watch layer
-// came up; the shuttingDown flag keeps a racing startWatch from
-// starting it afterwards.
+// resync watches), then the sweeper (its passes reconcile through the
+// watcher too, so it must stop before it), then the watcher, then the
+// theme hot-reload watcher. Every step is bounded: an in-flight
+// rescan, sweep pass, or watch resync is cancelled, never waited out,
+// so quit stays fast even mid-walk on a huge index. Safe to call at
+// any point, even before the watch layer came up; the shuttingDown
+// flag keeps a racing startWatch from starting it afterwards.
 func (a *App) Shutdown(_ context.Context) {
 	if a.opt.IPC != nil {
 		if err := a.opt.IPC.Close(); err != nil {
@@ -410,14 +446,17 @@ func (a *App) Shutdown(_ context.Context) {
 	a.shuttingDown = true
 	buildCancel := a.buildCancel
 	a.buildCancel = nil
-	w, r, tw := a.watcher, a.rescanner, a.themeW
-	a.watcher, a.rescanner, a.themeW = nil, nil, nil
+	w, r, sw, tw := a.watcher, a.rescanner, a.sweeper, a.themeW
+	a.watcher, a.rescanner, a.sweeper, a.themeW = nil, nil, nil, nil
 	a.watchMu.Unlock()
 	if buildCancel != nil {
 		buildCancel()
 	}
 	if r != nil {
 		r.Stop()
+	}
+	if sw != nil {
+		sw.Stop()
 	}
 	if w != nil {
 		w.Stop()

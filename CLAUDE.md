@@ -350,7 +350,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   capped at 256, a mountpoint equal to a configured root never
   skipped = the index-it-anyway escape hatch), appending it to the
   excludes as full-path patterns and logging the list; the `mountSkips`
-  package var is the test seam. `Add`/`Remove`
+  package var is the test seam; `RealMountpoints` / pure
+  `ParseMountpoints` are the inverse view -- mountpoints of WALKABLE
+  (non-virtual/network/FUSE) filesystems, linux-only/nil elsewhere --
+  consumed by the watch sweeper's mount-diff. `Add`/`Remove`
   are the watcher-phase entry points. `Store.Footprint()` /
   `Manager.Footprint()` (footprint.go): exact byte accounting of every
   column/blob (len-based; 16B string headers) plus documented
@@ -661,47 +664,81 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   every goroutine. Consumed by
   internal/app's firefox.go + the plugin registry's firefox-frequent
   and firefox-tabs builtins.
-- `internal/watch` -- keeps the index live after the initial walk.
-  `Watcher` (watch.go + events.go): one fsnotify watch per live indexed
-  directory plus the roots -- fsnotify is used uniformly on ALL
-  platforms and a watch is never recursive anywhere, so directories
-  gain/lose watches as they appear/vanish. Events are debounced
-  (debounce.go: flush after a quiet window, ~250ms, or when the oldest
-  pending event hits ~1s, or at 4096 pending; thresholds injectable via
-  `Options` for tests) and applied to the Manager as one ORDERED batch,
-  so create-then-delete ends deleted and delete-then-create ends live.
-  Event mapping: Create -> Lstat, `Manager.Add` (symlinks indexed as
-  non-dirs, never followed), new dirs get a watch + subtree scan via
-  `Manager.Add` (dedup-safe); Remove/Rename(old name) ->
-  `Manager.Remove` (subtree tombstone) + watches under the path
-  dropped; Write/Chmod ignored. Excluded paths are filtered with the
-  SAME `index.Excluder` the walks use, before they touch the index.
-  The fsnotify interaction sits behind the tiny `notifier` seam
-  (notify.go), so unit tests inject scripted Add failures, overflow
-  errors, and synthetic event sequences; integration tests run the
-  real inotify backend. Degradation model (never crash, never spin): a
-  refused watch (inotify max_user_watches) is counted, logged once,
-  and skipped; an event-queue overflow means lost events, so the
-  watcher asks the Rescanner for a reconcile rescan; `Degraded()` /
-  `Stats()` (watched/dropped/overflow counts) expose the state for the
-  UI, and `Options.OnDegraded` (edge-triggered, called at most once --
-  the flag is sticky) pushes the first transition to the app, which
-  forwards it as the "watch:degraded" event. `Rescanner` (rescan.go):
-  serialized full rebuilds --
-  `Manager.BuildFromDisk` (fresh-store swap; queries never block) then
-  `syncWatches` to re-add/drop watches -- triggered by an optional
-  interval ticker (config `rescanIntervalMinutes`) and by one-shot
-  degradation requests (`Request`), coalesced through a 1-slot channel
-  and spaced by `MinGap` (default 30s) so overflow storms cannot cause
-  back-to-back walks. Stop cancels promptly at ANY point of the cycle
-  (fast quit): an in-flight rebuild aborts mid-walk (partial store
-  discarded, previous kept, logged "watch: rescan cancelled"), an
-  in-flight `syncWatches` stops between directories (it takes the
-  rescan loop's ctx; the swapped-in rebuilt store stays), a MinGap
-  wait is cut short, and still-queued requests are dropped. Both
-  loops share the lifecycle.go Start/Stop
-  plumbing: idempotent Stop, safe before/during Start, no goroutine
-  leaks.
+- `internal/watch` -- keeps the index live after the initial walk;
+  three cooperating tiers whose CONTRACT is identical final index
+  state, differing only in latency (pinned by TestTierEquivalence*).
+  Event model (2026-07 redesign): an event is only a DIRTY PATH -- op
+  codes are advisory (consulted once at intake to drop Write/Chmod)
+  and lstat at apply time decides: gone -> `Manager.Remove` (subtree
+  tombstone) + watches under the path dropped; file -> `Manager.Add`
+  (a dir->file flip first tombstones the old subtree -- AddEntry only
+  flips the bit); dir -> Add + `reconcileDir` = shallow readdir diff
+  vs `Manager.ChildrenOf`, recursing (scanNewDir) ONLY into
+  index-unknown children, kind flips tombstoned+re-added, missing
+  children removed -- so application is order-independent by
+  construction (fanotify-style merged events plug in) and the sweeper
+  feeds the same reconcile with paths that never had events. `Watcher`
+  (watch.go + events.go): a bounded HOT SET of fsnotify watches --
+  fsnotify uniform on ALL platforms, never recursive.
+  `Options.MaxWatches`: 0 = auto (linux min(max_user_watches/2,
+  65536), floor 1024, via the `readMaxWatches` seam; non-linux/read
+  failure = unlimited watch-everything), negative = unlimited. Fill
+  priority (addInitialWatches + budget-aware syncWatches refill):
+  roots first (pinned, always watched, never evicted), then dirs
+  under the `homeDir` seam (os.UserHomeDir) to 75% of budget, then
+  the rest; fills use cold adds (at budget: NO syscalls issued --
+  beyond-budget dirs stay cold for sweeps, no failing-syscall storm).
+  Recency is a container/list LRU: touches = addWatch/refreshWatch on
+  a watched dir, reconcile touching a watched parent (map hit only --
+  file events never promote cold parents), and `promote(dir)` = watch
+  with eviction (reconcileDir's refreshWatch promotes sweep-found
+  dirs); at budget a new hot dir evicts the least-recently-touched
+  (Stats.Evictions -- NOT degradation; DroppedWatches stays strictly
+  "the OS refused"). Events are debounced (debounce.go: dirty-path
+  set, quiet ~250ms / oldest ~1s / 4096 cap; injectable). Excluded
+  paths filtered with the SAME `index.Excluder` as the walks. The
+  notifier seam (notify.go) keeps unit tests scripted; integration
+  tests run real inotify. Degradation (never crash, never spin):
+  refused watch = counted+logged once; event-queue overflow = lost
+  events -> Sweeper.Request when wired, else Rescanner fallback;
+  OnDegraded edge-triggered once -> app's "watch:degraded".
+  Stats{Backend "inotify", Budget, WatchedDirs, IndexedDirs,
+  DroppedWatches, Evictions, Overflows, Degraded};
+  `InitialRegistration()` closes when the first fill finished (the
+  app waits on it before its summary log). `Sweeper` (sweep.go): the
+  always-on convergence tier -- NewSweeper(m, w != nil, SweepOptions
+  {Interval 20m default, MinGap 1m, InitialWatermark (zero = first
+  pass re-lists EVERY dir; the app passes build-completion time),
+  StatsPerSec 50000 sleep-throttle, unexported `mounts` seam
+  (default index.RealMountpoints)}). One pass: mount-table snapshot
+  under the roots diffed vs the previous pass (symmetric difference
+  force-reconciled -- mount-onto-existing-dir moves no mtime,
+  unmounts restore content silently), then the roots (no index entry
+  of their own: routed to reconcileDir directly, a full reconcile
+  would invent one), then every live indexed dir via
+  Manager.LiveDirsPage(4096): lstat each; gone or mtime >= watermark
+  - 2s slack -> reconcile (Relisted), else skip (Swept). The
+  watermark advances to the pass's start ONLY on completion --
+  cancelled passes redo the window; mtime-BACKDATED mutations (tar
+  --preserve) are the documented miss, converging via full re-list /
+  rescan / !rescan. SweepStats{Completed, Cancelled, Running,
+  LastStart, LastDuration, Swept, Relisted}. `Rescanner` (rescan.go):
+  serialized full rebuilds -- `Manager.BuildFromDisk` (fresh-store
+  swap; queries never block) then budget-aware `syncWatches` --
+  triggered by an optional interval ticker (config
+  `rescanIntervalMinutes`) and one-shot requests, coalesced through a
+  1-slot channel, spaced by MinGap (default 30s). Stop cancels
+  promptly at ANY point on all three loops (fast quit): in-flight
+  rebuild aborts mid-walk, syncWatches stops between dirs, sweep
+  passes abort between dirs and inside throttle sleeps, MinGap waits
+  cut short, queued requests dropped. All three loops share the
+  lifecycle.go Start/Stop plumbing: idempotent Stop, safe
+  before/during Start, no goroutine leaks. App wiring: startWatch
+  builds watcher + rescanner + sweeper, starts in that order, waits
+  for InitialRegistration, then logs ONE summary ("watch: backend %s:
+  %d/%d dirs live-watched (budget %d); sweep interval %s; full rescan
+  interval %s"); Shutdown stops rescanner, then sweeper, then watcher
+  (the sweeper reconciles through the watcher).
 - `internal/portal` -- XDG Desktop Portal GlobalShortcuts client over
   godbus/dbus/v5 (direct dep), the Wayland-native global-hotkey path.
   PURE D-Bus client, deliberately NO app wiring yet. `Dial` (private

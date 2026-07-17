@@ -265,7 +265,11 @@ func TestRescannerStopCancelsWatchResync(t *testing.T) {
 	require.NotContains(t, buf.String(), "rescan complete")
 }
 
-func TestOverflowDegradationReconcilesEndToEnd(t *testing.T) {
+// TestOverflowDegradationReconcilesEndToEndViaRescanFallback keeps the
+// rescanner variant of overflow recovery honest: with NO sweeper wired
+// the overflow falls back to a full reconcile rescan (standalone
+// watcher+rescanner setups; the sweep-path twin lives in sweep_test).
+func TestOverflowDegradationReconcilesEndToEndViaRescanFallback(t *testing.T) {
 	root := t.TempDir()
 	m := buildManager(t, root, nil)
 	f := newFakeNotifier()

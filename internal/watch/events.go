@@ -61,19 +61,25 @@ func (w *Watcher) run(ctx context.Context) {
 	}
 }
 
-// addInitialWatches watches the roots plus every directory that is
-// currently live in the index. It runs inside the loop goroutine and
-// checks the context between adds, so Stop can interrupt a long
-// registration pass at any point.
+// addInitialWatches fills the watch set up to the budget: the roots
+// first (always watched), then live indexed dirs under the user's
+// home, then everything else. Beyond-budget dirs are simply never
+// issued a watch syscall -- they stay cold and sweeps converge them.
+// It runs inside the loop goroutine and checks the context between
+// adds, so Stop can interrupt a long registration pass at any point;
+// either way it closes initialDone so waiters unblock.
 func (w *Watcher) addInitialWatches(ctx context.Context) {
-	for _, d := range w.desiredDirs(ctx) {
-		if ctx.Err() != nil {
-			return
-		}
-		w.addWatch(d)
+	defer close(w.initialDone)
+	home, rest, total := w.desiredSplit(ctx, w.budgetVal())
+	w.fill(ctx, home, rest)
+	w.mu.Lock()
+	if ctx.Err() == nil {
+		w.stats.IndexedDirs = total
 	}
-	s := w.Stats()
-	log.Printf("watch: watching %d directories (%d dropped)", s.WatchedDirs, s.DroppedWatches)
+	s := w.stats
+	w.mu.Unlock()
+	log.Printf("watch: live watches on %d of %d indexed dirs (budget %d, %d dropped); unwatched dirs converge via sweeps",
+		s.WatchedDirs, total, s.Budget, s.DroppedWatches)
 }
 
 // wantEvent filters events at intake and reduces each surviving event
@@ -119,6 +125,11 @@ func (w *Watcher) flush(ctx context.Context) {
 // Stat) keeps symlink handling identical to the walker: the link
 // itself is indexed as a non-directory and never followed.
 func (w *Watcher) reconcile(ctx context.Context, path string) {
+	// Activity inside a watched directory keeps that directory hot: a
+	// cheap map hit that promotes an already-watched parent within the
+	// LRU. Unwatched parents are deliberately NOT pulled into the hot
+	// set by file events (reconcileDir and the sweeper promote dirs).
+	w.touchIfWatched(filepath.Dir(path))
 	fi, err := os.Lstat(path)
 	if err != nil {
 		// Gone: tombstone it -- Manager.Remove covers the whole subtree
@@ -136,6 +147,22 @@ func (w *Watcher) reconcile(ctx context.Context, path string) {
 		// Files AND symlinks: Lstat reports a symlink-to-dir as a
 		// non-directory, exactly like the walker's DirEntry check, so
 		// links are indexed but never watched or descended.
+		//
+		// A path the index knew as a DIRECTORY may have flipped to a
+		// file within one dirty window (dir deleted, file recreated:
+		// one merged dirty path, and the parent may never be dirtied
+		// -- both events carry THIS path). AddEntry only refreshes the
+		// entry's dir bit, so the old subtree must be tombstoned first
+		// or its descendants would stay live under a path that is now
+		// a file. ChildrenOf is a cheap map hit for ordinary files.
+		if len(w.mgr.ChildrenOf(path)) > 0 {
+			w.mgr.Remove(path)
+			w.dropWatchesUnder(path)
+		} else {
+			// Childless flip: no subtree to tombstone, but the
+			// bookkeeping may still claim a (dead) watch here.
+			w.forgetWatch(path)
+		}
 		_ = w.mgr.Add(filepath.Dir(path), filepath.Base(path), false)
 		return
 	}
@@ -270,8 +297,11 @@ func (w *Watcher) scanNewDir(ctx context.Context, dir string) {
 
 // handleError reacts to notifier-level errors. An event queue overflow
 // means events were LOST and the index is stale in unknown ways: the
-// watcher marks itself degraded and asks the Rescanner for a reconcile
-// rescan (the Rescanner spaces storms out via MinGap). Only the first
+// watcher marks itself degraded and asks the Sweeper for a reconcile
+// sweep -- a shallow pass converges the loss far cheaper than a full
+// rebuild -- falling back to a Rescanner rescan request when no
+// sweeper is wired (standalone watcher+rescanner setups keep working).
+// Both sides space storms out via their MinGap. Only the first
 // overflow is logged; anything else is logged as-is.
 func (w *Watcher) handleError(err error) {
 	if !errors.Is(err, fsnotify.ErrEventOverflow) {
@@ -281,17 +311,20 @@ func (w *Watcher) handleError(err error) {
 	w.mu.Lock()
 	notify := w.degradeLocked()
 	w.stats.Overflows++
-	fn := w.requestRescan
+	sweep := w.requestSweep
+	rescan := w.requestRescan
 	first := !w.loggedOverf
 	w.loggedOverf = true
 	w.mu.Unlock()
 	if first {
-		log.Printf("watch: event queue overflow, events lost (degraded); requesting reconcile rescan")
+		log.Printf("watch: event queue overflow, events lost (degraded); requesting reconcile sweep")
 	}
 	if notify != nil {
 		notify()
 	}
-	if fn != nil {
-		fn()
+	if sweep != nil {
+		sweep()
+	} else if rescan != nil {
+		rescan()
 	}
 }

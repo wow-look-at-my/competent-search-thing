@@ -1,10 +1,12 @@
 package watch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -446,7 +448,43 @@ func TestWatcherTypeFlipViaParentReconcile(t *testing.T) {
 	require.Equal(t, 3, w.Stats().WatchedDirs, "root, p, wasfile")
 }
 
-func TestWatcherOverflowDegradesAndRequestsRescan(t *testing.T) {
+func TestWatcherOverflowRequestsSweepWhenWired(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	root := t.TempDir()
+	m := buildManager(t, root, nil)
+	f := newFakeNotifier()
+	w := newTestWatcher(t, m, f)
+	rescans := make(chan struct{}, 8)
+	w.setRescanRequester(func() { rescans <- struct{}{} })
+	sweeps := make(chan struct{}, 8)
+	w.setSweepRequester(func() { sweeps <- struct{}{} })
+	startWatcher(t, w)
+
+	f.errs <- fsnotify.ErrEventOverflow
+	f.errs <- fmt.Errorf("wrapped: %w", fsnotify.ErrEventOverflow)
+	waitFor(t, func() bool { return w.Stats().Overflows == 2 }, "both overflows counted (wrapped included)")
+	require.True(t, w.Degraded())
+	<-sweeps
+	<-sweeps
+	select {
+	case <-rescans:
+		t.Fatal("with a sweeper wired, overflow must never fall back to a full rescan")
+	default:
+	}
+	require.Contains(t, buf.String(), "watch: event queue overflow, events lost (degraded); requesting reconcile sweep")
+
+	// Non-overflow errors are logged and the loop keeps running.
+	f.errs <- errors.New("some transient watcher error")
+	settle(t, m, f, root)
+	require.Equal(t, 2, w.Stats().Overflows)
+}
+
+func TestWatcherOverflowFallsBackToRescanRequest(t *testing.T) {
+	// No sweeper wired: standalone watcher+rescanner setups keep the
+	// old overflow -> rescan behavior.
 	root := t.TempDir()
 	m := buildManager(t, root, nil)
 	f := newFakeNotifier()
@@ -461,11 +499,6 @@ func TestWatcherOverflowDegradesAndRequestsRescan(t *testing.T) {
 	require.True(t, w.Degraded())
 	<-requested
 	<-requested
-
-	// Non-overflow errors are logged and the loop keeps running.
-	f.errs <- errors.New("some transient watcher error")
-	settle(t, m, f, root)
-	require.Equal(t, 2, w.Stats().Overflows)
 }
 
 func TestWatcherLifecycle(t *testing.T) {
