@@ -58,6 +58,9 @@ type Config struct {
 	// History configures the query history behind the bar's Up/Down
 	// recall (see internal/history).
 	History HistoryConfig `json:"history"`
+	// Window configures the native window layer (read by main.go
+	// before the Wails runtime starts).
+	Window WindowConfig `json:"window"`
 }
 
 // PluginsConfig configures the plugin system. The zero value means
@@ -95,6 +98,17 @@ type BangsConfig struct {
 type TrayConfig struct {
 	// Disabled turns the tray icon off.
 	Disabled bool `json:"disabled"`
+}
+
+// WindowConfig configures the native window layer.
+type WindowConfig struct {
+	// Translucent true requests a per-pixel-alpha (RGBA) window so
+	// the area outside the bar's rounded corners is truly see-through
+	// instead of a squared-off opaque fill. It needs a running
+	// compositor; on an X11 session without one the corners render
+	// solid black, which is why the zero value -- the default --
+	// keeps the window opaque (current behavior).
+	Translucent bool `json:"translucent"`
 }
 
 // HistoryConfig configures the query history (see internal/history).

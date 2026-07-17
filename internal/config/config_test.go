@@ -303,6 +303,25 @@ func TestTrayConfig(t *testing.T) {
 	require.True(t, got.Tray.Disabled)
 }
 
+func TestWindowConfig(t *testing.T) {
+	setConfigDir(t)
+	require.False(t, Default().Window.Translucent, "the window is opaque by default")
+
+	// A config predating the window block loads as opaque...
+	var c Config
+	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
+	c.Normalize()
+	require.False(t, c.Window.Translucent)
+
+	// ...and an explicit opt-in round-trips.
+	in := Default()
+	in.Window.Translucent = true
+	require.NoError(t, Save(in))
+	got, err := Load()
+	require.NoError(t, err)
+	require.True(t, got.Window.Translucent)
+}
+
 func TestHistoryConfig(t *testing.T) {
 	setConfigDir(t)
 	require.False(t, Default().History.PersistDisabled, "history persistence is on by default")
