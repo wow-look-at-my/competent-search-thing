@@ -252,15 +252,37 @@ func TestSanitizeFields(t *testing.T) {
 }
 
 func TestSanitizeActionInternalTypesStripped(t *testing.T) {
-	for _, typ := range []string{ActionSetQuery, ActionRunBuiltin} {
+	for _, typ := range []string{ActionSetQuery, ActionRunBuiltin, ActionActivateWindow} {
 		t.Run(typ, func(t *testing.T) {
-			r := Result{Title: "t", Action: &Action{Type: typ, Value: "x"}}
+			r := Result{Title: "t", Action: &Action{Type: typ, Value: "x", Window: "42"}}
 			results, dropped := SanitizeResponse(&Response{Results: []Result{r}}, true)
 			require.Len(t, results, 1, "result survives with action stripped")
 			require.Nil(t, results[0].Action)
 			require.Len(t, dropped, 1)
 			require.Contains(t, dropped[0], "internal-only")
 			require.Contains(t, dropped[0], typ)
+		})
+	}
+}
+
+func TestSanitizeActionClearsStrayWindow(t *testing.T) {
+	// A window id smuggled onto an external action type is cleared,
+	// exactly like a stray argv on a value-carrying action.
+	cases := []Action{
+		{Type: ActionOpenPath, Value: "/tmp/x", Window: "42"},
+		{Type: ActionOpenURL, Value: "https://example.com/", Window: "42"},
+		{Type: ActionCopyText, Value: "x", Window: "42"},
+		{Type: ActionRunCommand, Argv: []string{"true"}, Window: "42"},
+	}
+	for _, a := range cases {
+		t.Run(a.Type, func(t *testing.T) {
+			action := a
+			r := Result{Title: "t", Action: &action}
+			results, dropped := SanitizeResponse(&Response{Results: []Result{r}}, true)
+			require.Empty(t, dropped)
+			require.Len(t, results, 1)
+			require.NotNil(t, results[0].Action)
+			require.Empty(t, results[0].Action.Window)
 		})
 	}
 }
@@ -549,6 +571,7 @@ func TestActionTypeConstants(t *testing.T) {
 	require.Equal(t, "run_command", ActionRunCommand)
 	require.Equal(t, "set_query", ActionSetQuery)
 	require.Equal(t, "run_builtin", ActionRunBuiltin)
+	require.Equal(t, "activate_window", ActionActivateWindow)
 	require.Equal(t, 1, ProtocolVersion)
 	require.Equal(t, float64(50), DefaultScore)
 }

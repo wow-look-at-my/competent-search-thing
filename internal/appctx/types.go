@@ -20,6 +20,18 @@ type InstalledApp struct {
 	ID   string // stable identity: desktop-file name, registry subkey, bundle name
 }
 
+// WindowInfo describes one open top-level window (the builtin Open
+// Windows search feeds on these). ID is the window-system identity --
+// an X11 window id -- that ActivateWindow-style calls consume later;
+// App is the owning application's identity (WM_CLASS class, exe base
+// name, ...).
+type WindowInfo struct {
+	ID    uint32
+	Title string
+	App   string
+	PID   int
+}
+
 // Snapshot is an immutable copy of the cached app context at one
 // point in time. Mutating its slices or the Focused struct never
 // affects the Cache.
@@ -27,4 +39,5 @@ type Snapshot struct {
 	Focused   *AppInfo // nil when no focused app was captured
 	Running   []AppInfo
 	Installed []InstalledApp
+	Windows   []WindowInfo
 }

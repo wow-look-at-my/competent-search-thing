@@ -271,8 +271,8 @@ Field reference:
   `entries` maps a provider id to per-plugin config:
   `{ "entries": { "calc": { "disabled": false, "settings": { } } } }`.
   `disabled` turns that one provider off (the built-in ids `bangs`,
-  `app`, `apps`, `apps-search`, `firefox-frequent` and `firefox-tabs`
-  work here too);
+  `app`, `apps`, `apps-search`, `windows`, `firefox-frequent` and
+  `firefox-tabs` work here too);
   `settings` is an opaque JSON object passed verbatim to that plugin
   in every request (its `settings` field), so plugins can be
   configured without editing their manifest.
@@ -761,10 +761,11 @@ be shadowed.
 
 ### Built-in commands
 
-Six built-in providers ship inside the app and go through the same
+Seven built-in providers ship inside the app and go through the same
 pipeline (disable them like any plugin via `plugins.entries` with ids
-`bangs`, `app`, `apps`, `apps-search`, `firefox-frequent`,
-`firefox-tabs`):
+`bangs`, `app`, `apps`, `apps-search`, `windows` -- the last is the
+bang-less [Open windows](#open-windows) search, listed here only for
+its disable knob -- `firefox-frequent`, `firefox-tabs`):
 
 | bang | does |
 |------|------|
@@ -1116,6 +1117,55 @@ query is the only command mode), remote icons, plugin-supplied
 HTML/CSS, Wayland focused-window support, and untargeted installed-app
 results.
 
+## Open windows
+
+On X11 sessions, typing two or more characters also searches the
+titles of the windows currently open on your desktop. Matches appear
+as an "Open Windows" section below the file results (subtitle = the
+owning application), and pressing Enter on one ACTIVATES that window
+-- raises and focuses it -- instead of opening anything. Think
+"window switcher you can type at".
+
+Details:
+
+- The window list is refreshed in the background every time the bar is
+  summoned, so it is current per summon and typing never waits on the
+  window system.
+- Ranking: a query matching the start of a word in the title scores
+  85, an application-name prefix 80, a title substring 65, an
+  application-name substring 60; ties sort alphabetically, capped at 8
+  rows. The scores sit below exact file-name hits on purpose.
+- Untitled windows and the searchbar's own window are skipped; the
+  list is capped at 100 windows.
+- Disable it like any plugin section:
+  `"plugins": { "entries": { "windows": { "disabled": true } } }`.
+- Window titles are read locally over X11/EWMH and are fed ONLY to
+  this built-in section -- they are never sent to external plugins
+  (the plugin request context remains focused/running/installed).
+
+Per-desktop support:
+
+| Desktop | Open-window search |
+|---------|--------------------|
+| Linux X11 | full (list + Enter activates) |
+| Linux Wayland | not available (see below) |
+| Windows | not yet (enumeration exists in the OS; not implemented) |
+| macOS | not yet (titles need the Accessibility AX API) |
+
+**Why not on Wayland**: Wayland's security model deliberately
+prevents a regular application from enumerating other applications'
+windows -- there is no sanctioned protocol for it on GNOME (the
+`org.gnome.Shell.Introspect` D-Bus interface is allowlisted /
+unsafe-mode-gated, no XDG portal exposes a window list, and the
+wlr-foreign-toplevel protocol is wlroots-only). The app deliberately
+does NOT fall back to reading the XWayland client list even though
+`DISPLAY` is usually set on GNOME Wayland: that connection would
+succeed and list ONLY the XWayland windows, a misleading partial view.
+So on a Wayland session the section simply never appears, and one log
+line says why. A future option is a GNOME Shell extension that exports
+the window list over D-Bus (for example "Window Calls"), which the app
+could consume opt-in; nothing like that ships today.
+
 ## Tray icon
 
 The app puts a small magnifier icon in the system tray -- on Ubuntu's
@@ -1374,6 +1424,11 @@ These are Wayland design constraints, not bugs:
   comes from X11/EWMH and is absent (or XWayland-only) on Wayland --
   see the per-platform table under
   [the wire protocol](#the-wire-protocol).
+- **Open-window titles**: the [Open windows](#open-windows) search
+  needs to enumerate other applications' windows, which Wayland does
+  not allow a regular app to do; the section does not exist on
+  Wayland sessions (an XWayland-only list would be misleading, so the
+  app does not fall back to it).
 
 ## Known caveats
 

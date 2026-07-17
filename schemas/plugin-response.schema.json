@@ -84,7 +84,7 @@
     "action": {
       "title": "Activation action",
       "type": "object",
-      "description": "What Enter/click on the result does (omit for an inert row). External plugins may use open_path, open_url, copy_text and run_command; the types set_query and run_builtin are INTERNAL-ONLY (produced by builtin providers) and are always stripped from plugin responses. 'value' carries the payload for all types except run_command, which uses 'argv'. Note: the byte caps below are enforced by the app in BYTES; maxLength here counts characters, which is equivalent for ASCII payloads.",
+      "description": "What Enter/click on the result does (omit for an inert row). External plugins may use open_path, open_url, copy_text and run_command; the types set_query, run_builtin and activate_window are INTERNAL-ONLY (produced by builtin providers) and are always stripped from plugin responses. 'value' carries the payload for all types except run_command, which uses 'argv'. Note: the byte caps below are enforced by the app in BYTES; maxLength here counts characters, which is equivalent for ASCII payloads.",
       "required": ["type"],
       "properties": {
         "type": {
@@ -100,9 +100,14 @@
           "type": "array",
           "items": { "type": "string", "maxLength": 1024 },
           "description": "Command line for run_command: 1..16 entries, each at most 1024 bytes, executed directly (no shell). The result is dropped entirely unless the manifest sets allow_run_command."
+        },
+        "window": {
+          "type": "string",
+          "description": "Window id carried by the INTERNAL-ONLY activate_window action (produced by the builtin Open Windows provider). External plugins cannot use it: activate_window actions are always stripped from plugin responses, and any 'window' value on the external types is cleared -- so this schema rejects every action carrying 'window'."
         }
       },
       "additionalProperties": false,
+      "not": { "required": ["window"] },
       "oneOf": [
         {
           "properties": {
