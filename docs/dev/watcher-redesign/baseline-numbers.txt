@@ -1,0 +1,14 @@
+== watch layer baseline: 30000 dirs, 20000 storm ops (benchmark phase) ==
+go1.25.0, GOMAXPROCS 4, linux, kernel 6.18.5
+tree:     30000 dirs + 60000 files in 3.80s
+index:    90000 entries in 0.19s
+register: 30001 watched, 0 dropped, degraded false; 0.15s wall, cpu 0.08s user + 0.09s sys
+kernel:   max_user_watches 129984; est 36.7 MB (30001 watches x 1284 B); fdinfo sees 1 inotify fds, 30001 wds
+storm:    20000 files created+deleted across 200 dirs in 1.48s; converged 6.39s after last op; cpu 6.85s user + 1.68s sys
+          stats delta: overflows +1, dropped +0, degraded true; live 90000 -> 93128
+idle:     10.01s cost cpu 0.000s user + 0.000s sys
+stop:     0.040s
+note: wall times captured in go-toolchain's BENCHMARK phase (un-instrumented, same yardstick as internal/index's gated benches); compare only runs captured the same way
+note: RegisterSeconds/ConvergeSeconds run to the LAST observed change; the stabilization quiet windows (2s/3s) are excluded from the wall numbers but included in the CPU deltas
+note: CPU deltas are process-wide getrusage(RUSAGE_SELF): background GC and the stabilization polls are included
+note: EstimatedKernelBytes = WatchedDirs * 1284 B (kernel INOTIFY_WATCH_COST, x86-64); InotifyWatchDescs is the kernel's own fdinfo count
