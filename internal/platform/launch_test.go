@@ -2,8 +2,13 @@ package platform
 
 import (
 	"errors"
+	"fmt"
+	"os/exec"
 	"runtime"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -20,13 +25,13 @@ func TestRevealCommands(t *testing.T) {
 	linux := RevealCommands("linux", "/tmp/dir/file.txt")
 	require.Len(t, linux, 2)
 	require.Equal(t, []string{
-		"dbus-send", "--session",
+		"dbus-send", "--session", "--print-reply",
 		"--dest=org.freedesktop.FileManager1",
 		"/org/freedesktop/FileManager1",
 		"org.freedesktop.FileManager1.ShowItems",
 		"array:string:file:///tmp/dir/file.txt",
 		"string:",
-	}, linux[0])
+	}, linux[0], "--print-reply makes a missing file manager a detectable non-zero exit")
 	require.Equal(t, []string{"xdg-open", "/tmp/dir"}, linux[1], "fallback opens the parent directory")
 
 	require.Equal(t, [][]string{{"open", "-R", "/tmp/x"}}, RevealCommands("darwin", "/tmp/x"))
@@ -38,46 +43,142 @@ func TestFileURIEscaping(t *testing.T) {
 	// Spaces are percent-encoded by net/url; commas additionally,
 	// because dbus-send splits array:string: arguments on commas.
 	cmds := RevealCommands("linux", "/tmp/weird name,with comma")
-	require.Equal(t, "array:string:file:///tmp/weird%20name%2Cwith%20comma", cmds[0][5])
+	require.Equal(t, "array:string:file:///tmp/weird%20name%2Cwith%20comma", cmds[0][6])
 }
 
-// fakeRunner records every argv and fails those in failFirst.
-type fakeRunner struct {
-	calls     [][]string
-	failFirst int // fail this many leading calls
+// logCapture collects Logf lines; reaper goroutines log concurrently.
+type logCapture struct {
+	mu    sync.Mutex
+	lines []string
 }
 
-func (f *fakeRunner) run(argv []string) error {
-	f.calls = append(f.calls, argv)
-	if len(f.calls) <= f.failFirst {
-		return errors.New("exec: not found")
+func (c *logCapture) logf(format string, v ...interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lines = append(c.lines, fmt.Sprintf(format, v...))
+}
+
+func (c *logCapture) joined() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.Join(c.lines, "\n")
+}
+
+// scriptedStarter fakes the Start seam: each call consumes the next
+// script entry. startErr fails the spawn itself; waitErr is what the
+// child's exit reports; a nil block channel means the wait returns
+// immediately, otherwise it blocks until the channel closes.
+type scriptEntry struct {
+	startErr error
+	waitErr  error
+	block    chan struct{}
+}
+
+type scriptedStarter struct {
+	calls  [][]string
+	script []scriptEntry
+}
+
+func (s *scriptedStarter) start(argv []string) (func() error, error) {
+	i := len(s.calls)
+	s.calls = append(s.calls, argv)
+	if i >= len(s.script) {
+		panic(fmt.Sprintf("scriptedStarter: unexpected call %d: %q", i, argv))
 	}
-	return nil
+	e := s.script[i]
+	if e.startErr != nil {
+		return nil, e.startErr
+	}
+	return func() error {
+		if e.block != nil {
+			<-e.block
+		}
+		return e.waitErr
+	}, nil
 }
 
-func TestLauncherOpen(t *testing.T) {
-	fr := &fakeRunner{}
-	l := &Launcher{GOOS: "linux", Run: fr.run}
+func testLauncher(goos string, s *scriptedStarter, lc *logCapture) *Launcher {
+	return &Launcher{GOOS: goos, Start: s.start, Grace: 200 * time.Millisecond, Logf: lc.logf}
+}
+
+func TestLauncherOpenSuccessLogsSpawn(t *testing.T) {
+	s := &scriptedStarter{script: []scriptEntry{{}}}
+	lc := &logCapture{}
+	l := testLauncher("linux", s, lc)
 	require.NoError(t, l.Open("/tmp/x"))
-	require.Equal(t, [][]string{{"xdg-open", "/tmp/x"}}, fr.calls)
+	require.Equal(t, [][]string{{"xdg-open", "/tmp/x"}}, s.calls)
+	require.Contains(t, lc.joined(), `open: exec ["xdg-open" "/tmp/x"]`,
+		"every spawn logs its exact argv")
 
 	require.Error(t, l.Open(""), "empty path is rejected")
 	require.Error(t, l.Open("   "), "blank path is rejected")
-	require.Len(t, fr.calls, 1, "nothing ran for invalid paths")
+	require.Len(t, s.calls, 1, "nothing ran for invalid paths")
 }
 
-func TestLauncherRevealFallsBack(t *testing.T) {
-	fr := &fakeRunner{failFirst: 1}
-	l := &Launcher{GOOS: "linux", Run: fr.run}
+func TestLauncherOpenFastFailureReturnsAndLogs(t *testing.T) {
+	boom := errors.New("exit status 3; stderr: no method available for opening the file")
+	s := &scriptedStarter{script: []scriptEntry{{waitErr: boom}}}
+	lc := &logCapture{}
+	l := testLauncher("linux", s, lc)
+	err := l.Open("/tmp/x")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "xdg-open")
+	require.Contains(t, err.Error(), "no method available",
+		"the child's stderr reaches the caller")
+	require.Contains(t, lc.joined(), "no method available", "and the log")
+}
+
+func TestLauncherOpenStillRunningAtGraceIsSuccess(t *testing.T) {
+	block := make(chan struct{})
+	s := &scriptedStarter{script: []scriptEntry{{block: block, waitErr: errors.New("exit status 9")}}}
+	lc := &logCapture{}
+	l := testLauncher("linux", s, lc)
+	l.Grace = 30 * time.Millisecond
+	require.NoError(t, l.Open("/tmp/x"),
+		"a handler still running when the grace window closes counts as success")
+	require.NotContains(t, lc.joined(), "exit status 9", "no failure logged yet")
+	close(block) // the child now fails, long after the window
+	require.Eventually(t, func() bool {
+		return strings.Contains(lc.joined(), "exit status 9") &&
+			strings.Contains(lc.joined(), "grace window")
+	}, 2*time.Second, 10*time.Millisecond, "the background reaper logs the late failure")
+}
+
+func TestLauncherRevealFallsBackOnStartFailure(t *testing.T) {
+	s := &scriptedStarter{script: []scriptEntry{
+		{startErr: errors.New("exec: not found")},
+		{},
+	}}
+	lc := &logCapture{}
+	l := testLauncher("linux", s, lc)
 	require.NoError(t, l.Reveal("/tmp/dir/f.txt"))
-	require.Len(t, fr.calls, 2, "dbus-send failed, xdg-open fallback ran")
-	require.Equal(t, "dbus-send", fr.calls[0][0])
-	require.Equal(t, []string{"xdg-open", "/tmp/dir"}, fr.calls[1])
+	require.Len(t, s.calls, 2, "dbus-send failed to start, xdg-open fallback ran")
+	require.Equal(t, "dbus-send", s.calls[0][0])
+	require.Equal(t, []string{"xdg-open", "/tmp/dir"}, s.calls[1])
+	require.Contains(t, lc.joined(), "failed to start")
+}
+
+func TestLauncherRevealFallsBackOnFastExit(t *testing.T) {
+	s := &scriptedStarter{script: []scriptEntry{
+		{waitErr: errors.New("exit status 1; stderr: Failed to open connection")},
+		{},
+	}}
+	lc := &logCapture{}
+	l := testLauncher("linux", s, lc)
+	require.NoError(t, l.Reveal("/tmp/dir/f.txt"))
+	require.Len(t, s.calls, 2,
+		"dbus-send started but exited non-zero inside the grace window; the fallback ran")
+	require.Equal(t, []string{"xdg-open", "/tmp/dir"}, s.calls[1])
+	require.Contains(t, lc.joined(), "Failed to open connection")
 }
 
 func TestLauncherAllCandidatesFail(t *testing.T) {
-	fr := &fakeRunner{failFirst: 99}
-	l := &Launcher{GOOS: "linux", Run: fr.run}
+	s := &scriptedStarter{script: []scriptEntry{
+		{startErr: errors.New("exec: not found")},
+		{startErr: errors.New("exec: not found")},
+	}}
+	lc := &logCapture{}
+	l := testLauncher("linux", s, lc)
 	err := l.Reveal("/tmp/x")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "dbus-send")
@@ -86,11 +187,58 @@ func TestLauncherAllCandidatesFail(t *testing.T) {
 }
 
 func TestLauncherUnsupportedGOOS(t *testing.T) {
-	l := &Launcher{GOOS: "plan9", Run: func([]string) error { return nil }}
+	s := &scriptedStarter{}
+	l := testLauncher("plan9", s, &logCapture{})
 	err := l.Open("/tmp/x")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "plan9")
 	require.Error(t, l.Reveal("/tmp/x"))
+	require.Empty(t, s.calls)
+}
+
+func TestLauncherNilLogfIsSafe(t *testing.T) {
+	s := &scriptedStarter{script: []scriptEntry{{}}}
+	l := &Launcher{GOOS: "linux", Start: s.start, Grace: 50 * time.Millisecond}
+	require.NoError(t, l.Open("/tmp/x"))
+}
+
+func requireSh(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX sh")
+	}
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not on PATH")
+	}
+}
+
+func TestStartObservedCapturesStderrAndExitStatus(t *testing.T) {
+	requireSh(t)
+	l := NewLauncher()
+	wait, err := l.startObserved([]string{"sh", "-c", "echo boom goes stderr >&2; exit 3"})
+	require.NoError(t, err)
+	werr := wait()
+	require.Error(t, werr)
+	require.Contains(t, werr.Error(), "exit status 3")
+	require.Contains(t, werr.Error(), "boom goes stderr")
+
+	wait, err = l.startObserved([]string{"sh", "-c", "exit 0"})
+	require.NoError(t, err)
+	require.NoError(t, wait(), "a clean exit reports no error")
+}
+
+func TestRunDetachedReaperLogsFailure(t *testing.T) {
+	requireSh(t)
+	lc := &logCapture{}
+	l := NewLauncher()
+	l.Logf = lc.logf
+	require.NoError(t, l.Run([]string{"sh", "-c", "echo bad launch >&2; exit 5"}),
+		"Run stays fire-and-forget: a started process is a success")
+	require.Eventually(t, func() bool {
+		return strings.Contains(lc.joined(), "exit status 5") &&
+			strings.Contains(lc.joined(), "bad launch")
+	}, 3*time.Second, 20*time.Millisecond, "the reaper logs the non-zero exit with stderr")
+	require.Contains(t, lc.joined(), "run: exec", "the spawn itself was logged")
 }
 
 func TestNewLauncherStartsRealProcesses(t *testing.T) {
@@ -99,6 +247,7 @@ func TestNewLauncherStartsRealProcesses(t *testing.T) {
 	}
 	l := NewLauncher()
 	require.Equal(t, runtime.GOOS, l.GOOS)
-	require.NoError(t, l.Run([]string{"true"}), "startDetached starts a real command")
+	require.Equal(t, DefaultGrace, l.Grace)
+	require.NoError(t, l.Run([]string{"true"}), "runDetached starts a real command")
 	require.Error(t, l.Run([]string{"definitely-not-a-binary-xyz"}))
 }
