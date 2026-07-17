@@ -322,6 +322,20 @@ func hugeHitCount(st *Store, q string, pathMode bool) int {
 	return n
 }
 
+// hugeFuzzyHitCount is hugeHitCount for the fuzzy tier: live entries
+// holding q as a subsequence but not a substring.
+func hugeFuzzyHitCount(st *Store, q string) int {
+	key := "f:" + q
+	hugeHitsMu.Lock()
+	defer hugeHitsMu.Unlock()
+	if n, ok := hugeHitsCache[key]; ok {
+		return n
+	}
+	n := countFuzzyOnlyMatches(st, q)
+	hugeHitsCache[key] = n
+	return n
+}
+
 // hugeMeasured guards the one-shot huge-store measurement against the
 // benchmark framework's b.N re-invocations.
 var hugeMeasured bool

@@ -12,22 +12,33 @@ const (
 	classExact  uint8 = iota // query equals the whole name
 	classPrefix              // name starts with the query
 	classSub                 // query occurs elsewhere in the name
+	classFuzzy               // query is a subsequence (but not a substring) of the name
 )
 
 // minShardEntries keeps tiny stores on the single-threaded path where
 // goroutine fan-out would cost more than it saves.
 const minShardEntries = 4096
 
-// Query returns up to limit entries whose name contains q,
+// QueryOptions tunes one query.
+type QueryOptions struct {
+	// FuzzyDisabled turns the fuzzy (subsequence) tier off for
+	// name-mode queries; the query then behaves exactly like the
+	// substring-only engine. The zero value keeps fuzzy matching on.
+	FuzzyDisabled bool
+}
+
+// Query returns up to limit entries whose name matches q,
 // case-insensitively, best matches first. Ranking: exact name matches,
-// then name-prefix matches, then other substring matches; within a
-// class directories sort before files, then shorter full paths, then
-// lexicographic path order. An empty query, an empty store, or a
-// non-positive limit returns nil.
+// then name-prefix matches, then other substring matches, then fuzzy
+// (subsequence) matches; within a class directories sort before files,
+// then shorter full paths, then lexicographic path order (the fuzzy
+// class ranks by alignment score first -- see fuzzy.go). An empty
+// query, an empty store, or a non-positive limit returns nil.
 //
 // A query containing a path separator switches to path mode and is
 // matched against the full path instead of the name (see path.go); the
-// name-only scan below is untouched by that dispatch.
+// name scans below are untouched by that dispatch and path mode has no
+// fuzzy tier.
 //
 // The scan is sharded across NumCPU contiguous entry ranges. The store
 // keeps names in original case only, so matching folds case at scan
@@ -37,6 +48,11 @@ const minShardEntries = 4096
 // full match list; a query with non-ASCII runes takes the per-entry
 // rune-folding slow path with the same sharding and ranking.
 func (s *Store) Query(q string, limit int) []Result {
+	return s.QueryWith(q, limit, QueryOptions{})
+}
+
+// QueryWith is Query with per-query options.
+func (s *Store) QueryWith(q string, limit int, opts QueryOptions) []Result {
 	n := s.Len()
 	if q == "" || limit <= 0 || n == 0 {
 		return nil
@@ -51,7 +67,16 @@ func (s *Store) Query(q string, limit int) []Result {
 		return s.queryPath(pat, ascii, limit)
 	}
 	qs := string(pat)
+	if opts.FuzzyDisabled {
+		return s.queryNamesSub(qs, ascii, n, limit)
+	}
+	return s.queryNamesFuzzy(qs, ascii, n, limit)
+}
 
+// queryNamesSub is the substring-only name scan: the pre-fuzzy engine,
+// dispatched when the fuzzy tier is disabled. It must stay
+// behavior-identical to the original Query body.
+func (s *Store) queryNamesSub(qs string, ascii bool, n, limit int) []Result {
 	workers := runtime.NumCPU()
 	if max := (n + minShardEntries - 1) / minShardEntries; workers > max {
 		workers = max
@@ -59,7 +84,7 @@ func (s *Store) Query(q string, limit int) []Result {
 	heaps := make([]*topK, workers)
 	if workers == 1 {
 		heaps[0] = newTopK(s, limit)
-		s.scanNames(qs, ascii, 0, n, heaps[0])
+		s.scanNames(qs, ascii, 0, n, heaps[0], nil)
 	} else {
 		per := (n + workers - 1) / workers
 		var wg sync.WaitGroup
@@ -74,7 +99,7 @@ func (s *Store) Query(q string, limit int) []Result {
 			go func(w, lo, hi int) {
 				defer wg.Done()
 				h := newTopK(s, limit)
-				s.scanNames(qs, ascii, lo, hi, h)
+				s.scanNames(qs, ascii, lo, hi, h, nil)
 				heaps[w] = h
 			}(w, lo, hi)
 		}
@@ -85,13 +110,14 @@ func (s *Store) Query(q string, limit int) []Result {
 }
 
 // scanNames scans one shard with the folding regime the pattern was
-// prepared for.
-func (s *Store) scanNames(pat string, ascii bool, lo, hi int, h *topK) {
+// prepared for. When marks is non-nil every live match's entry bit is
+// set in it (the phase-1 side channel of the fuzzy two-phase scan; see
+// fuzzy.go). Returns the number of live matches found in the shard.
+func (s *Store) scanNames(pat string, ascii bool, lo, hi int, h *topK, marks []uint64) int {
 	if ascii {
-		s.scanRange(pat, lo, hi, h)
-		return
+		return s.scanRange(pat, lo, hi, h, marks)
 	}
-	s.scanRangeFold(pat, lo, hi, h)
+	return s.scanRangeFold(pat, lo, hi, h, marks)
 }
 
 // scanRange scans entries [lo, hi) for the pre-folded ASCII pattern and
@@ -101,16 +127,17 @@ func (s *Store) scanNames(pat string, ascii bool, lo, hi int, h *topK) {
 // a match can never span two names. After a hit the scan skips to the
 // end of the matched name, so each entry is reported at most once, at
 // the first occurrence of pat inside its name.
-func (s *Store) scanRange(pat string, lo, hi int, h *topK) {
+func (s *Store) scanRange(pat string, lo, hi int, h *topK, marks []uint64) int {
 	base := s.nameOff[lo]
 	blob := s.names[base:s.nameOff[hi]]
 	sc := newCiScan(blob, pat)
 	off := 0
 	cur := lo
+	count := 0
 	for {
 		rel := sc.next(off)
 		if rel < 0 {
-			return
+			return count
 		}
 		pos := base + uint32(rel)
 		// Map the hit position to its entry: the unique e in [cur, hi)
@@ -118,10 +145,14 @@ func (s *Store) scanRange(pat string, lo, hi int, h *topK) {
 		e := cur + sort.Search(hi-cur, func(k int) bool { return s.nameOff[cur+k+1] > pos })
 		if s.flags[e]&flagTombstone == 0 {
 			h.add(s.makeCand(int32(e), pos, len(pat)))
+			count++
+			if marks != nil {
+				markEntry(marks, e)
+			}
 		}
 		next := e + 1
 		if next >= hi {
-			return
+			return count
 		}
 		off = int(s.nameOff[next] - base)
 		cur = next
@@ -131,7 +162,8 @@ func (s *Store) scanRange(pat string, lo, hi int, h *topK) {
 // scanRangeFold is the non-ASCII counterpart of scanRange: a per-entry
 // rune-folding classification (see fold.go). O(entries * name * pat) --
 // the documented slow path for queries carrying non-ASCII runes.
-func (s *Store) scanRangeFold(pat string, lo, hi int, h *topK) {
+func (s *Store) scanRangeFold(pat string, lo, hi int, h *topK, marks []uint64) int {
+	count := 0
 	for e := lo; e < hi; e++ {
 		if s.flags[e]&flagTombstone != 0 {
 			continue
@@ -150,7 +182,12 @@ func (s *Store) scanRangeFold(pat string, lo, hi int, h *topK) {
 		}
 		pathLen := joinedLen(s.dirs[s.parent[e]], len(nb))
 		h.add(cand{id: int32(e), pathLen: int32(pathLen), class: class, isDir: s.flags[e]&flagDir != 0})
+		count++
+		if marks != nil {
+			markEntry(marks, e)
+		}
 	}
+	return count
 }
 
 // makeCand builds the ranking candidate for entry e whose first match

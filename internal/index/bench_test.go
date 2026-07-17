@@ -87,6 +87,80 @@ func BenchmarkSearch(b *testing.B) {
 	}
 }
 
+// fuzzySelectiveQuery is the crafted fuzzy-selective benchmark query:
+// ZERO substring hits against the synth vocabulary (no name contains
+// "zqxr" contiguously) but a handful of subsequence hits -- exactly
+// the planted rare markers, whose "zzqx_marker_<i>.bin" names thread
+// z..q..x..r ('q' occurs nowhere else in the vocabulary). Both counts
+// are verified in the bench setup.
+const fuzzySelectiveQuery = "zqxr"
+
+// countFuzzyOnlyMatches counts live entries the fuzzy tier would add:
+// subsequence matches that are not substring matches (naive reference
+// walk, outside timing).
+func countFuzzyOnlyMatches(st *Store, q string) int {
+	pat, ascii := foldPattern(q)
+	qs := string(pat)
+	n := 0
+	st.ForEachLive(func(id int32) bool {
+		folded := testFold(st.Name(id), ascii)
+		if !strings.Contains(folded, qs) && naiveSubseq(folded, qs, ascii) {
+			n++
+		}
+		return true
+	})
+	return n
+}
+
+// BenchmarkSearchFuzzy measures the fuzzy tier's cost envelope:
+// "selective" runs phase 2 for real (zero substring hits, few
+// subsequence hits); "skip" is a common query whose phase-1 hit count
+// fills the limit, so phase 2 is skipped and the cost must track the
+// pre-fuzzy engine; the two "disabled" rows are the same queries with
+// the fuzzy tier off (the pre-change engine) for direct comparison.
+func BenchmarkSearchFuzzy(b *testing.B) {
+	s100k, s1M := searchFixtures()
+	sizes := []struct {
+		name string
+		st   *Store
+	}{
+		{"100k", s100k},
+		{"1M", s1M},
+	}
+	for _, size := range sizes {
+		subSel := countMatches(size.st, fuzzySelectiveQuery)
+		fuzzSel := countFuzzyOnlyMatches(size.st, fuzzySelectiveQuery)
+		subCommon := countMatches(size.st, "data")
+		require.Zero(b, subSel, "the selective query must have no substring hits")
+		require.Greater(b, fuzzSel, 0, "the selective query must have subsequence hits")
+		require.GreaterOrEqual(b, subCommon, 50, "the skip query must fill the limit in phase 1")
+
+		rows := []struct {
+			name, q  string
+			disabled bool
+			hits     int
+			fhits    int
+		}{
+			{"selective", fuzzySelectiveQuery, false, subSel, fuzzSel},
+			{"skip", "data", false, subCommon, 0},
+			{"disabled-selective", fuzzySelectiveQuery, true, subSel, 0},
+			{"disabled-common", "data", true, subCommon, 0},
+		}
+		for _, row := range rows {
+			b.Run(size.name+"/"+row.name, func(b *testing.B) {
+				opts := QueryOptions{FuzzyDisabled: row.disabled}
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					_ = size.st.QueryWith(row.q, 50, opts)
+				}
+				b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N), "ms/query")
+				b.ReportMetric(float64(row.hits), "hits")
+				b.ReportMetric(float64(row.fhits), "fhits")
+			})
+		}
+	}
+}
+
 // benchPathQueries covers the path-mode query shapes. "1/data"
 // straddles the dir/name join deep in the tree (dirs named *_1 whose
 // children start with "data"); "bench/" and "/b" hit every entry
@@ -264,6 +338,32 @@ func BenchmarkSearchHuge(b *testing.B) {
 	}
 	run("name", hugeNameQueries, false)
 	run("path", hugePathQueries, true)
+
+	// The fuzzy rows (see BenchmarkSearchFuzzy for the scenario
+	// definitions), with the disabled twins for direct deltas.
+	fuzzyRows := []struct {
+		name, q  string
+		disabled bool
+	}{
+		{"selective", fuzzySelectiveQuery, false},
+		{"skip", "data", false},
+		{"disabled-selective", fuzzySelectiveQuery, true},
+		{"disabled-common", "data", true},
+	}
+	for _, row := range fuzzyRows {
+		b.Run("fuzzy/"+row.name, func(b *testing.B) {
+			hits := hugeHitCount(st, row.q, false)
+			fhits := hugeFuzzyHitCount(st, row.q)
+			opts := QueryOptions{FuzzyDisabled: row.disabled}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = st.QueryWith(row.q, 50, opts)
+			}
+			b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N), "ms/query")
+			b.ReportMetric(float64(hits), "hits")
+			b.ReportMetric(float64(fhits), "fhits")
+		})
+	}
 }
 
 // BenchmarkHugeStoreMeasure performs the one-shot huge-store memory

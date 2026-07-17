@@ -51,6 +51,7 @@
       "default": "dark",
       "description": "The UI theme: a builtin ('dark', 'light') or the name of a user theme file at <configDir>/themes/<name>.json (see theme.schema.json). An unknown or invalid theme is logged and falls back to 'dark'. An empty value means the default."
     },
+    "search": { "$ref": "#/$defs/searchConfig" },
     "plugins": { "$ref": "#/$defs/pluginsConfig" },
     "bangs": { "$ref": "#/$defs/bangsConfig" },
     "tray": { "$ref": "#/$defs/trayConfig" },
@@ -60,6 +61,18 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "searchConfig": {
+      "title": "Search engine configuration",
+      "type": "object",
+      "properties": {
+        "fuzzyDisabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "true turns the fuzzy (subsequence) name-match tier off, leaving exact/prefix/substring matching only. The default keeps fuzzy matching on; exact, prefix, and substring matches always rank above fuzzy ones either way (see the README's 'Fuzzy matching')."
+        }
+      },
+      "additionalProperties": false
+    },
     "pluginsConfig": {
       "title": "Plugin system configuration",
       "type": "object",
@@ -237,6 +250,7 @@
       "hotkey": "alt+space",
       "rescanIntervalMinutes": 0,
       "maxResults": 50,
+      "search": { "fuzzyDisabled": false },
       "theme": "dark",
       "plugins": {
         "disabled": false,

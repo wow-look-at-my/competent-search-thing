@@ -246,6 +246,38 @@ the full path instead (Everything-style):
 - Within a rank class the usual tie-breaks apply: directories first,
   then shorter paths, then alphabetical.
 
+## Fuzzy matching
+
+A name query also matches names that contain its characters **in
+order with gaps** -- a subsequence, the fzf/VS-Code-style fuzzy UX:
+
+- `fbar` finds `foo_bar.txt`
+- `drpt12` finds `data_report_12.txt`
+- `cst` finds `competent-search-thing`
+
+The ranking guarantee: exact, prefix, and substring matches ALWAYS
+rank above every fuzzy match -- fuzzy is a strictly lower tier and
+the existing tiers behave exactly as before. Within the fuzzy tier,
+matches rank by a position-aware score: hits at the name start, after
+word boundaries (`-`, `_`, `.`, space, letter/digit transitions) and
+at camelCase steps score higher, consecutive runs score higher, and
+large gaps are penalized (with a cap, so one long gap does not drown
+an otherwise good match). For the query `fb` that means `foo_bar` >
+`FooBar` > `fxxbyyy`.
+
+There is no typo tolerance: a character that never occurs in the name
+is a miss (subsequence fuzz is also how fzf and VS Code's quick-open
+behave; Everything's matching is not typo-based either). Queries with
+a path separator ([path mode](#search-by-path)) have no fuzzy tier.
+
+Common queries cost nothing extra: whenever the substring tiers alone
+already fill the result limit, the fuzzy pass is skipped outright
+(every substring match outranks every fuzzy one, so it could not
+change the list). Turn the tier off entirely with
+`"search": { "fuzzyDisabled": true }` in
+[the configuration](#configuration); the engine then behaves exactly
+like the pre-fuzzy versions.
+
 ## Building
 
 The frontend must be built before the Go binary: `frontend/dist` is
@@ -314,6 +346,7 @@ The file is created with defaults on first run:
   "hotkey": "alt+space",
   "rescanIntervalMinutes": 0,
   "maxResults": 50,
+  "search": { "fuzzyDisabled": false },
   "theme": "dark",
   "plugins": { "disabled": false, "entries": {} },
   "bangs": { "sigils": ["!", "/", "@"], "aliases": {} },
@@ -325,6 +358,10 @@ The file is created with defaults on first run:
       "minVisitsMonth": 11,
       "minVisitsWeek": 1,
       "refreshMinutes": 10,
+      "maxResults": 6,
+      "profileDir": ""
+    },
+    "openTabs": {
       "maxResults": 6,
       "profileDir": ""
     }
@@ -373,6 +410,11 @@ Field reference:
   degradation caveat below).
 - `maxResults` -- the maximum number of results one query returns
   (default 50; zero or negative values are reset to the default).
+- `search` -- search engine behavior. `fuzzyDisabled` (default
+  `false`) turns the fuzzy (subsequence) name-match tier off, leaving
+  exact/prefix/substring matching only -- see
+  [Fuzzy matching](#fuzzy-matching). Exact, prefix, and substring
+  matches always rank above fuzzy ones either way.
 - `theme` -- the UI theme (default `dark`): a builtin (`dark`,
   `light`) or the name of a user theme file at
   `<configDir>/themes/<name>.json`. An unknown or invalid theme is
@@ -1345,24 +1387,42 @@ so v2 it is. Revisit once v3 ships a stable release.
 
 Benchmarks live in `internal/index/bench_test.go` and run on every
 `go-toolchain` build. Reference numbers from a 4-CPU (GOMAXPROCS=4)
-CI-class container (16 GB RAM, Go 1.25), query limit 50 -- "hits" is
-how many indexed entries match; a query still returns only the top 50:
+CI-class container (16 GB RAM, Go 1.25), query limit 50, fuzzy
+matching on (the default) -- "hits" is how many indexed entries
+match; a query still returns only the top 50:
 
 | store | query shape | query    | hits    | ms/query |
 |-------|-------------|----------|---------|----------|
-| 100k  | rare        | `zzqx`   | 3       | 0.11     |
-| 100k  | common      | `data`   | 5,236   | 0.64     |
-| 100k  | prefix      | `re`     | 20,209  | 0.90     |
-| 100k  | single char | `a`      | 45,771  | 1.03     |
-| 100k  | no match    | `qqqqzz` | 0       | 0.10     |
-| 1M    | rare        | `zzqx`   | 26      | 0.74     |
-| 1M    | common      | `data`   | 52,950  | 6.15     |
+| 100k  | rare        | `zzqx`   | 3       | 0.33     |
+| 100k  | common      | `data`   | 5,236   | 0.66     |
+| 100k  | prefix      | `re`     | 20,209  | 0.89     |
+| 100k  | single char | `a`      | 45,771  | 1.01     |
+| 100k  | no match    | `qqqqzz` | 0       | 0.37     |
+| 1M    | rare        | `zzqx`   | 26      | 2.8      |
+| 1M    | common      | `data`   | 52,950  | 6.2      |
 | 1M    | prefix      | `re`     | 202,719 | 11.7     |
-| 1M    | single char | `a`      | 459,658 | 16.2     |
-| 1M    | no match    | `qqqqzz` | 0       | 0.69     |
+| 1M    | single char | `a`      | 459,658 | 16.8     |
+| 1M    | no match    | `qqqqzz` | 0       | 3.0      |
+
+Queries with 50+ substring hits (common/prefix/single) skip the fuzzy
+pass entirely and cost what they always did; sparse queries (rare, no
+match) now include the fuzzy subsequence sweep -- that is the rare/no
+match delta vs the pre-fuzzy numbers (0.74 and 0.69 at 1M), and
+`search.fuzzyDisabled` restores those exactly. The fuzzy scenarios
+themselves (`BenchmarkSearchFuzzy`):
+
+| store | scenario                        | query  | ms/query |
+|-------|---------------------------------|--------|----------|
+| 100k  | fuzzy-selective (0 sub, 3 fuzzy hits)  | `zqxr` | 0.36 |
+| 100k  | fuzzy skipped (5,236 sub hits)  | `data` | 0.68     |
+| 100k  | disabled, selective query       | `zqxr` | 0.12     |
+| 1M    | fuzzy-selective (0 sub, 26 fuzzy hits) | `zqxr` | 2.9  |
+| 1M    | fuzzy skipped (52,950 sub hits) | `data` | 6.2      |
+| 1M    | disabled, common query          | `data` | 6.3      |
+| 1M    | disabled, selective query       | `zqxr` | 0.95     |
 
 The worst case measured -- a single-character query matching ~46% of
-1,000,000 names -- is 16.2 ms, well inside the 50 ms/keystroke budget;
+1,000,000 names -- is 16.8 ms, well inside the 50 ms/keystroke budget;
 typical substring queries run sub-millisecond to ~6 ms. The parallel
 walker indexes a freshly written ~50k-entry on-disk tree at ~4.6M
 entries/s (4 workers, warm page cache -- this measures walker overhead
