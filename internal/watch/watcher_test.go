@@ -448,6 +448,40 @@ func TestWatcherTypeFlipViaParentReconcile(t *testing.T) {
 	require.Equal(t, 3, w.Stats().WatchedDirs, "root, p, wasfile")
 }
 
+// TestWatcherChildlessDirToFileFlipDropsWatchClaim covers the
+// own-path dir->file flip: the dir is deleted and a FILE recreated at
+// the same path within one debounce window, so the single merged
+// dirty path is all the watcher hears (the parent is never dirtied --
+// both events carry this path). The stale watch claim must go and the
+// entry's dir bit must flip.
+func TestWatcherChildlessDirToFileFlipDropsWatchClaim(t *testing.T) {
+	root := t.TempDir()
+	paths := mkTree(t, root, "d/")
+	m := buildManager(t, root, nil)
+	f := newFakeNotifier()
+	w := newTestWatcher(t, m, f)
+	startWatcherRegistered(t, w)
+	require.Equal(t, 2, w.Stats().WatchedDirs, "root and d watched")
+
+	require.NoError(t, os.RemoveAll(paths["d/"]))
+	f.unwatch(paths["d/"]) // the kernel dropped the watch with the inode
+	require.NoError(t, os.WriteFile(paths["d/"], []byte("file now"), 0o644))
+	f.send(fsnotify.Remove, paths["d/"]) // op advisory; one merged dirty path
+	settle(t, m, f, root)
+
+	waitFor(t, func() bool { return w.Stats().WatchedDirs == 1 }, "the flipped path's watch claim is dropped")
+	require.False(t, f.has(paths["d/"]))
+	found := false
+	for _, r := range m.Query("d", 0) {
+		if r.Path == paths["d/"] {
+			found = true
+			require.False(t, r.IsDir, "the entry's dir bit flipped to file")
+		}
+	}
+	require.True(t, found, "the flipped path stays indexed")
+	require.False(t, w.Degraded(), "a clean flip is not degradation")
+}
+
 func TestWatcherOverflowRequestsSweepWhenWired(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
