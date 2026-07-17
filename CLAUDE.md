@@ -84,8 +84,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   layer up once (plugins.go: an appctx.Cache over the plat.appSource
   seam + RefreshInstalledAsync, then the registry via the
   `newRegistry` builder seam, whose production value `buildRegistry`
-  re-reads config.json, LoadDirs <configDir>/plugins, passes Version
-  and the installedApps getter, and logs every registry Errors()
+  re-reads config.json, LoadDirs <configDir>/plugins, passes Version,
+  the installedApps getter and the frequent-sites getter (firefox.go:
+  `frequentSites(cfg)` honors the config profileDir override, else
+  firefox.FindProfile over the `plat.firefoxBases` seam (production
+  firefox.DefaultBaseDirs); no profile = ONE quiet "firefox: no
+  profile found; frequent-sites disabled" line + a nil getter, so the
+  builtin provider never registers; otherwise a firefox.Cache whose
+  refresh goroutines are bounded by the app-lifetime firefoxCtx --
+  created on first use under pluginMu, SHARED across registry reloads
+  so !reload builds a fresh cache with fresh config but can never
+  leak an unbounded refresh, cancelled in Shutdown and left cancelled
+  afterwards), and logs every registry Errors()
   entry once with a "plugin:" prefix -- missing plugins dir =
   builtins only, no noise), starts theme hot reload (theme.go: a
   dedicated fsnotify watcher on the config dir + its themes/ subdir,
@@ -100,7 +110,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   ran is closed by the chain itself), closes the tray (cancels a
   Start still waiting on the bus, then the nil-safe idempotent
   Close), cancels the in-flight plugin
-  generation + Close()s the registry, cancels a still-running
+  generation + Close()s the registry + cancels the firefox refresh
+  context (an in-flight places.sqlite copy/query aborts between
+  chunks), cancels a still-running
   initial build (its walk aborts promptly, logs "index: initial
   build cancelled", discards the partial store, and never starts the
   watch layer), and stops rescanner+watcher plus the theme watcher
@@ -233,7 +245,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/config` -- config.json load/save (roots, excludes, hotkey,
   rescanIntervalMinutes, maxResults, theme, plugins {disabled, entries
   {<id>: {disabled, settings}}}, bangs {sigils, aliases}, tray
-  {disabled}). Lives under
+  {disabled}, firefox {frequentSites {minVisitsMonth 11,
+  minVisitsWeek 1, refreshMinutes 10, maxResults 6, profileDir ""}}
+  -- the defaults encode ">10 visits in 30 days AND >=1 in 7"; the
+  numeric knobs are Normalize-repaired to defaults when <= 0,
+  profileDir is passed through verbatim). Lives under
   os.UserConfigDir(); the `COMPETENT_SEARCH_CONFIG_DIR` env var
   overrides the directory (tests rely on this); `Dir()` exposes that
   directory (the plugins/ and themes/ dirs live inside it, next to
@@ -244,6 +260,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   written, corrupt file -> defaults + error returned for logging.
   `Normalize` repairs zero values (empty theme -> dark, nil plugin
   entries/bang aliases -> empty maps, empty sigils -> the ! / @
+  defaults, non-positive firefox.frequentSites numbers -> their
   defaults); entry settings are opaque json.RawMessage forwarded
   verbatim to that plugin.
 - `internal/theme` -- design-token resolution. WARNING: the 22
@@ -333,7 +350,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   frontend's empty-query cheat sheet. `Close()` drops idle
   HTTP connections; reload = build a new Registry, swap atomically,
   Close the old. Builtins (in-process, no sanitizer; targeted-only
-  except apps-search):
+  except apps-search and firefox-frequent):
   builtin_bangs.go "bangs"/Commands -- bang completions (resolved
   bang first, primary-sigil titles, typed-sigil set_query preserving
   the query rest, cap 12); builtin_app.go "app"/App Commands --
@@ -350,9 +367,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   / prefix 90 / word-start 75 (words = letter/digit runs, so spaces,
   hyphens, dots split) / substring 60, cap 6, same run_command
   launch; bang routing keeps it exclusive with the targeted !app
-  path, and a nil/empty snapshot emits nothing. Exhaustively
-  unit-tested, table-driven, plus an end-to-end manifest ->
-  registry -> /bin/sh transport dispatch test.
+  path, and a nil/empty snapshot emits nothing;
+  builtin_firefox.go "firefox-frequent"/Frequent Sites -- NO bangs,
+  all-queries semantics (>= 2 trimmed runes), registered ONLY when
+  Options.FrequentSites (the app-layer getter yielding []SiteInfo, a
+  plugin-local mirror of internal/firefox.Site) is non-nil; scores
+  host prefix 95 (leading "www." ignored) > title word-start 80 >
+  host substring 70 > title-or-URL substring 60, ties by visit count
+  then title, cap Options.FrequentSitesMax (<=0 -> 6); result =
+  title-or-host / URL subtitle / icon "globe" / open_url action.
+  Exhaustively unit-tested, table-driven, plus an end-to-end
+  manifest -> registry -> /bin/sh transport dispatch test.
 - `internal/appctx` -- app-context collection for the plugin system,
   pure and headless-tested: the data types (AppInfo / InstalledApp /
   Snapshot -- deliberately NOT internal/plugin's wire types, the app
@@ -377,6 +402,41 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Name[xx] ignored, sorted by Name). proc.go = `ProcInfo(procRoot,
   pid)` readlink exe + trimmed comm, each empty on error (cross-user
   /proc exe readlink fails; expected).
+- `internal/firefox` -- the frequent-sites data layer, pure and
+  headless-tested (fixture profiles.ini trees + fixture places.sqlite
+  databases BUILT IN THE TESTS; injectable now/clock/fetch seams).
+  profiles.go: `BaseDirs(goos, home, getenv)` = the probe order
+  (linux: classic ~/.mozilla/firefox, snap
+  ~/snap/firefox/common/.mozilla/firefox -- Ubuntu 22.04's default --
+  flatpak ~/.var/app/org.mozilla.firefox/.mozilla/firefox; windows
+  %APPDATA%\Mozilla\Firefox; darwin best-effort) +
+  `FindProfile(bases)`: per base, profiles.ini resolves to ONE
+  profile ([Install*] Default= wins, then [ProfileN] Default=1, then
+  a lone [ProfileN]; IsRelative=1 joins against the base, missing
+  IsRelative inferred from the path; the resolved dir must exist);
+  multiple bases = newest places.sqlite mtime wins, earlier base
+  breaks ties; ok=false = caller degrades. places.go:
+  `FrequentSites(ctx, profileDir, QueryOptions{MinMonth, MinWeek,
+  Now, Limit})` NEVER opens the live db (Firefox holds it locked,
+  WAL): copies places.sqlite + places.sqlite-wal to a fresh temp dir
+  (chunked, ctx-abortable), opens the COPY read-only via pure-Go
+  modernc.org/sqlite (driver "sqlite" -- windows/amd64 must keep
+  cross-compiling, so never swap in a cgo driver), one grouped query
+  (visit_date is MICROSECONDS since epoch; hidden=0, http(s)-only,
+  visit_type NOT IN (4,8) i.e. EMBED/FRAMED_LINK excluded; HAVING
+  c30 >= MinMonth AND c7 >= MinWeek, ORDER BY c30 DESC, LIMIT
+  default 200), host parsed in Go (net/url Hostname; empty host =
+  row dropped), temp dir removed on the way out. cache.go: `Cache`
+  (NewCache(ctx, CacheOptions)) = the appctx.Cache pattern for
+  sites: `Sites()` returns an immutable copy immediately and
+  single-flight-kicks ONE background refresh when stale (success
+  schedules the next attempt a TTL away, default 10m; failure keeps
+  old data, logs once per DISTINCT message, retries no sooner than
+  1m so a broken profile is not re-copied per keystroke); every
+  refresh goroutine is bounded by the constructor ctx (cancelled =
+  no new kicks, in-flight fetch aborts quietly). Consumed by
+  internal/app's firefox.go + the plugin registry's firefox-frequent
+  builtin.
 - `internal/watch` -- keeps the index live after the initial walk.
   `Watcher` (watch.go + events.go): one fsnotify watch per live indexed
   directory plus the roots -- fsnotify is used uniformly on ALL

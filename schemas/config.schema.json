@@ -46,7 +46,8 @@
     },
     "plugins": { "$ref": "#/$defs/pluginsConfig" },
     "bangs": { "$ref": "#/$defs/bangsConfig" },
-    "tray": { "$ref": "#/$defs/trayConfig" }
+    "tray": { "$ref": "#/$defs/trayConfig" },
+    "firefox": { "$ref": "#/$defs/firefoxConfig" }
   },
   "additionalProperties": false,
   "$defs": {
@@ -61,7 +62,7 @@
         },
         "entries": {
           "type": "object",
-          "description": "Per-plugin overrides keyed by provider id (the built-in ids 'bangs', 'app', 'apps' and 'apps-search' work here too).",
+          "description": "Per-plugin overrides keyed by provider id (the built-in ids 'bangs', 'app', 'apps', 'apps-search' and 'firefox-frequent' work here too).",
           "patternProperties": {
             "^[a-z0-9][a-z0-9_-]{0,31}$": { "$ref": "#/$defs/pluginEntry" }
           },
@@ -94,6 +95,51 @@
           "type": "boolean",
           "default": false,
           "description": "true turns the tray icon (StatusNotifierItem) off. The default keeps it on; sessions without an SNI host (no AppIndicator extension, headless) just never show it."
+        }
+      },
+      "additionalProperties": false
+    },
+    "firefoxConfig": {
+      "title": "Firefox integration configuration",
+      "type": "object",
+      "properties": {
+        "frequentSites": { "$ref": "#/$defs/frequentSitesConfig" }
+      },
+      "additionalProperties": false
+    },
+    "frequentSitesConfig": {
+      "title": "Frequently-visited Firefox sites",
+      "description": "The 'Frequent Sites' result section: pages from your own local Firefox history, read on your machine and never transmitted. A page qualifies when it was visited at least minVisitsMonth times in the past 30 days AND at least minVisitsWeek times in the past 7 days. Turn the section off via plugins.entries['firefox-frequent'].disabled. Zero or negative numbers are repaired to the defaults by the app; this schema rejects them.",
+      "type": "object",
+      "properties": {
+        "minVisitsMonth": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 11,
+          "description": "Minimum visits in the past 30 days (default 11 = 'more than 10 times')."
+        },
+        "minVisitsWeek": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1,
+          "description": "Minimum visits in the past 7 days (default 1)."
+        },
+        "refreshMinutes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10,
+          "description": "How old the cached site list may get before a query kicks a background re-read of the history (default 10)."
+        },
+        "maxResults": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 6,
+          "description": "Maximum results in one Frequent Sites section (default 6)."
+        },
+        "profileDir": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path of a Firefox profile directory. When non-empty, profile discovery (classic/snap/flatpak locations) is skipped and this profile's places.sqlite is used."
         }
       },
       "additionalProperties": false
@@ -148,7 +194,16 @@
         "sigils": ["!", "/", "@"],
         "aliases": { "math": "calc" }
       },
-      "tray": { "disabled": false }
+      "tray": { "disabled": false },
+      "firefox": {
+        "frequentSites": {
+          "minVisitsMonth": 11,
+          "minVisitsWeek": 1,
+          "refreshMinutes": 10,
+          "maxResults": 6,
+          "profileDir": ""
+        }
+      }
     }
   ]
 }

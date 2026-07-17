@@ -219,7 +219,16 @@ The file is created with defaults on first run:
   "theme": "dark",
   "plugins": { "disabled": false, "entries": {} },
   "bangs": { "sigils": ["!", "/", "@"], "aliases": {} },
-  "tray": { "disabled": false }
+  "tray": { "disabled": false },
+  "firefox": {
+    "frequentSites": {
+      "minVisitsMonth": 11,
+      "minVisitsWeek": 1,
+      "refreshMinutes": 10,
+      "maxResults": 6,
+      "profileDir": ""
+    }
+  }
 }
 ```
 
@@ -262,10 +271,10 @@ Field reference:
   `entries` maps a provider id to per-plugin config:
   `{ "entries": { "calc": { "disabled": false, "settings": { } } } }`.
   `disabled` turns that one provider off (the built-in ids `bangs`,
-  `app`, `apps` and `apps-search` work here too); `settings` is an
-  opaque JSON object
-  passed verbatim to that plugin in every request (its `settings`
-  field), so plugins can be configured without editing their manifest.
+  `app`, `apps`, `apps-search` and `firefox-frequent` work here too);
+  `settings` is an opaque JSON object passed verbatim to that plugin
+  in every request (its `settings` field), so plugins can be
+  configured without editing their manifest.
 - `bangs` -- bang parsing. `sigils` lists the characters that may start
   a bang query (default `["!", "/", "@"]`; each must be exactly one
   character and not a letter, digit, or space -- invalid sigils are
@@ -276,6 +285,13 @@ Field reference:
 - `tray` -- the [tray icon](#tray-icon). `disabled` (default `false`)
   turns it off. Leaving it on costs nothing on desktops without a
   status-icon host: the app just never shows one.
+- `firefox` -- the [Frequent sites (Firefox)](#frequent-sites-firefox)
+  section: the visit thresholds (`minVisitsMonth`, `minVisitsWeek`),
+  the cache refresh interval (`refreshMinutes`), the section's result
+  cap (`maxResults`), and the optional `profileDir` discovery
+  override. Everything is read locally from your own profile and never
+  transmitted; disable the section via
+  `plugins.entries["firefox-frequent"].disabled`.
 
 The full format is formally described by
 [`schemas/config.schema.json`](schemas/config.schema.json) -- add a
@@ -739,9 +755,9 @@ be shadowed.
 
 ### Built-in commands
 
-Four built-in providers ship inside the app and go through the same
+Five built-in providers ship inside the app and go through the same
 pipeline (disable them like any plugin via `plugins.entries` with ids
-`bangs`, `app`, `apps`, `apps-search`):
+`bangs`, `app`, `apps`, `apps-search`, `firefox-frequent`):
 
 | bang | does |
 |------|------|
@@ -786,6 +802,101 @@ exactly like `!app` does. This is the fourth built-in provider,
 ```json
 { "plugins": { "entries": { "apps-search": { "disabled": true } } } }
 ```
+
+The fifth built-in, `firefox-frequent`, has no bang: it answers plain
+queries with a "Frequent Sites" section -- see the next section.
+
+### Frequent sites (Firefox)
+
+When the machine has a Firefox profile, plain queries (two or more
+characters) also search the pages you visit frequently. Matches appear
+as a "Frequent Sites" section below the file results, each row showing
+the page title (or its host when untitled), the full URL, and a globe
+icon; activating a row opens the page in your default browser.
+
+**"Frequent" means: visited more than 10 times in the past 30 days AND
+at least once in the past 7 days.** Both thresholds are configurable
+(the defaults encode that exact rule as `minVisitsMonth: 11`,
+`minVisitsWeek: 1`).
+
+**Privacy**: the history is read locally, from your own Firefox
+profile, by the app running on your machine -- the same data the
+awesome bar uses. Nothing is transmitted anywhere, no browser
+extension is involved, and the only network traffic ever caused by
+this feature is you opening a result in your browser.
+
+How it works:
+
+- **Profile discovery** probes the `profiles.ini` base directories in
+  order: the classic `~/.mozilla/firefox`, the snap install
+  `~/snap/firefox/common/.mozilla/firefox` (Ubuntu 22.04's default
+  Firefox), and the flatpak install
+  `~/.var/app/org.mozilla.firefox/.mozilla/firefox`; on Windows,
+  `%APPDATA%\Mozilla\Firefox`. Within a base, an `[Install...]`
+  section's `Default=` entry names the profile (that is the one the
+  last-used Firefox install actually opens), falling back to the
+  `[Profile]` section marked `Default=1`, then to a lone `[Profile]`
+  section. When more than one base yields a profile, the one whose
+  `places.sqlite` was modified most recently -- the profile actually
+  in use -- wins. No profile anywhere: one quiet log line, and the
+  section simply never exists.
+- **The history database is never opened in place.** Firefox keeps
+  `places.sqlite` locked (WAL mode) while running, so the file and its
+  `-wal` sidecar are copied to a private temp directory, the copy is
+  queried read-only, and the copy is deleted. Your profile is never
+  written, and the app cannot corrupt it.
+- **Counting**: only normal `http(s)` page loads count. Redirect
+  bookkeeping entries (`hidden=1`) and embedded-frame transitions
+  (visit types 4 and 8) are excluded, so ad iframes cannot make a site
+  "frequent".
+- **Caching**: the site list is read in the background and cached; a
+  query never waits on the database. The list refreshes at most every
+  `refreshMinutes`, failures keep the previous list, and the first
+  query after startup may show the section one keystroke late while
+  the initial read runs.
+
+Configuration (`config.json`, all fields optional; shown with
+defaults):
+
+```json
+{
+  "firefox": {
+    "frequentSites": {
+      "minVisitsMonth": 11,
+      "minVisitsWeek": 1,
+      "refreshMinutes": 10,
+      "maxResults": 6,
+      "profileDir": ""
+    }
+  }
+}
+```
+
+- `minVisitsMonth` -- minimum visits in the past 30 days (default 11,
+  i.e. "more than 10 times").
+- `minVisitsWeek` -- minimum visits in the past 7 days (default 1).
+- `refreshMinutes` -- how old the cached list may get before a query
+  kicks a background re-read (default 10).
+- `maxResults` -- cap on one Frequent Sites section (default 6).
+- `profileDir` -- absolute path of a Firefox profile directory; when
+  set, discovery is skipped and that profile's `places.sqlite` is
+  used. Set this if you use multiple profiles or a portable install.
+
+Ranking within the section: a query matching the start of the host
+(`git` -> `github.com`; a leading `www.` is ignored) scores highest,
+then a word start in the title, then a substring of the host, then a
+substring anywhere in the title or URL; ties go to the more-visited
+page. To turn the section off entirely:
+
+```json
+{ "plugins": { "entries": { "firefox-frequent": { "disabled": true } } } }
+```
+
+Zero or negative numbers are repaired to the defaults on load. The
+snap-location discovery order matches Ubuntu 22.04's stock Firefox
+packaging; other browsers (Chromium, and Firefox forks using different
+profile paths) are not read -- `profileDir` accepts any directory that
+contains a Firefox-format `places.sqlite`.
 
 ### Trust model
 
