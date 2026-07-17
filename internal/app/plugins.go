@@ -7,11 +7,13 @@ import (
 	"log"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
 	"github.com/wow-look-at-my/competent-search-thing/internal/config"
+	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/plugin"
 )
 
@@ -104,6 +106,7 @@ func (a *App) buildRegistry() dispatcher {
 		Entries:       entries,
 		Version:       Version,
 		InstalledApps: a.installedApps,
+		OpenWindows:   a.openWindowsGetter(),
 		Logf:          log.Printf,
 	})
 	for _, err := range reg.Errors() {
@@ -137,14 +140,15 @@ func (a *App) appctxCache() *appctx.Cache {
 }
 
 // captureAppContext snapshots the focused app and kicks the async
-// running/installed refreshes. The toggle path runs it BEFORE showing
-// the bar, because the bar window steals focus and the focused app
-// must be the one the user was just using. Safe before Startup (nil
-// cache no-ops).
+// running/installed/open-window refreshes. The toggle path runs it
+// BEFORE showing the bar, because the bar window steals focus and the
+// focused app must be the one the user was just using. Safe before
+// Startup (nil cache no-ops).
 func (a *App) captureAppContext() {
 	c := a.appctxCache()
 	c.CaptureFocused()
 	c.RefreshRunningAsync()
+	c.RefreshWindowsAsync()
 	c.EnsureFreshInstalled(installedAppsTTL)
 }
 
@@ -163,9 +167,65 @@ func (a *App) installedApps() []plugin.InstalledApp {
 	return out
 }
 
+// openWindowsGetter returns the registry's OpenWindows seam: the
+// snapshot adapter on sessions where open windows can genuinely be
+// enumerated, nil (the builtin provider is then not registered at
+// all) everywhere else. The gate is the SESSION TYPE, not whether an
+// X connection works: on a GNOME Wayland session DISPLAY is usually
+// set (XWayland), so an X client-list read would succeed and list
+// only the XWayland windows -- a misleading partial view. x11 =>
+// enabled; wayland => disabled with one quiet log line (there is no
+// sanctioned way for a regular app to list other apps' windows there;
+// see the README); unknown (headless CI, windows, darwin) => enabled
+// only when the source can actually produce a list right now.
+func (a *App) openWindowsGetter() func() []plugin.WindowInfo {
+	switch a.session().Kind {
+	case platform.SessionX11:
+		return a.openWindows
+	case platform.SessionWayland:
+		a.openWindowsLogOnce.Do(func() {
+			log.Printf("windows: open-window search unavailable on wayland (no sanctioned way to list other apps' windows; see README)")
+		})
+		return nil
+	default:
+		src := a.plat.appSource
+		if src == nil {
+			return nil
+		}
+		if _, ok := src.OpenWindows(); !ok {
+			return nil
+		}
+		return a.openWindows
+	}
+}
+
+// openWindows adapts the cached open-window snapshot to the plugin
+// type -- the window id becomes a decimal string so it survives the
+// JSON round-trip through the frontend inside activate_window
+// actions. It is the registry's OpenWindows getter for the builtin
+// Open Windows provider.
+func (a *App) openWindows() []plugin.WindowInfo {
+	s := a.appctxCache().Snapshot()
+	if len(s.Windows) == 0 {
+		return nil
+	}
+	out := make([]plugin.WindowInfo, len(s.Windows))
+	for i, w := range s.Windows {
+		out[i] = plugin.WindowInfo{
+			ID:    strconv.FormatUint(uint64(w.ID), 10),
+			Title: w.Title,
+			App:   w.App,
+			PID:   w.PID,
+		}
+	}
+	return out
+}
+
 // pluginRequestContext converts the current app-context snapshot to
-// the plugin request shape. The registry narrows it to the parts each
-// manifest declared, so handing over everything here is fine.
+// the plugin request shape (open windows deliberately excluded: they
+// feed only the builtin provider, never external plugins). The
+// registry narrows it to the parts each manifest declared, so handing
+// over everything here is fine.
 func (a *App) pluginRequestContext() *plugin.RequestContext {
 	s := a.appctxCache().Snapshot()
 	rc := &plugin.RequestContext{}
@@ -251,8 +311,9 @@ func (a *App) CheatSheet() plugin.Emission {
 // from a trusted builtin provider), but everything is re-validated
 // here as defense in depth -- the frontend merely echoes them back.
 // Actions that hand off to another program (open_path, open_url,
-// run_command, and most builtins) hide the bar on success; copy_text
-// and the version builtin keep it open for the "Copied" feedback.
+// run_command, activate_window, and most builtins) hide the bar on
+// success; copy_text and the version builtin keep it open for the
+// "Copied" feedback.
 func (a *App) RunPluginAction(pluginID string, action plugin.Action) error {
 	switch action.Type {
 	case plugin.ActionCopyText:
@@ -286,9 +347,35 @@ func (a *App) RunPluginAction(pluginID string, action plugin.Action) error {
 	case plugin.ActionRunBuiltin:
 		a.logAction(pluginID, action.Type, action.Value)
 		return a.runBuiltin(action.Value)
+	case plugin.ActionActivateWindow:
+		id, err := parseWindowID(action.Window)
+		if err != nil {
+			return fmt.Errorf("activate_window: %w", err)
+		}
+		a.logAction(pluginID, action.Type, action.Window)
+		if err := a.plat.activateWindow(id); err != nil {
+			return err
+		}
+		a.Hide()
+		return nil
 	default:
 		return fmt.Errorf("unsupported plugin action type %q", action.Type)
 	}
+}
+
+// parseWindowID re-validates an activate_window action's window
+// field: non-empty and a base-10 uint32 (the window-system id
+// domain). The builtin provider only ever produces such values; the
+// frontend merely echoes them back.
+func parseWindowID(s string) (uint32, error) {
+	if s == "" {
+		return 0, errors.New("empty window id")
+	}
+	id, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("window id %q is not a uint32", s)
+	}
+	return uint32(id), nil
 }
 
 // runBuiltin executes one app-level builtin command (the actions

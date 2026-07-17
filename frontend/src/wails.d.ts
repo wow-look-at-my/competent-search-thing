@@ -31,9 +31,11 @@ interface PluginAction {
     | "copy_text"
     | "run_command"
     | "set_query"
-    | "run_builtin";
-  value?: string; // every type except run_command
+    | "run_builtin"
+    | "activate_window";
+  value?: string; // every type except run_command and activate_window
   argv?: string[]; // run_command only
+  window?: string; // activate_window only: the window id to focus
 }
 
 // One virtual result in a "plugin:results" emission (internal/plugin

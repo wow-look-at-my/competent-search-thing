@@ -404,6 +404,89 @@ func TestNewRegistersBuiltins(t *testing.T) {
 	require.Equal(t, "app", pid)
 }
 
+func TestNewRegistersOpenWindowsOnlyWithSeam(t *testing.T) {
+	// Nil seam (a session that cannot enumerate windows): the provider
+	// does not exist at all -- not even as a reserved id.
+	r := New(Options{Logf: func(string, ...any) {}})
+	defer r.Close()
+	require.NotContains(t, r.byID, "windows")
+
+	// Non-nil seam: registered into the normal fan-out.
+	r2 := New(Options{
+		OpenWindows: func() []WindowInfo { return nil },
+		Logf:        func(string, ...any) {},
+	})
+	defer r2.Close()
+	require.Contains(t, r2.byID, "windows")
+	require.IsType(t, &windowsProvider{}, r2.byID["windows"])
+	require.Empty(t, r2.byID["windows"].bangNames(), "no bangs to claim")
+
+	// The standard per-entry disable knob kills it despite the seam.
+	r3 := New(Options{
+		OpenWindows: func() []WindowInfo { return nil },
+		Entries:     map[string]Entry{"windows": {Disabled: true}},
+		Logf:        func(string, ...any) {},
+	})
+	defer r3.Close()
+	require.NotContains(t, r3.byID, "windows")
+}
+
+func TestDispatchOpenWindowsEmitsUnsanitized(t *testing.T) {
+	getter := func() []WindowInfo {
+		return []WindowInfo{{ID: "42", Title: "Mozilla Firefox", App: "firefox", PID: 9}}
+	}
+	r, _ := newTestRegistry(t, nil, nil, newWindowsProvider(getter))
+	emit, ch := collectEmissions()
+
+	info := r.Dispatch(context.Background(), "fire", 5, nil, emit)
+	require.Equal(t, TargetInfo{}, info, "all-queries matching is not bang targeting")
+
+	e := recvEmission(t, ch)
+	require.Equal(t, "windows", e.Plugin)
+	require.Equal(t, "Open Windows", e.Name)
+	require.EqualValues(t, 5, e.Gen)
+	require.Len(t, e.Results, 1)
+	require.Equal(t, &Action{Type: ActionActivateWindow, Window: "42"}, e.Results[0].Action,
+		"builtins bypass the sanitizer, so the internal-only action survives")
+}
+
+func TestDispatchOpenWindowsSkipsShortAndTargetedQueries(t *testing.T) {
+	var calls atomic.Int32
+	getter := func() []WindowInfo {
+		calls.Add(1)
+		return []WindowInfo{{ID: "1", Title: "xy", App: "xy"}}
+	}
+	other := &fakeProvider{pid: "other", bangs: []string{"other"}, queryFn: answer("ok", 0)}
+	r, _ := newTestRegistry(t, nil, nil, newWindowsProvider(getter), other)
+	emit, ch := collectEmissions()
+
+	// One rune: below the all-queries minimum, nothing dispatched.
+	r.Dispatch(context.Background(), "x", 1, nil, emit)
+	requireNoEmission(t, ch, 100*time.Millisecond)
+	require.Zero(t, calls.Load())
+
+	// A bang-targeted query goes ONLY to its provider.
+	r.Dispatch(context.Background(), "!other xy", 2, nil, emit)
+	e := recvEmission(t, ch)
+	require.Equal(t, "other", e.Plugin)
+	requireNoEmission(t, ch, 100*time.Millisecond)
+	require.Zero(t, calls.Load(), "bang targeting bypasses the windows provider entirely")
+}
+
+func TestDispatchOpenWindowsPanickingGetterIsolated(t *testing.T) {
+	angry := newWindowsProvider(func() []WindowInfo { panic("window source bug") })
+	calm := &fakeProvider{pid: "calm", matchFn: matchAll, queryFn: answer("ok", 0)}
+	r, lc := newTestRegistry(t, nil, nil, angry, calm)
+	emit, ch := collectEmissions()
+
+	r.Dispatch(context.Background(), "hello", 1, nil, emit)
+	e := recvEmission(t, ch)
+	require.Equal(t, "calm", e.Plugin, "other providers are unaffected")
+	require.Eventually(t, func() bool {
+		return strings.Contains(lc.joined(), "panic during dispatch: window source bug")
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestNewDisablesBuiltinsPerID(t *testing.T) {
 	r := New(Options{
 		Entries: map[string]Entry{"bangs": {Disabled: true}, "apps": {Disabled: true}},

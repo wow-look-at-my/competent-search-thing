@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -163,6 +164,7 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	a.plat.open = func(path string) error { r.call("open:" + path); return nil }
 	a.plat.reveal = func(path string) error { r.call("reveal:" + path); return nil }
 	a.plat.run = func(argv []string) error { r.call("run:" + strings.Join(argv, " ")); return nil }
+	a.plat.activateWindow = func(id uint32) error { r.call(fmt.Sprintf("activateWindow:%d", id)); return nil }
 	// A nil Source degrades the app-context cache to a no-op; tests
 	// that exercise capture inject a fake Source before Startup.
 	a.plat.appSource = nil

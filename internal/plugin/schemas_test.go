@@ -191,7 +191,11 @@ func TestResponseSchemaRejectsWhatTheSanitizerClamps(t *testing.T) {
 		"bad accent color":     `{"v":1,"results":[{"title":"a","accent_color":"red"}]}`,
 		"internal set_query":   `{"v":1,"results":[{"title":"a","action":{"type":"set_query","value":"x"}}]}`,
 		"internal run_builtin": `{"v":1,"results":[{"title":"a","action":{"type":"run_builtin","value":"quit"}}]}`,
-		"run_command no argv":  `{"v":1,"results":[{"title":"a","action":{"type":"run_command"}}]}`,
+		"internal activate_window": `{"v":1,"results":[{"title":"a",` +
+			`"action":{"type":"activate_window","window":"42"}}]}`,
+		"window on an external action": `{"v":1,"results":[{"title":"a",` +
+			`"action":{"type":"copy_text","value":"x","window":"42"}}]}`,
+		"run_command no argv": `{"v":1,"results":[{"title":"a","action":{"type":"run_command"}}]}`,
 		"argv with 17 items": `{"v":1,"results":[{"title":"a","action":{"type":"run_command","argv":[` +
 			strings.Repeat(`"x",`, 16) + `"x"]}}]}`,
 		"wrong protocol version": `{"v":2,"results":[{"title":"a"}]}`,
