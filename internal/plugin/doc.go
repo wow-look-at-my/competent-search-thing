@@ -23,8 +23,10 @@
 //   - the builtin providers (builtin_bangs.go bang suggestions,
 //     builtin_app.go app commands, builtin_apps.go installed-app
 //     launcher, builtin_apps_search.go untargeted app search,
-//     builtin_openwindows.go open-window search) -- trusted
-//     in-process providers that may emit the internal-only actions.
+//     builtin_openwindows.go open-window search,
+//     builtin_firefox.go frequently-visited Firefox sites,
+//     builtin_tabs.go open Firefox tabs) -- trusted in-process
+//     providers that may emit the internal-only actions.
 //
 // The Wails app wiring (bound methods, events, cancellation by query
 // generation) lands in internal/app. File search never waits on

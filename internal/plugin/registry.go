@@ -163,6 +163,20 @@ type Options struct {
 	// sessions where windows cannot be enumerated (Wayland,
 	// windows/darwin for now), so the section never exists there.
 	OpenWindows func() []WindowInfo
+	// FrequentSites supplies the frequently-visited-sites snapshot for
+	// the builtin firefox-frequent provider; nil (no Firefox profile)
+	// means the provider is not registered at all.
+	FrequentSites func() []SiteInfo
+	// FrequentSitesMax caps one firefox-frequent response (config
+	// firefox.frequentSites.maxResults; non-positive = the default 6).
+	FrequentSitesMax int
+	// OpenTabs supplies the open-Firefox-tabs snapshot for the builtin
+	// firefox-tabs provider; nil (no Firefox profile) means the
+	// provider is not registered at all.
+	OpenTabs func() []TabInfo
+	// OpenTabsMax caps one firefox-tabs response (config
+	// firefox.openTabs.maxResults; non-positive = the default 6).
+	OpenTabsMax int
 	// Logf receives all registry logging (default log.Printf).
 	Logf func(format string, args ...any)
 }
@@ -256,7 +270,7 @@ func (b *builtinBase) match(string, *AppInfo) (string, int, bool) { return "", 0
 
 // addBuiltins registers the builtin providers (bang suggestions, app
 // commands, installed-app launcher, untargeted app search,
-// open-windows search) unless
+// open-windows search, frequent sites, open tabs) unless
 // individually disabled -- the open-windows search additionally needs
 // its Options.OpenWindows seam, which is nil on sessions that cannot
 // enumerate windows. Builtins register BEFORE external plugins so a
@@ -280,6 +294,14 @@ func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
 	}
 	if opts.OpenWindows != nil && !disabled(builtinWindowsID) {
 		r.register(newWindowsProvider(opts.OpenWindows))
+	}
+	// The Firefox-backed providers exist only when the app layer found
+	// a Firefox profile and supplied their sources (see Options).
+	if opts.FrequentSites != nil && !disabled(builtinFirefoxID) {
+		r.register(newFirefoxProvider(opts.FrequentSites, opts.FrequentSitesMax))
+	}
+	if opts.OpenTabs != nil && !disabled(builtinTabsID) {
+		r.register(newTabsProvider(opts.OpenTabs, opts.OpenTabsMax))
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
+	"github.com/wow-look-at-my/competent-search-thing/internal/firefox"
 	"github.com/wow-look-at-my/competent-search-thing/internal/gsettings"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform/native"
@@ -86,7 +87,11 @@ type platformSeams struct {
 	// window-system id (the activate_window plugin action); production
 	// is the native EWMH client message.
 	activateWindow func(id uint32) error
-	appSource      appctx.Source
+	appSource       appctx.Source
+	// firefoxBases lists the Firefox profiles.ini base directories the
+	// frequent-sites discovery probes; production is
+	// firefox.DefaultBaseDirs (the real home), tests pin it.
+	firefoxBases func() []string
 }
 
 func defaultPlatformSeams() platformSeams {
@@ -116,6 +121,7 @@ func defaultPlatformSeams() platformSeams {
 		run:             launcher.Run,
 		activateWindow:  native.ActivateWindow,
 		appSource:       native.AppSource(),
+		firefoxBases:    firefox.DefaultBaseDirs,
 	}
 }
 
