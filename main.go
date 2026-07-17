@@ -52,7 +52,9 @@ func runGUI(opts cli.RunOptions) error {
 	if err != nil {
 		log.Printf("config: %v (continuing with the returned config)", err)
 	}
-	a := app.New(index.NewManager(cfg.Roots, cfg.Excludes, cfg.MaxResults), app.Options{
+	mgr := index.NewManager(cfg.Roots, cfg.Excludes, cfg.MaxResults)
+	mgr.SetFuzzyDisabled(cfg.Search.FuzzyDisabled)
+	a := app.New(mgr, app.Options{
 		RescanEvery:            time.Duration(cfg.RescanIntervalMinutes) * time.Minute,
 		Hotkey:                 cfg.Hotkey,
 		IPC:                    opts.Server,

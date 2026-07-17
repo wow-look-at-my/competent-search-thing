@@ -65,6 +65,8 @@ type Config struct {
 	RescanIntervalMinutes int `json:"rescanIntervalMinutes"`
 	// MaxResults caps one query's result list.
 	MaxResults int `json:"maxResults"`
+	// Search configures the search engine behavior.
+	Search SearchConfig `json:"search"`
 	// Theme names the UI theme: a builtin ("dark", "light") or a user
 	// theme file at <configDir>/themes/<name>.json (see internal/theme).
 	// Unknown or invalid themes fall back to dark at resolve time.
@@ -108,6 +110,17 @@ type PluginEntry struct {
 	// Settings is an opaque JSON object forwarded verbatim to the
 	// plugin in every request.
 	Settings json.RawMessage `json:"settings,omitempty"`
+}
+
+// SearchConfig configures the search engine. The zero value means the
+// default behavior: fuzzy matching on.
+type SearchConfig struct {
+	// FuzzyDisabled true turns the fuzzy (subsequence) name-match tier
+	// off, leaving exact/prefix/substring matching only. The zero
+	// value -- the default -- keeps fuzzy matching on (matching the
+	// tray.disabled convention). Exact, prefix, and substring matches
+	// always rank above fuzzy ones either way.
+	FuzzyDisabled bool `json:"fuzzyDisabled"`
 }
 
 // BangsConfig configures the bang system.
