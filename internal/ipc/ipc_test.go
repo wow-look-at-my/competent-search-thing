@@ -14,11 +14,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testSocket returns a fresh, short socket path (unix socket paths are
-// limited to ~104 bytes, so the file name stays tiny).
+// testSocket returns a fresh, short socket path. unix socket paths are
+// limited to ~104 bytes on darwin (108 on linux), and t.TempDir embeds
+// the full test name -- on macOS, where TMPDIR is already ~50 bytes of
+// /var/folders/..., a long test name overflows sun_path and bind fails
+// with EINVAL. A bare MkdirTemp keeps the whole path short on every OS.
 func testSocket(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(t.TempDir(), "s.sock")
+	dir, err := os.MkdirTemp("", "ipc")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "s.sock")
 }
 
 // listen starts a server on a fresh socket and closes it at test end.

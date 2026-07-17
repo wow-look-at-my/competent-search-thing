@@ -3,6 +3,7 @@ package firefox
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -260,7 +261,14 @@ func TestDefaultBaseDirsUsesHome(t *testing.T) {
 	t.Setenv("HOME", home)
 	dirs := DefaultBaseDirs()
 	require.NotEmpty(t, dirs)
-	require.Equal(t, filepath.Join(home, ".mozilla", "firefox"), dirs[0])
+	// DefaultBaseDirs feeds the process GOOS into BaseDirs, so the
+	// expected first dir is OS-specific (TestBaseDirs pins the per-OS
+	// mapping; this test pins the home/env plumbing).
+	want := filepath.Join(home, ".mozilla", "firefox")
+	if runtime.GOOS == "darwin" {
+		want = filepath.Join(home, "Library", "Application Support", "Firefox")
+	}
+	require.Equal(t, want, dirs[0])
 }
 
 func TestParseINIDialect(t *testing.T) {

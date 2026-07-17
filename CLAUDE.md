@@ -861,6 +861,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (platform_darwin.h/.m: cursor via CGEventCreate, screens via
   NSScreen with bottom-left->top-left conversion, MoveWindow via
   setFrameOrigin on the first NSWindow, all on the main thread).
+  display_darwin.go also carries `#cgo LDFLAGS: -framework
+  UniformTypeIdentifiers` on Wails' behalf: the v2 darwin frontend
+  references UTType without linking that framework, and newer Xcode
+  SDKs fail the production-tag link with _OBJC_CLASS_$_UTType
+  undefined (first hit: the macos-latest runner's Xcode 26.5) -- do
+  not remove it just because no code in the package uses it.
   Also per OS: `AppSource() appctx.Source` (appsource_*.go), the
   app-context glue -- linux = EWMH over conn-per-call xgb
   (_NET_ACTIVE_WINDOW / _NET_CLIENT_LIST -> per-window _NET_WM_PID,
@@ -1079,23 +1085,21 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 
 - `.github/workflows/ci.yml` runs on every push (`on: push:`, no
   filters). Jobs: `linux` (the original single build job, content
-  unchanged), `darwin` (macos-latest: darwin/arm64 cgo build + the
-  full unit-test suite, tags `desktop,production`, no screenshots/deb,
-  `autorelease: 'false'` for now, uploads `build/` as the
-  `darwin-build-<sha>` artifact), and the `all-builds` aggregator
-  (`if: always()`, `needs: [linux, darwin]`, fails on any needs
-  result that is not success/skipped -- a lost runner reports
-  "abandoned", which a failure/cancelled filter would pass). The org
-  ruleset requires a green `all-builds` context on the head SHA
-  before a PR can merge to master, and a matrix job cannot carry
-  that name -- do not rename the aggregator.
+  unchanged) and `darwin` (macos-latest: darwin/arm64 cgo build + the
+  full unit-test suite, tags `desktop,production`, no screenshots/deb/
+  publishing). There is deliberately NO aggregator job: the org-required
+  `all-builds` context is a COMMIT STATUS posted by the
+  required-builds-manager app, which tallies the repo's real build jobs
+  itself (it excludes any job literally named all-builds from its own
+  math -- its status text reads "N/M builds ..."), so a green merge
+  needs BOTH `linux` and `darwin` green, and renaming/adding jobs is
+  safe. The aggregator job #23 briefly added was redundant and was
+  removed in the 2026-07-17 ci.yml cleanup (#25).
 - The `linux` job: checkout -> apt install gtk/webkit/x11 dev packages plus
   xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run build`
-  in `frontend/` -> `echo gomemlimit_gen.go >> .git/info/exclude` (the
-  transient guard go-toolchain injects would otherwise stamp every
-  published binary vcs.modified/+dirty) -> `wow-look-at-my/go-toolchain@v1`
+  in `frontend/` -> `wow-look-at-my/go-toolchain@v1`
   with `targets: linux/amd64,windows/amd64`, `cgo: 'true'`,
-  `autorelease: 'true'`, `timeout: '20'`, and env
+  `timeout: '20'`, and env
   `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> deb build +
   publish (next bullet) -> screenshot capture ->
   `actions/upload-artifact@v4`.
@@ -1127,16 +1131,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   against the Apple SDK, so darwin targets must never be added to the
   LINUX job's targets list -- darwin is built by the dedicated
   `darwin` job on a mac runner.
-- `autorelease: 'true'` publishes the `build/` binaries (built with the
-  full GOFLAGS tags, so they are runnable) to buildhost (pazer.build)
-  on EVERY branch push, with the git branch recorded: project
-  `competent-search-thing` (the app) plus `competent-search-thing/server`
-  (the color-http example server, per the multi-binary naming
-  convention). Versions auto-increment; the bare `latest` download URL
-  resolves the repo's default branch (master). Requires the
-  `actions: read` permission (to fetch the `go-build` run artifact) on
-  top of `id-token: write` (OIDC auth to buildhost) -- both are in the
-  workflow's permissions block. Install commands: README "Install".
+- Binary publishing: go-toolchain's `autorelease` (which used to push
+  the raw `build/` binaries to buildhost projects
+  `competent-search-thing` + `competent-search-thing/server` on every
+  push) was REMOVED in the 2026-07-17 ci.yml cleanup (#25) -- only the
+  .deb still publishes (previous bullet), and README "Install"'s
+  raw-binary/`latest` URLs now serve the last pre-cleanup versions
+  until autorelease is deliberately restored. The workflow keeps
+  `actions: read` + `id-token: write` permissions (the deb publish
+  uses OIDC; `actions: read` only matters if autorelease returns).
 - `frontend/package-lock.json` is committed (required by `npm ci`).
 
 ## CI screenshots
