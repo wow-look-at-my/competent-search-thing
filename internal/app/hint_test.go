@@ -92,14 +92,14 @@ func TestSearchHintUsesLstatSeam(t *testing.T) {
 func TestPathWithinAny(t *testing.T) {
 	roots := []string{"/data", "/home/me/"}
 	cases := map[string]bool{
-		"/data":            true,
-		"/data/sub/x":      true,
-		"/database":        false, // prefix of the string, not of the path
-		"/home/me":         true,
-		"/home/me/docs":    true,
-		"/home/metals":     false,
-		"/etc/hosts":       false,
-		"/":                false,
+		"/data":         true,
+		"/data/sub/x":   true,
+		"/database":     false, // prefix of the string, not of the path
+		"/home/me":      true,
+		"/home/me/docs": true,
+		"/home/metals":  false,
+		"/etc/hosts":    false,
+		"/":             false,
 	}
 	for p, want := range cases {
 		require.Equal(t, want, pathWithinAny(p, roots), p)
