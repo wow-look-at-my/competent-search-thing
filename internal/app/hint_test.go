@@ -39,7 +39,13 @@ func TestSearchOutsideRootsHint(t *testing.T) {
 	require.Equal(t, target, res[0].Path)
 	require.Equal(t, "hosts", res[0].Name)
 	require.False(t, res[0].IsDir)
-	require.Equal(t, "outside indexed roots -- add /tmp to roots in config.json", res[0].Hint,
+	// The temp tree's first path component is OS-dependent (/tmp on
+	// linux, /var on darwin -- t.TempDir lives under /var/folders
+	// there), so derive it; topComponent's own semantics are pinned
+	// independently by TestTopComponent.
+	require.Equal(t,
+		"outside indexed roots -- add "+topComponent(target)+" to roots in config.json",
+		res[0].Hint,
 		"the hint names the query's first path component")
 
 	// A directory query carries IsDir; surrounding whitespace is
