@@ -129,6 +129,10 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// overrides detectSession itself.
 	a.plat.getenv = func(string) string { return "" }
 	a.plat.executable = func() (string, error) { return "/test/bin/competent-search-thing", nil }
+	// An empty argv[0] plus the nonexistent executable path above keep
+	// the stable-path selection inert: no candidate can pass its
+	// same-binary guard, so the seam's path is written verbatim.
+	a.plat.args0 = func() string { return "" }
 	a.plat.detectSession = func() platform.Session { return platform.Session{} }
 	a.plat.startPortal = func(context.Context, platform.Hotkey, func()) (portalHandle, error) {
 		r.call("startPortal")

@@ -255,6 +255,21 @@ func (a *App) startGnomeBinding(ctx context.Context, hk platform.Hotkey) bool {
 		}
 		exe = abs
 	}
+	// Prefer a stable spelling of that path: os.Executable is fully
+	// resolved, so under a symlinked install layout (Homebrew's
+	// versioned Cellar, Nix, stow) it names a directory the next
+	// upgrade deletes, killing the keybinding. The PATH shim -- or the
+	// symlink argv[0] was launched through -- keeps pointing at the
+	// current version; StableExecutable only ever substitutes a path
+	// proven (os.SameFile) to be this very binary.
+	args0 := ""
+	if a.plat.args0 != nil {
+		args0 = a.plat.args0()
+	}
+	if stable := platform.StableExecutable(exe, args0); stable != exe {
+		log.Printf("hotkey: using stable executable path %q for the GNOME keybinding (running binary %q)", stable, exe)
+		exe = stable
+	}
 	command := gsettings.ToggleCommand(exe)
 	applied, err := a.plat.ensureGnomeBinding(ctx, hk, command)
 	if err != nil {
@@ -263,6 +278,15 @@ func (a *App) startGnomeBinding(ctx context.Context, hk platform.Hotkey) bool {
 		}
 		log.Printf("hotkey: installing a GNOME keybinding failed: %v", err)
 		return false
+	}
+
+	if applied.Repaired {
+		// The one loud repair line: an entry written by an older run
+		// pointed at an executable that is gone or no longer this
+		// binary (a versioned install dir after an upgrade), and only
+		// its command was rewritten -- the accelerator is untouched.
+		log.Printf("hotkey: repaired the GNOME keybinding command: %q -> %q (the stored command no longer launched this binary)",
+			applied.PreviousCommand, command)
 	}
 
 	// The evidence line: exactly what the read-back found on disk.

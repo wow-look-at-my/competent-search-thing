@@ -247,6 +247,8 @@ func TestEnsureBindingRespectsExistingUserEditedBinding(t *testing.T) {
 }
 
 func TestEnsureBindingRefreshesStaleCommandKeepsBinding(t *testing.T) {
+	// Neither path exists: the stored command's executable is gone, so
+	// the repair fires (the pre-heal behavior for a moved binary).
 	s := newScriptedRunner(t)
 	s.on("['"+OurPath+"']", "get", mediaKeysSchema, customListKey)
 	s.on("'<Control><Alt>space'", "get", entrySchemaPath, "binding")
@@ -259,6 +261,8 @@ func TestEnsureBindingRefreshesStaleCommandKeepsBinding(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, applied.Existing)
 	require.True(t, applied.Changed)
+	require.True(t, applied.Repaired)
+	require.Equal(t, "/old/place/cst toggle", applied.PreviousCommand)
 	require.True(t, applied.Verified)
 	require.Equal(t, "/new/place/cst toggle", applied.DiskCommand)
 	require.Equal(t, "<Control><Alt>space", applied.Binding)
@@ -477,12 +481,15 @@ func TestEnsureBindingSecondRunIsIdempotent(t *testing.T) {
 	require.True(t, second.Verified)
 	require.Equal(t, "<Control><Alt>space", second.Binding)
 
-	// The binary moved: exactly one more write, the command.
+	// The binary moved (the stored /usr/bin/cst does not exist):
+	// exactly one more write, the command.
 	third, err := EnsureBinding(context.Background(), sim.run, hk, "/new/cst toggle")
 	require.NoError(t, err)
 	require.Equal(t, 5, sim.sets)
 	require.True(t, third.Existing)
 	require.True(t, third.Changed)
+	require.True(t, third.Repaired)
+	require.Equal(t, "/usr/bin/cst toggle", third.PreviousCommand)
 	require.True(t, third.Verified)
 	require.Equal(t, "/new/cst toggle", third.DiskCommand)
 	require.Equal(t, "<Control><Alt>space", third.Binding)

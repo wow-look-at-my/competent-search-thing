@@ -68,3 +68,58 @@ func ToggleCommand(exe string) string {
 	}
 	return exe + " toggle"
 }
+
+// commandExecutable extracts the executable token -- the first word --
+// from a keybinding command, undoing the quoting ToggleCommand applies
+// and gnome-settings-daemon parses with (GLib shell rules): inside
+// double quotes a backslash escapes only backslash and double quote
+// (before anything else both characters are kept, like g_shell_
+// unquote), single quotes are verbatim runs, adjacent quoted and bare
+// segments concatenate, and an unquoted space or tab ends the token.
+// ok is false for an empty command or an unterminated quote.
+func commandExecutable(command string) (exe string, ok bool) {
+	s := strings.TrimLeft(command, " \t")
+	if s == "" {
+		return "", false
+	}
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		switch s[i] {
+		case ' ', '\t':
+			return b.String(), true
+		case '"':
+			i++
+			closed := false
+			for i < len(s) {
+				if s[i] == '\\' && i+1 < len(s) && (s[i+1] == '\\' || s[i+1] == '"') {
+					b.WriteByte(s[i+1])
+					i += 2
+					continue
+				}
+				if s[i] == '"' {
+					i++
+					closed = true
+					break
+				}
+				b.WriteByte(s[i])
+				i++
+			}
+			if !closed {
+				return "", false
+			}
+		case '\'':
+			i++
+			end := strings.IndexByte(s[i:], '\'')
+			if end < 0 {
+				return "", false
+			}
+			b.WriteString(s[i : i+end])
+			i += end + 1
+		default:
+			b.WriteByte(s[i])
+			i++
+		}
+	}
+	return b.String(), true
+}
