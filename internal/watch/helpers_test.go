@@ -157,10 +157,11 @@ func hasPath(m *index.Manager, path string) bool {
 
 // settle proves the watcher has drained everything sent so far: it
 // creates a unique marker file in dir and waits for it to reach the
-// index. Events apply in order, so once the marker is visible every
-// earlier event has been applied too. With a fake notifier the marker
-// event is pushed through it; with f == nil the real notifier is
-// expected to pick the file up on its own.
+// index. Dirty paths reconcile in first-arrival order and the marker's
+// path is unique (never already pending), so once the marker is
+// visible every earlier event has been applied too. With a fake
+// notifier the marker event is pushed through it; with f == nil the
+// real notifier is expected to pick the file up on its own.
 func settle(t *testing.T, m *index.Manager, f *fakeNotifier, dir string) {
 	t.Helper()
 	p := filepath.Join(dir, fmt.Sprintf("marker-%d.settle", time.Now().UnixNano()))

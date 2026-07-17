@@ -1,7 +1,21 @@
 // Package watch keeps the index live after the initial disk walk: a
-// Watcher applies fsnotify filesystem events to the index.Manager, and
+// Watcher reconciles filesystem events against the index.Manager, and
 // a Rescanner runs full BuildFromDisk rebuilds, both periodically and
 // whenever the watcher degrades.
+//
+// Event model: an event is only a DIRTY PATH. The notifier's op codes
+// are advisory -- intake consults them once, to drop Write/Chmod noise
+// -- and truth comes from lstat at apply time: a dirty path that is
+// gone is removed with its subtree, a dirty file is (re-)added, and a
+// dirty directory gets a shallow readdir diff against the index's
+// children of that directory, recursing only into children the index
+// has never seen. Application is therefore order-independent by
+// construction and converges to the on-disk truth no matter how the
+// underlying events were ordered, merged, or duplicated. That property
+// is load-bearing: notification backends like fanotify merge
+// same-object events and lose their order (one record can carry
+// CREATE|DELETE), so nothing downstream of intake may depend on an op
+// code or on arrival order.
 //
 // fsnotify is used uniformly on every platform, and an fsnotify watch
 // covers exactly ONE directory everywhere -- on Linux that is how
@@ -178,12 +192,28 @@ func (w *Watcher) setRescanRequester(fn func()) {
 	w.mu.Unlock()
 }
 
-// addWatch starts watching dir and records it in the bookkeeping set. A
-// notifier failure -- typically the inotify watch limit -- degrades the
-// watcher instead of stopping it: the drop is counted, the first one is
+// addWatch starts watching dir and records it in the bookkeeping set;
+// a directory that is already bookkept is left alone. A notifier
+// failure -- typically the inotify watch limit -- degrades the watcher
+// instead of stopping it: the drop is counted, the first one is
 // logged, and later ones stay silent so an exhausted limit cannot spam
 // the log.
-func (w *Watcher) addWatch(dir string) {
+func (w *Watcher) addWatch(dir string) { w.watch(dir, false) }
+
+// refreshWatch is addWatch without the already-bookkept short-circuit:
+// the notifier Add is re-issued even when dir is recorded as watched.
+// reconcileDir uses it on every dirty directory, because a dirty path
+// can mean the directory was deleted and recreated within one debounce
+// window -- the kernel watch follows the inode and died with the old
+// one, while the bookkeeping still lists the path, so only a re-issued
+// Add re-arms it (fsnotify re-registers the path and adopts the new
+// descriptor; on a still-live watch the re-add is an idempotent mask
+// merge). The ordered-batch model got the same effect from applying
+// the Remove event before the Create; the dirty-path model has no
+// order to lean on.
+func (w *Watcher) refreshWatch(dir string) { w.watch(dir, true) }
+
+func (w *Watcher) watch(dir string, refresh bool) {
 	var notify func()
 	defer func() { // runs AFTER the unlock below; never under w.mu
 		if notify != nil {
@@ -195,12 +225,19 @@ func (w *Watcher) addWatch(dir string) {
 	if w.n == nil || w.lc.stopping() {
 		return
 	}
-	if _, ok := w.watched[dir]; ok {
+	_, have := w.watched[dir]
+	if have && !refresh {
 		return
 	}
 	if err := w.n.Add(dir); err != nil {
 		if errors.Is(err, fsnotify.ErrClosed) {
 			return // racing Stop, not a degradation
+		}
+		if have {
+			// The refresh proved the recorded watch dead and no new
+			// one could be armed: stop claiming it.
+			delete(w.watched, dir)
+			w.stats.WatchedDirs = len(w.watched)
 		}
 		notify = w.degradeLocked()
 		w.stats.DroppedWatches++
@@ -295,10 +332,12 @@ func (w *Watcher) syncWatches(ctx context.Context) {
 // filtered out (an excluded directory is never watched -- a root
 // matching its own exclude list is a configuration oddity, but the rule
 // still holds). Directory paths are collected first and watched after,
-// so no syscalls run while the Manager's read lock is held. Cancelling
-// ctx cuts the index iteration short (it visits every live entry, which
-// can take seconds on a huge index); callers already treat the result
-// as best-effort and re-check ctx before acting on it.
+// so no syscalls run while the Manager's read lock is held -- and the
+// index is enumerated in LiveDirsPage chunks, so the read lock is
+// released between pages instead of being held across a full scan of a
+// huge index. Cancelling ctx stops the enumeration between pages;
+// callers already treat the result as best-effort and re-check ctx
+// before acting on it.
 func (w *Watcher) desiredDirs(ctx context.Context) []string {
 	seen := make(map[string]struct{})
 	var dirs []string
@@ -318,15 +357,18 @@ func (w *Watcher) desiredDirs(ctx context.Context) []string {
 			add(r)
 		}
 	}
-	w.mgr.ForEachLiveDir(func(p string) bool {
-		if ctx.Err() != nil {
-			return false
+	for start := int32(0); ; {
+		page, next := w.mgr.LiveDirsPage(start, index.DefaultLiveDirsPage)
+		for _, p := range page {
+			if !w.ex.Match(filepath.Base(p), p) {
+				add(p)
+			}
 		}
-		if !w.ex.Match(filepath.Base(p), p) {
-			add(p)
+		if next < 0 || ctx.Err() != nil {
+			break
 		}
-		return true
-	})
+		start = next
+	}
 	return dirs
 }
 
