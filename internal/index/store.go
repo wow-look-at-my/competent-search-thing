@@ -45,8 +45,9 @@ const nameSep byte = 0x00
 // Removals only set tombstone bits; space is reclaimed by rebuilding
 // into a fresh Store (Manager.BuildFromDisk).
 type Store struct {
-	dirs     []string          // dir id -> absolute, clean path
-	dirIndex map[string]uint32 // absolute path -> dir id
+	dirs      []string          // dir id -> absolute, clean path
+	dirsLower []string          // dir id -> dirs[i] lowercased (path-mode search)
+	dirIndex  map[string]uint32 // absolute path -> dir id
 
 	nameLower []byte   // lowercased names, 0x00-separated
 	lowOff    []uint32 // len n+1; name i is nameLower[lowOff[i]:lowOff[i+1]-1]
@@ -78,6 +79,7 @@ func (s *Store) internDir(path string) uint32 {
 	}
 	id := uint32(len(s.dirs))
 	s.dirs = append(s.dirs, path)
+	s.dirsLower = append(s.dirsLower, strings.ToLower(path))
 	s.dirIndex[path] = id
 	return id
 }

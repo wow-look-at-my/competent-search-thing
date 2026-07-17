@@ -26,6 +26,10 @@ const minShardEntries = 4096
 // lexicographic path order. An empty query, an empty store, or a
 // non-positive limit returns nil.
 //
+// A query containing a path separator switches to path mode and is
+// matched against the full path instead of the name (see path.go); the
+// name-only scan below is untouched by that dispatch.
+//
 // The scan is sharded across NumCPU contiguous entry ranges; each
 // worker scans its slice of the lowercased name blob with bytes.Index
 // and keeps its own bounded top-limit heap, so a keystroke over a
@@ -40,6 +44,9 @@ func (s *Store) Query(q string, limit int) []Result {
 		// No name can contain NUL; a NUL in the pattern could only
 		// false-match across the blob separator.
 		return nil
+	}
+	if hasPathSep(pat) {
+		return s.queryPath(pat, limit)
 	}
 
 	workers := runtime.NumCPU()
