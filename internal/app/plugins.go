@@ -50,6 +50,7 @@ const (
 // out so tests can inject fakes.
 type dispatcher interface {
 	Dispatch(ctx context.Context, query string, gen int64, appCtx *plugin.RequestContext, emit func(plugin.Emission)) plugin.TargetInfo
+	CheatSheet() plugin.Emission
 	Errors() []error
 	Close()
 }
@@ -222,6 +223,27 @@ func (a *App) QueryPlugins(query string, gen int) plugin.TargetInfo {
 		a.emitEvent(eventPluginResults, em)
 	}
 	return reg.Dispatch(genCtx, query, next, a.pluginRequestContext(), emit)
+}
+
+// CheatSheet returns the bang command cheat sheet the frontend shows
+// for an empty query: the registry's suggestions for a bare primary
+// sigil, identical to what typing "!" yields. It is synchronous and
+// dispatch-free (no goroutines, no plugin subprocesses), so the
+// QueryPlugins("") cancel-signal contract is untouched. Before Startup
+// or with a nil registry the Emission is empty; Results is always
+// non-nil so the frontend sees results: [] rather than null.
+func (a *App) CheatSheet() plugin.Emission {
+	a.pluginMu.Lock()
+	reg := a.registry
+	a.pluginMu.Unlock()
+	var em plugin.Emission
+	if reg != nil {
+		em = reg.CheatSheet()
+	}
+	if em.Results == nil {
+		em.Results = []plugin.Result{}
+	}
+	return em
 }
 
 // RunPluginAction executes a result's action on behalf of the

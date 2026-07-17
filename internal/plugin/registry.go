@@ -375,6 +375,26 @@ func (r *Registry) dispatchSuggestions(ctx context.Context, query string, gen in
 	r.dispatchOne(ctx, r.suggest, baseRequest(query, strings.TrimSpace(query), gen, appCtx), 0, 0, emit)
 }
 
+// CheatSheet returns the bang command cheat sheet: exactly what the
+// builtin suggestions provider yields for a bare primary sigil -- the
+// same list typing "!" shows -- as one synchronous Emission (Gen 0).
+// The frontend renders it for an empty query, so no dispatch fan-out,
+// goroutines, or plugin subprocesses are involved. When the
+// suggestions provider is disabled per-entry the zero Emission (no
+// results) comes back.
+func (r *Registry) CheatSheet() Emission {
+	if r.suggest == nil {
+		return Emission{}
+	}
+	sigil := r.bangs.Primary()
+	results, _, err := r.suggest.query(context.Background(), baseRequest(sigil, sigil, 0, nil))
+	if err != nil {
+		r.logf("plugin %s: cheat sheet: %v", r.suggest.id(), err)
+		return Emission{}
+	}
+	return Emission{Plugin: r.suggest.id(), Name: r.suggest.displayName(), Results: results}
+}
+
 // dispatchOne runs one provider query on its own goroutine: optional
 // debounce sleep (cancelled by ctx), per-provider timeout, throttled
 // error/drop logging, boost application, and the emit guard (results

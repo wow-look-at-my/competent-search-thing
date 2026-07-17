@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -118,4 +119,113 @@ func TestBangSuggestThroughDispatch(t *testing.T) {
 	require.Equal(t, "!reload", e.Results[0].Title)
 	require.Equal(t, "App Commands", e.Results[0].Subtitle)
 	require.Equal(t, "!rescan", e.Results[1].Title)
+}
+
+func TestCheatSheetDefaultBuiltins(t *testing.T) {
+	// A default builtins-only registry lists every builtin bang, sorted,
+	// exactly as a bare "!" would.
+	r := New(Options{Version: "1.0", Logf: func(string, ...any) {}})
+	defer r.Close()
+
+	e := r.CheatSheet()
+	require.Equal(t, "bangs", e.Plugin)
+	require.Equal(t, "Commands", e.Name)
+	require.EqualValues(t, 0, e.Gen)
+
+	wantBangs := []string{"app", "config", "launch", "quit", "reload", "rescan", "version"}
+	subtitles := map[string]string{
+		"app":     "Launch",
+		"launch":  "Launch",
+		"config":  "App Commands",
+		"quit":    "App Commands",
+		"reload":  "App Commands",
+		"rescan":  "App Commands",
+		"version": "App Commands",
+	}
+	require.Len(t, e.Results, len(wantBangs))
+	for i, b := range wantBangs {
+		res := e.Results[i]
+		require.Equal(t, "!"+b, res.Title, "titles use the primary sigil, sorted order")
+		require.Equal(t, subtitles[b], res.Subtitle, "subtitle names the providing builtin")
+		require.Equal(t, "hash", res.Icon)
+		require.Equal(t, float64(90-i), *res.Score, "scores descend by list position")
+		require.Equal(t, &Action{Type: ActionSetQuery, Value: "!" + b + " "}, res.Action,
+			"completion leaves a trailing space ready to type")
+	}
+}
+
+func TestCheatSheetIncludesManifestBangs(t *testing.T) {
+	m := &Manifest{
+		V:       1,
+		ID:      "calc",
+		Name:    "Calculator",
+		Type:    TypeCommand,
+		Bangs:   []string{"calc"},
+		Command: &CommandSpec{Argv: []string{"true"}},
+	}
+	r := New(Options{Manifests: []*Manifest{m}, Logf: func(string, ...any) {}})
+	defer r.Close()
+
+	e := r.CheatSheet()
+	var calc *Result
+	for i := range e.Results {
+		if e.Results[i].Title == "!calc" {
+			calc = &e.Results[i]
+		}
+	}
+	require.NotNil(t, calc, "a manifest-registered bang appears in the sheet")
+	require.Equal(t, "Calculator", calc.Subtitle)
+}
+
+func TestCheatSheetCappedAtMax(t *testing.T) {
+	var bangs []string
+	for i := 1; i <= 15; i++ {
+		bangs = append(bangs, fmt.Sprintf("b%02d", i))
+	}
+	many := &fakeProvider{pid: "many", name: "Many", bangs: bangs}
+	r, _ := newSuggestRig(t, nil, nil, many)
+
+	e := r.CheatSheet()
+	require.Len(t, e.Results, maxBangSuggestions)
+	require.Equal(t, "!b01", e.Results[0].Title)
+	require.Equal(t, "!b12", e.Results[11].Title)
+}
+
+func TestCheatSheetSuggestionsDisabled(t *testing.T) {
+	r := New(Options{
+		Entries: map[string]Entry{builtinSuggestID: {Disabled: true}},
+		Logf:    func(string, ...any) {},
+	})
+	defer r.Close()
+	require.Equal(t, Emission{}, r.CheatSheet(),
+		"a disabled suggestions provider yields the zero Emission")
+}
+
+func TestCheatSheetUsesConfiguredPrimarySigil(t *testing.T) {
+	r := New(Options{Sigils: []string{"/", "!"}, Logf: func(string, ...any) {}})
+	defer r.Close()
+
+	e := r.CheatSheet()
+	require.NotEmpty(t, e.Results)
+	require.Equal(t, "/app", e.Results[0].Title, "titles use the primary (first configured) sigil")
+	require.Equal(t, &Action{Type: ActionSetQuery, Value: "/app "}, e.Results[0].Action,
+		"completion keeps the primary sigil the sheet was built from")
+}
+
+func TestCheatSheetProviderErrorYieldsZero(t *testing.T) {
+	// The builtin never errors; a defensive fake proves an erroring
+	// suggest provider degrades to the zero Emission plus one log line.
+	r, lc := newTestRegistry(t, nil, nil)
+	boom := &fakeProvider{
+		pid:  builtinSuggestID,
+		name: "Commands",
+		queryFn: func(context.Context, Request) ([]Result, []string, error) {
+			return nil, nil, errors.New("boom")
+		},
+	}
+	r.suggest = boom
+	r.byID[builtinSuggestID] = boom
+
+	require.Equal(t, Emission{}, r.CheatSheet())
+	require.Contains(t, lc.joined(), "cheat sheet: boom")
 }

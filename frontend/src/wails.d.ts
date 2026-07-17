@@ -65,6 +65,11 @@ interface WailsAppBindings {
   Hide(): Promise<void>;
   QueryPlugins(query: string, gen: number): Promise<TargetInfo>;
   RunPluginAction(pluginId: string, action: PluginAction): Promise<void>;
+  // The bang command cheat sheet shown for an empty query: the
+  // suggestions provider's answer for a bare primary sigil, as one
+  // synchronous Emission with gen 0 and results possibly empty
+  // (never null Go-side; main.ts still tolerates it defensively).
+  CheatSheet(): Promise<PluginEmission>;
   // Resolved theme tokens: every internal/theme.TokenNames key mapped
   // to a validated CSS value (theme.ts sets each as --sb-<key>).
   GetTheme(): Promise<Record<string, string>>;

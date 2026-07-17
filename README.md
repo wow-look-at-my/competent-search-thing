@@ -137,6 +137,10 @@ buildhost (see [Install](#install)):
       opt-in app-context awareness (focused/running/installed apps),
       built-in commands (`!rescan`, `!reload`, `!config`, `!version`,
       `!quit`, `!app`) and three documented example plugins
+- [x] Empty-query cheat sheet: an empty bar lists the available
+      commands (the same list a bare `!` shows) with no row
+      pre-selected; it disappears the moment you type, and no plugin
+      processes run for an empty query
 - [x] Theming: design tokens as CSS custom properties, builtin dark +
       light themes, validated user JSON themes with live reload, and a
       custom.css escape hatch (see [Theming](#theming))
@@ -714,6 +718,11 @@ and are configurable (`bangs.sigils` in `config.json`).
   provider suggests matching bangs (up to 12) as results; Enter on a
   suggestion completes the input in place, keeping your sigil and
   whatever followed the name.
+- An empty query shows the same cheat sheet (everything a bare `!`
+  lists) before you type anything. It renders with no row selected --
+  Enter on an empty bar does nothing until you arrow into or click the
+  list -- vanishes the instant the query is non-empty, and involves no
+  plugin dispatch (an empty query never runs plugin processes).
 - Sigil text that matches no bang at all falls through to the normal
   trigger path as a plain query.
 
@@ -738,7 +747,8 @@ pipeline (disable them like any plugin via `plugins.entries` with ids
 | `!quit` | exit the app |
 | `!app <text>` / `!launch <text>` | search installed applications and launch the selection |
 
-Type a bare `!` (or `/` or `@`) to list every available command.
+Type a bare `!` (or `/` or `@`) to list every available command; an
+empty query shows the same list before you type anything.
 
 `!app` searches the installed-apps snapshot: an empty query (`!app `,
 note the space) lists the first 15 alphabetically; otherwise name

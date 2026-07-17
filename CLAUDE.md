@@ -14,8 +14,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   file and stays minimal (see coverage note below).
 - `internal/app` -- the Wails-bound App object and its methods
   (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/DomReady/
-  Shutdown/QueryPlugins/RunPluginAction). Bound methods appear in JS as
-  `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
+  Shutdown/QueryPlugins/RunPluginAction/CheatSheet). Bound methods
+  appear in JS as `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
   saves the runtime ctx, brings up the global hotkey once through a
   session-dependent backend plan (hotkey.go: empty spec = skip, parse
   failure = log once + run on; `hotkeyPlan(session, override)` picks
@@ -142,7 +142,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   empty query or nil registry = cancel only, zero TargetInfo),
   converts the appctx Snapshot to the plugin wire types, and
   dispatches; providers answer async via "plugin:results" events
-  whose emit path drops stale generations. `RunPluginAction(pluginID
+  whose emit path drops stale generations. `CheatSheet()
+  plugin.Emission` returns the registry's bang cheat sheet (see
+  internal/plugin) under the same pluginMu the reload swap uses --
+  synchronous, dispatch-free, nil registry = zero Emission, Results
+  always non-nil so JS sees results: []. `RunPluginAction(pluginID
   string, action plugin.Action) error` RE-validates every action the
   frontend echoes back (defense in depth), logs it, then executes:
   copy_text -> ClipboardSetText (bar stays open); open_path (abs
@@ -322,7 +326,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   + space => ONLY that provider, all trigger gating bypassed;
   bare/partial/ambiguous or resolved-without-space sigil => ONLY the
   builtin suggestions provider; bang-shaped text with zero candidates
-  => normal trigger fan-out on the raw query. `Close()` drops idle
+  => normal trigger fan-out on the raw query. `CheatSheet()` returns
+  the suggestions provider's answer for a bare primary sigil as ONE
+  synchronous Emission (Gen 0, no goroutines/fan-out; suggestions
+  provider disabled = zero Emission) -- the app binds it for the
+  frontend's empty-query cheat sheet. `Close()` drops idle
   HTTP connections; reload = build a new Registry, swap atomically,
   Close the old. Builtins (targeted-only, in-process, no sanitizer):
   builtin_bangs.go "bangs"/Commands -- bang completions (resolved
@@ -620,6 +628,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   drop; every generation also fire-and-forgets QueryPlugins(query,
   seq) -- INCLUDING the empty query, which is the Go-side cancel
   signal -- and updates the bang chip from the returned TargetInfo;
+  an EMPTY query additionally fetches CheatSheet() and renders it as
+  the single plugin section (dropped if the generation moved on or
+  anything was typed), so the bar lists the available commands before
+  you type -- with NO auto-selected row: both auto-select-first
+  fallbacks are gated on a non-blank query so Enter on an empty bar
+  stays a no-op, and moveSelection enters the unselected list
+  explicitly (Down -> first row, Up -> last);
   "plugin:results" emissions are dropped unless gen === seq, else
   upsert that plugin's section (keyed by id) and re-render the plugin
   area BELOW the file rows, never displacing them; selection is one

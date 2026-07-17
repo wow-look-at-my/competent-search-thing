@@ -2,8 +2,10 @@
 // response dropping, a keyboard/mouse selection model, open/reveal
 // actions, the async plugin pipeline (fire-and-forget QueryPlugins,
 // "plugin:results" sections below the file rows, the bang-target
-// chip, plugin action dispatch), and the runtime events the Go side
-// emits (app:shown, index:progress, watch:degraded, theme:changed).
+// chip, plugin action dispatch), the empty-query command cheat sheet
+// (CheatSheet, rendered unselected), and the runtime events the Go
+// side emits (app:shown, index:progress, watch:degraded,
+// theme:changed).
 // Rendering lives in render.ts; theme token/custom-css application
 // lives in theme.ts.
 
@@ -128,6 +130,12 @@ function moveSelection(delta: number): void {
   if (n === 0) {
     return;
   }
+  if (state.selected < 0) {
+    // Entering the list from no selection (the empty-query cheat
+    // sheet): Down lands on the first row, Up on the last.
+    select(delta > 0 ? 0 : n - 1);
+    return;
+  }
   select((((state.selected + delta) % n) + n) % n); // wraps both ways
 }
 
@@ -173,8 +181,11 @@ function renderPluginArea(): void {
   if (sel >= state.rows.length) {
     sel = state.rows.length - 1; // the area shrank under the selection
   }
-  if (sel < 0 && state.rows.length > 0) {
-    sel = 0; // first content to arrive takes the selection
+  if (sel < 0 && state.rows.length > 0 && state.query.trim() !== "") {
+    // First content to arrive takes the selection -- but never at an
+    // empty query: the cheat sheet starts unselected so Enter on an
+    // empty bar stays a no-op until the list is entered explicitly.
+    sel = 0;
   }
   select(sel);
 }
@@ -256,6 +267,9 @@ function runSearch(app: WailsAppBindings): void {
   const query = inputEl.value;
   state.query = query;
   state.sections = []; // plugin sections are per-generation
+  if (query.trim() === "") {
+    fetchCheatSheet(app, seq);
+  }
   const t0 = performance.now();
   app
     .Search(query)
@@ -267,7 +281,9 @@ function runSearch(app: WailsAppBindings): void {
       state.fileItems = items;
       state.fileRows = renderResults(fileResultsEl, items, query, rowHandlers);
       renderPluginArea(); // re-offset plugin rows below the new file rows
-      select(state.rows.length > 0 ? 0 : -1);
+      // Auto-select the first row only for a real query: the
+      // empty-query cheat sheet stays unselected (Enter = no-op).
+      select(query.trim() !== "" && state.rows.length > 0 ? 0 : -1);
       if (query.trim() === "") {
         refreshIdleStatus();
       } else {
@@ -283,6 +299,32 @@ function runSearch(app: WailsAppBindings): void {
   // Fire-and-forget: file rendering NEVER waits on plugins. An empty
   // query is the Go-side cancel signal and must still be sent.
   queryPlugins(app, query, seq);
+}
+
+// fetchCheatSheet renders the bang command cheat sheet for an empty
+// query -- the same list a bare "!" shows -- fetched synchronously
+// from Go with NO plugin dispatch (QueryPlugins("") stays the
+// cancel signal; no provider goroutines or subprocesses run). The
+// answer is dropped once a newer generation took over or anything
+// was typed, so the sheet vanishes the instant the query is
+// non-empty.
+function fetchCheatSheet(app: WailsAppBindings, seq: number): void {
+  app
+    .CheatSheet()
+    .then((e) => {
+      if (seq !== state.seq || inputEl.value.trim() !== "") {
+        return; // typed past the empty state; the sheet no longer applies
+      }
+      const results = e.results ?? []; // tolerate a null payload
+      if (results.length === 0) {
+        return; // suggestions disabled or nothing registered
+      }
+      state.sections = [{ plugin: e.plugin, name: e.name, results }];
+      renderPluginArea();
+    })
+    .catch((err: unknown) => {
+      console.warn("cheat sheet failed: " + String(err));
+    });
 }
 
 // queryPlugins asks Go to fan the query out to the matching providers
