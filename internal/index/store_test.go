@@ -1,6 +1,7 @@
 package index
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -227,6 +228,204 @@ func TestBlobInvariants(t *testing.T) {
 		require.Equal(t, s.Name(id), string(s.nameBytes(id)))
 		require.NotEmpty(t, s.Name(id))
 	}
+}
+
+// liveDirPaths returns the live directory entry paths in id order (the
+// ForEachLive-based reference for the LiveDirsPage tests).
+func liveDirPaths(s *Store) []string {
+	var out []string
+	s.ForEachLive(func(id int32) bool {
+		if s.IsDir(id) {
+			out = append(out, s.EntryPath(id))
+		}
+		return true
+	})
+	return out
+}
+
+// pageAllLiveDirs drains LiveDirsPage from id 0 with the given page
+// size and returns every collected path in page order.
+func pageAllLiveDirs(t *testing.T, s *Store, max int) []string {
+	t.Helper()
+	var all []string
+	calls := 0
+	for start := int32(0); start != -1; {
+		var page []string
+		page, start = s.LiveDirsPage(start, max)
+		all = append(all, page...)
+		calls++
+		require.LessOrEqual(t, calls, s.Len()+1, "paging must terminate")
+	}
+	return all
+}
+
+func TestLiveDirsPage(t *testing.T) {
+	t.Run("empty store", func(t *testing.T) {
+		s := NewStore()
+		dirs, next := s.LiveDirsPage(0, 10)
+		require.Nil(t, dirs)
+		require.Equal(t, int32(-1), next)
+	})
+
+	t.Run("single page covers all", func(t *testing.T) {
+		s := NewStore()
+		buildSampleTree(t, s)
+		dirs, next := s.LiveDirsPage(0, 100)
+		require.Equal(t, []string{"/root/docs", "/root/src"}, dirs)
+		require.Equal(t, int32(-1), next)
+	})
+
+	t.Run("page size 1 equals the full live-dir set", func(t *testing.T) {
+		s := NewStore()
+		buildSampleTree(t, s)
+		mustAdd(t, s, "/root/src", "pkg", true)
+		require.Equal(t, liveDirPaths(s), pageAllLiveDirs(t, s, 1))
+	})
+
+	t.Run("tombstoned dirs are skipped", func(t *testing.T) {
+		s := NewStore()
+		buildSampleTree(t, s)
+		s.RemoveByPath("/root/docs")
+		dirs, next := s.LiveDirsPage(0, 0)
+		require.Equal(t, []string{"/root/src"}, dirs)
+		require.Equal(t, int32(-1), next)
+	})
+
+	t.Run("resurrected dir reappears", func(t *testing.T) {
+		s := NewStore()
+		buildSampleTree(t, s)
+		s.RemoveByPath("/root/docs")
+		mustAdd(t, s, "/root", "docs", true)
+		dirs, _ := s.LiveDirsPage(0, 0)
+		require.Equal(t, []string{"/root/docs", "/root/src"}, dirs,
+			"resurrection keeps the original id, so id order is unchanged")
+	})
+
+	t.Run("next is -1 exactly at exhaustion", func(t *testing.T) {
+		s := NewStore()
+		mustAdd(t, s, "/r", "a", true)      // id 0
+		mustAdd(t, s, "/r", "b.txt", false) // id 1
+		mustAdd(t, s, "/r", "c", true)      // id 2
+
+		// A page that fills before the end reports the next id to
+		// examine, even though that id is not a live dir.
+		dirs, next := s.LiveDirsPage(0, 1)
+		require.Equal(t, []string{"/r/a"}, dirs)
+		require.Equal(t, int32(1), next)
+
+		// A page that fills ON the final id has examined the whole id
+		// space: next is -1, not Len().
+		dirs, next = s.LiveDirsPage(next, 1)
+		require.Equal(t, []string{"/r/c"}, dirs)
+		require.Equal(t, int32(-1), next)
+
+		// Starting at or past Len() is exhausted immediately.
+		dirs, next = s.LiveDirsPage(int32(s.Len()), 1)
+		require.Nil(t, dirs)
+		require.Equal(t, int32(-1), next)
+	})
+
+	t.Run("non-positive max selects the default", func(t *testing.T) {
+		s := NewStore()
+		var want []string
+		for i := 0; i < 5; i++ {
+			name := fmt.Sprintf("sub%d", i)
+			mustAdd(t, s, "/d", name, true)
+			want = append(want, "/d/"+name)
+		}
+		for _, max := range []int{0, -7} {
+			dirs, next := s.LiveDirsPage(0, max)
+			require.Equal(t, want, dirs, "max %d", max)
+			require.Equal(t, int32(-1), next, "max %d", max)
+		}
+	})
+
+	t.Run("negative start is treated as 0", func(t *testing.T) {
+		s := NewStore()
+		buildSampleTree(t, s)
+		dirs, next := s.LiveDirsPage(-5, 0)
+		require.Equal(t, []string{"/root/docs", "/root/src"}, dirs)
+		require.Equal(t, int32(-1), next)
+	})
+}
+
+func TestChildrenOf(t *testing.T) {
+	s := NewStore()
+	buildSampleTree(t, s)
+
+	t.Run("unknown dir", func(t *testing.T) {
+		require.Nil(t, s.ChildrenOf("/nowhere"))
+		require.Nil(t, s.ChildrenOf("relative/dir"))
+	})
+
+	t.Run("root children mix files and dirs", func(t *testing.T) {
+		require.ElementsMatch(t, []ChildInfo{
+			{Name: "docs", IsDir: true},
+			{Name: "src", IsDir: true},
+			{Name: "top.txt", IsDir: false},
+		}, s.ChildrenOf("/root"))
+	})
+
+	t.Run("nested dir children", func(t *testing.T) {
+		require.ElementsMatch(t, []ChildInfo{
+			{Name: "a.txt"},
+			{Name: "b.txt"},
+		}, s.ChildrenOf("/root/docs"))
+	})
+
+	t.Run("unclean path is cleaned", func(t *testing.T) {
+		require.ElementsMatch(t, []ChildInfo{
+			{Name: "a.txt"},
+			{Name: "b.txt"},
+		}, s.ChildrenOf("/root/docs/"))
+	})
+
+	t.Run("interned dir with no entries", func(t *testing.T) {
+		// src/main.go's parent has children; a fresh empty dir entry
+		// interns its own path but has no children yet.
+		mustAdd(t, s, "/root", "empty", true)
+		require.Nil(t, s.ChildrenOf("/root/empty"))
+	})
+}
+
+func TestChildrenOfTombstonesAndResurrection(t *testing.T) {
+	s := NewStore()
+	buildSampleTree(t, s)
+
+	// A tombstoned child disappears from its parent's listing.
+	s.RemoveByPath("/root/docs/a.txt")
+	require.ElementsMatch(t, []ChildInfo{{Name: "b.txt"}}, s.ChildrenOf("/root/docs"))
+
+	// A whole-subtree tombstone empties the removed dir AND drops the
+	// dir from its own parent's listing.
+	s.RemoveByPath("/root/docs")
+	require.Nil(t, s.ChildrenOf("/root/docs"), "no live children left")
+	require.ElementsMatch(t, []ChildInfo{
+		{Name: "src", IsDir: true},
+		{Name: "top.txt", IsDir: false},
+	}, s.ChildrenOf("/root"))
+
+	// Resurrecting the dir and one child brings both listings back.
+	mustAdd(t, s, "/root", "docs", true)
+	mustAdd(t, s, "/root/docs", "a.txt", false)
+	require.ElementsMatch(t, []ChildInfo{{Name: "a.txt"}}, s.ChildrenOf("/root/docs"))
+	require.ElementsMatch(t, []ChildInfo{
+		{Name: "docs", IsDir: true},
+		{Name: "src", IsDir: true},
+		{Name: "top.txt", IsDir: false},
+	}, s.ChildrenOf("/root"))
+}
+
+func TestChildrenOfUnicodeNames(t *testing.T) {
+	// Names round-trip in original case; non-ASCII text stays escaped
+	// in this source file by convention (see TestUnicodeNames).
+	s := NewStore()
+	mustAdd(t, s, "/u", "\u0130stanbul", true)
+	mustAdd(t, s, "/u", "Stra\u1e9eE.txt", false)
+	require.ElementsMatch(t, []ChildInfo{
+		{Name: "\u0130stanbul", IsDir: true},
+		{Name: "Stra\u1e9eE.txt", IsDir: false},
+	}, s.ChildrenOf("/u"))
 }
 
 func TestForEachLive(t *testing.T) {
