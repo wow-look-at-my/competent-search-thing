@@ -137,7 +137,7 @@ body {
 
 .result .name {
   /* The name yields only after the dir is fully gone. */
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   max-width: 60%;
   overflow: hidden;
   text-overflow: ellipsis;
