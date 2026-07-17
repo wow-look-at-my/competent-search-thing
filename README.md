@@ -337,10 +337,10 @@ inherits every metric it does not override from dark via `extends`.
 | `bg-elevated` | `--sb-bg-elevated` | Elevated surfaces / inner separator lines | `#2c2c33` | `#e4e4ea` |
 | `fg` | `--sb-fg` | Primary text (query input, result names) | `#f2f2f5` | `#1b1b22` |
 | `fg-dim` | `--sb-fg-dim` | Secondary text (icons, parent dirs, placeholder, status) | `#8a8a94` | `#6b6b76` |
-| `accent` | `--sb-accent` | Primary accent (input caret; the main plugin-facing knob) | `#8db8ff` | `#2f6fdb` |
-| `accent-fg` | `--sb-accent-fg` | Text on accent-filled surfaces (plugin-facing) | `#101018` | `#ffffff` |
-| `selection-bg` | `--sb-selection-bg` | Selected row / input selection background | `#2b3f66` | `#d8e4fb` |
-| `selection-fg` | `--sb-selection-fg` | Text on the selection background | `#f2f2f5` | `#14213d` |
+| `accent` | `--sb-accent` | Primary accent (input caret and input text selection; the main plugin-facing knob) | `#8db8ff` | `#2f6fdb` |
+| `accent-fg` | `--sb-accent-fg` | Text on accent-filled surfaces (input text selection; plugin-facing) | `#101018` | `#ffffff` |
+| `selection-bg` | `--sb-selection-bg` | Selected result row background | `#2b3f66` | `#d8e4fb` |
+| `selection-fg` | `--sb-selection-fg` | Text on the selected result row | `#f2f2f5` | `#14213d` |
 | `border` | `--sb-border` | The bar's outer border | `#3a3a42` | `#cfcfd8` |
 | `highlight` | `--sb-highlight` | Matched-substring highlight in result names | `#8db8ff` | `#1a56c0` |
 | `warning` | `--sb-warning` | Warning accents (the staleness chip) | `#d9a13d` | `#9a6b12` |
