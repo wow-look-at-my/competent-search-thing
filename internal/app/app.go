@@ -138,13 +138,18 @@ type App struct {
 	// generation; emissions from older generations are dropped.
 	// newRegistry is a seam over buildRegistry so tests can inject
 	// fake dispatchers without touching config.json or the disk.
-	pluginOnce   sync.Once
-	pluginGen    atomic.Int64
-	pluginMu     sync.Mutex // guards registry, pluginCancel, appCache
-	registry     dispatcher
-	pluginCancel context.CancelFunc
-	appCache     *appctx.Cache
-	newRegistry  func() dispatcher
+	// firefoxCtx/firefoxCancel bound the frequent-sites history
+	// refreshes (see firefox.go): app-lifetime, shared across registry
+	// reloads, cancelled in Shutdown.
+	pluginOnce    sync.Once
+	pluginGen     atomic.Int64
+	pluginMu      sync.Mutex // guards registry, pluginCancel, appCache, firefoxCtx, firefoxCancel
+	registry      dispatcher
+	pluginCancel  context.CancelFunc
+	appCache      *appctx.Cache
+	newRegistry   func() dispatcher
+	firefoxCtx    context.Context
+	firefoxCancel context.CancelFunc
 
 	trayOnce sync.Once
 	newTray  func() trayHandle
@@ -320,8 +325,9 @@ func (a *App) emitDegraded(s watch.Stats) {
 // portal/gsettings backend chain, and closing an active portal
 // shortcut), closes the tray icon (aborting a Start still waiting on
 // the bus; closing the tray's connection unregisters the icon),
-// cancels the in-flight plugin generation and closes the
-// registry, cancels a still-running initial build (its walk aborts
+// cancels the in-flight plugin generation, closes the registry, and
+// cancels the firefox context (aborting a frequent-sites history
+// refresh mid-copy), cancels a still-running initial build (its walk aborts
 // and logs "index: initial build cancelled"), and stops the rescanner
 // first (it may be mid-rescan and calls back into the watcher to
 // resync watches), then the watcher, then the theme hot-reload
@@ -374,12 +380,17 @@ func (a *App) Shutdown(_ context.Context) {
 	a.pluginCancel = nil
 	reg := a.registry
 	a.registry = nil
+	ffCancel := a.firefoxCancel
+	a.firefoxCancel = nil
 	a.pluginMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
 	if reg != nil {
 		reg.Close()
+	}
+	if ffCancel != nil {
+		ffCancel()
 	}
 
 	a.watchMu.Lock()

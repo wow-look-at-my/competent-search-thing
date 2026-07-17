@@ -94,8 +94,21 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   layer up once (plugins.go: an appctx.Cache over the plat.appSource
   seam + RefreshInstalledAsync, then the registry via the
   `newRegistry` builder seam, whose production value `buildRegistry`
-  re-reads config.json, LoadDirs <configDir>/plugins, passes Version
-  and the installedApps getter, and logs every registry Errors()
+  re-reads config.json, LoadDirs <configDir>/plugins, passes Version,
+  the installedApps getter and the Firefox getters (firefox.go:
+  `firefoxSources(cfg)` resolves BOTH sections -- frequent sites and
+  open tabs -- around ONE shared discovery: a section's config
+  profileDir override wins for that section, the override-less ones
+  share a single firefox.FindProfile pass over the `plat.firefoxBases`
+  seam (production firefox.DefaultBaseDirs); discovery finding nothing
+  = ONE quiet "firefox: no profile found; the Firefox result sections
+  are disabled" line + nil getters, so those builtin providers never
+  register; otherwise a firefox.Cache (sites) and firefox.TabCache
+  (tabs) whose refresh goroutines are bounded by the app-lifetime
+  firefoxCtx -- created on first use under pluginMu, SHARED across
+  registry reloads so !reload builds fresh caches with fresh config
+  but can never leak an unbounded refresh, cancelled in Shutdown and
+  left cancelled afterwards), and logs every registry Errors()
   entry once with a "plugin:" prefix -- missing plugins dir =
   builtins only, no noise), starts theme hot reload (theme.go: a
   dedicated fsnotify watcher on the config dir + its themes/ subdir,
@@ -110,7 +123,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   ran is closed by the chain itself), closes the tray (cancels a
   Start still waiting on the bus, then the nil-safe idempotent
   Close), cancels the in-flight plugin
-  generation + Close()s the registry, cancels a still-running
+  generation + Close()s the registry + cancels the firefox refresh
+  context (an in-flight places.sqlite copy/query aborts between
+  chunks), cancels a still-running
   initial build (its walk aborts promptly, logs "index: initial
   build cancelled", discards the partial store, and never starts the
   watch layer), and stops rescanner+watcher plus the theme watcher
@@ -256,7 +271,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   per-pixel-alpha window flag main.go reads via
   app.WindowTranslucent(); zero value = opaque = the safe default,
   needs a compositor, README "Translucent window" holds the measured
-  evidence}). Lives under
+  evidence}, firefox {frequentSites {minVisitsMonth 11,
+  minVisitsWeek 1, refreshMinutes 10, maxResults 6, profileDir ""},
+  openTabs {maxResults 6, profileDir ""}}
+  -- the frequentSites defaults encode ">10 visits in 30 days AND >=1
+  in 7"; the numeric knobs are Normalize-repaired to defaults when
+  <= 0, both profileDirs are passed through verbatim). Lives under
   os.UserConfigDir(); the `COMPETENT_SEARCH_CONFIG_DIR` env var
   overrides the directory (tests rely on this); `Dir()` exposes that
   directory (the plugins/ and themes/ dirs and history.json live
@@ -268,8 +288,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   `Normalize` repairs zero values (empty theme -> dark, nil plugin
   entries/bang aliases -> empty maps, empty sigils -> the ! / @
   defaults; history needs nothing -- its zero value means persistence
-  ON, the tray.disabled convention); entry settings are opaque
-  json.RawMessage forwarded verbatim to that plugin.
+  ON, the tray.disabled convention; non-positive firefox.frequentSites
+  and firefox.openTabs numbers -> their defaults); entry settings are
+  opaque json.RawMessage forwarded verbatim to that plugin.
 - `internal/history` -- the query-history store behind the frontend's
   Up/Down recall, pure and exhaustively unit-tested. `New(path,
   persist)`; `Load()` (missing file or memory-only store = empty +
@@ -374,7 +395,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   frontend's empty-query cheat sheet. `Close()` drops idle
   HTTP connections; reload = build a new Registry, swap atomically,
   Close the old. Builtins (in-process, no sanitizer; targeted-only
-  except apps-search):
+  except apps-search and the two Firefox providers):
   builtin_bangs.go "bangs"/Commands -- bang completions (resolved
   bang first, primary-sigil titles, typed-sigil set_query preserving
   the query rest, cap 12); builtin_app.go "app"/App Commands --
@@ -391,9 +412,28 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   / prefix 90 / word-start 75 (words = letter/digit runs, so spaces,
   hyphens, dots split) / substring 60, cap 6, same run_command
   launch; bang routing keeps it exclusive with the targeted !app
-  path, and a nil/empty snapshot emits nothing. Exhaustively
-  unit-tested, table-driven, plus an end-to-end manifest ->
-  registry -> /bin/sh transport dispatch test.
+  path, and a nil/empty snapshot emits nothing;
+  builtin_firefox.go "firefox-frequent"/Frequent Sites -- NO bangs,
+  all-queries semantics (>= 2 trimmed runes, the shared
+  allQueriesMatch helper), registered ONLY when Options.FrequentSites
+  (the app-layer getter yielding []SiteInfo, a plugin-local mirror of
+  internal/firefox.Site) is non-nil; scores
+  host prefix 95 (leading "www." ignored) > title word-start 80 >
+  host substring 70 > title-or-URL substring 60, ties by visit count
+  then title, cap Options.FrequentSitesMax (<=0 -> 6); result =
+  title-or-host / URL subtitle / icon "globe" / open_url action;
+  builtin_tabs.go "firefox-tabs"/Open Tabs -- same NO-bangs
+  all-queries semantics, registered ONLY when Options.OpenTabs (the
+  getter yielding []TabInfo, mirror of internal/firefox.Tab) is
+  non-nil; scores title word-start 85 > host prefix 80 ("www."
+  ignored) > title substring 65 > URL substring 55 (the TITLE outranks
+  the host here, unlike frequent-sites), ties by lastAccessed DESC
+  then title, cap Options.OpenTabsMax (<=0 -> 6); result =
+  title-or-host / URL subtitle / icon "link" (globe is taken) /
+  "pinned" badge on pinned tabs / open_url action -- which re-OPENS
+  the page, it cannot focus the existing tab (README honesty note).
+  Exhaustively unit-tested, table-driven, plus an end-to-end
+  manifest -> registry -> /bin/sh transport dispatch test.
 - `internal/appctx` -- app-context collection for the plugin system,
   pure and headless-tested: the data types (AppInfo / InstalledApp /
   Snapshot -- deliberately NOT internal/plugin's wire types, the app
@@ -418,6 +458,68 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Name[xx] ignored, sorted by Name). proc.go = `ProcInfo(procRoot,
   pid)` readlink exe + trimmed comm, each empty on error (cross-user
   /proc exe readlink fails; expected).
+- `internal/firefox` -- the Firefox data layer (frequent sites + open
+  tabs), pure and headless-tested (fixture profiles.ini trees, fixture
+  places.sqlite databases AND fixture recovery.jsonlz4 snapshots BUILT
+  IN THE TESTS -- the latter via a test-only literals-only mozLz4
+  compressor; injectable now/clock/fetch/mtime seams).
+  profiles.go: `BaseDirs(goos, home, getenv)` = the probe order
+  (linux: classic ~/.mozilla/firefox, snap
+  ~/snap/firefox/common/.mozilla/firefox -- Ubuntu 22.04's default --
+  flatpak ~/.var/app/org.mozilla.firefox/.mozilla/firefox; windows
+  %APPDATA%\Mozilla\Firefox; darwin best-effort) +
+  `FindProfile(bases)`: per base, profiles.ini resolves to ONE
+  profile ([Install*] Default= wins, then [ProfileN] Default=1, then
+  a lone [ProfileN]; IsRelative=1 joins against the base, missing
+  IsRelative inferred from the path; the resolved dir must exist);
+  multiple bases = newest places.sqlite mtime wins, earlier base
+  breaks ties; ok=false = caller degrades. places.go:
+  `FrequentSites(ctx, profileDir, QueryOptions{MinMonth, MinWeek,
+  Now, Limit})` NEVER opens the live db (Firefox holds it locked,
+  WAL): copies places.sqlite + places.sqlite-wal to a fresh temp dir
+  (chunked, ctx-abortable), opens the COPY read-only via pure-Go
+  modernc.org/sqlite (driver "sqlite" -- windows/amd64 must keep
+  cross-compiling, so never swap in a cgo driver), one grouped query
+  (visit_date is MICROSECONDS since epoch; hidden=0, http(s)-only,
+  visit_type NOT IN (4,8) i.e. EMBED/FRAMED_LINK excluded; HAVING
+  c30 >= MinMonth AND c7 >= MinWeek, ORDER BY c30 DESC, LIMIT
+  default 200), host parsed in Go (net/url Hostname; empty host =
+  row dropped), temp dir removed on the way out. cache.go: `Cache`
+  (NewCache(ctx, CacheOptions)) = the appctx.Cache pattern for
+  sites: `Sites()` returns an immutable copy immediately and
+  single-flight-kicks ONE background refresh when stale (success
+  schedules the next attempt a TTL away, default 10m; failure keeps
+  old data, logs once per DISTINCT message, retries no sooner than
+  1m so a broken profile is not re-copied per keystroke); every
+  refresh goroutine is bounded by the constructor ctx (cancelled =
+  no new kicks, in-flight fetch aborts quietly). mozlz4.go:
+  `DecodeMozLz4(data, maxSize)` -- Firefox's .jsonlz4 container
+  (8-byte "mozLz40\0" magic + LE uint32 uncompressed size + raw LZ4
+  BLOCK format, no frame) with a hand-written ~80-line block decoder:
+  token nibbles, 0xFF-chained length extensions, byte-by-byte FORWARD
+  match copies (offset < length self-replication is legal), every
+  read bounds-checked, the block must produce EXACTLY the declared
+  size, declared sizes over the cap (default 64 MiB) rejected as
+  corruption. sessionstore.go: `ReadOpenTabs(profileDir)` reads
+  sessionstore-backups/recovery.jsonlz4 (rewritten ~15s by a RUNNING
+  Firefox; private windows never persisted) -> []Tab{URL, Title,
+  Host, Pinned, LastAccessed(ms)}: hidden tabs skipped, entries[index-1]
+  is the current page (1-based index clamped into range, entry-less
+  tabs skipped), http(s)-with-host only, raw cap 500; a MISSING file
+  = (nil, nil) -- browser closed, deliberately NO
+  sessionstore.jsonlz4 fallback (those tabs are not open) -- while
+  corrupt/unreadable files are errors; `RecoveryMTime` = the cheap
+  staleness probe. tabcache.go: `TabCache` (NewTabCache(ctx,
+  TabCacheOptions)) = the Cache pattern with an mtime gate: `Tabs()`
+  serves the snapshot immediately; a due probe (>= 1s apart) stats
+  the file and re-reads ONLY when the mtime changed or the last read
+  is older than the TTL (default 15s, matching Firefox's write
+  cadence -- no config knob); success MAY legitimately store an
+  empty list (closed browser), failure keeps old data with the same
+  once-per-distinct-message logging and 1m retry gap, ctx bounds
+  every goroutine. Consumed by
+  internal/app's firefox.go + the plugin registry's firefox-frequent
+  and firefox-tabs builtins.
 - `internal/watch` -- keeps the index live after the initial walk.
   `Watcher` (watch.go + events.go): one fsnotify watch per live indexed
   directory plus the roots -- fsnotify is used uniformly on ALL
