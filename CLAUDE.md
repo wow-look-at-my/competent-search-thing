@@ -788,10 +788,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   runningApplications with regular activation policy; Title always
   empty -- titles need the AX API), InstalledApps = /Applications +
   ~/Applications *.app scan (Exec = `open -a "<path>"`).
-  windows/darwin files compile only on their OSes -- CI builds
-  linux/amd64 + a windows/amd64 cross-compile but only ever RUNS the
-  linux binary, and darwin is never compiled at all -- so keep them
-  boring and conventional.
+  windows/darwin files compile only on their OSes -- the CI `linux`
+  job builds linux/amd64 + a windows/amd64 cross-compile but only
+  ever RUNS the linux binary, and the `darwin` job cgo-compiles
+  darwin/arm64 + runs the unit-test suite on a mac runner (no GUI
+  run) -- so keep them boring and conventional.
 - `wails.json` -- Wails CLI project config (app name, frontend
   install/build commands) read by `wails dev`/`wails build` only; the
   no-CLI go-toolchain path does not use it.
@@ -977,10 +978,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 ## CI notes
 
 - `.github/workflows/ci.yml` runs on every push (`on: push:`, no
-  filters). The single job is named exactly `all-builds` -- the org
-  ruleset requires a green `all-builds` status on the head SHA before
-  a PR can merge to master. Do not rename it.
-- The job: checkout -> apt install gtk/webkit/x11 dev packages plus
+  filters). Jobs: `linux` (the original single build job, content
+  unchanged), `darwin` (macos-latest: darwin/arm64 cgo build + the
+  full unit-test suite, tags `desktop,production`, no screenshots/deb,
+  `autorelease: 'false'` for now, uploads `build/` as the
+  `darwin-build-<sha>` artifact), and the `all-builds` aggregator
+  (`if: always()`, `needs: [linux, darwin]`, fails on any needs
+  result that is not success/skipped -- a lost runner reports
+  "abandoned", which a failure/cancelled filter would pass). The org
+  ruleset requires a green `all-builds` context on the head SHA
+  before a PR can merge to master, and a matrix job cannot carry
+  that name -- do not rename the aggregator.
+- The `linux` job: checkout -> apt install gtk/webkit/x11 dev packages plus
   xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run build`
   in `frontend/` -> `echo gomemlimit_gen.go >> .git/info/exclude` (the
   transient guard go-toolchain injects would otherwise stamp every
@@ -1011,11 +1020,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   was verified in clean Ubuntu 24.04/22.04 chroots that never had the
   build deps -- keep it that way when changing packaging: an
   in-build-container run proves nothing about user machines.
-- Targets: linux/amd64 is the only cgo (gtk/webkit) target;
-  windows/amd64 cross-compiles pure-Go from the Linux runner (Wails
-  uses WebView2 on windows, and Go auto-disables cgo for non-host
-  targets) but is never RUN in CI. darwin needs cgo against the Apple
-  SDK, so it cannot be built here -- never add darwin targets.
+- Targets: in the `linux` job, linux/amd64 is the only cgo
+  (gtk/webkit) target; windows/amd64 cross-compiles pure-Go from the
+  Linux runner (Wails uses WebView2 on windows, and Go auto-disables
+  cgo for non-host targets) but is never RUN in CI. darwin needs cgo
+  against the Apple SDK, so darwin targets must never be added to the
+  LINUX job's targets list -- darwin is built by the dedicated
+  `darwin` job on a mac runner.
 - `autorelease: 'true'` publishes the `build/` binaries (built with the
   full GOFLAGS tags, so they are runnable) to buildhost (pazer.build)
   on EVERY branch push, with the git branch recorded: project
