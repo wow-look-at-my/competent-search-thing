@@ -23,9 +23,10 @@ type Manager struct {
 	mu    sync.RWMutex
 	store *Store
 
-	roots      []string
-	excludes   []string
-	maxResults int
+	roots         []string
+	excludes      []string
+	maxResults    int
+	fuzzyDisabled bool
 }
 
 // NewManager creates a Manager with an empty store. maxResults <= 0
@@ -73,6 +74,16 @@ func (m *Manager) BuildFromDisk(ctx context.Context, progress ProgressFunc) (int
 	return stats.Indexed, time.Since(start), nil
 }
 
+// SetFuzzyDisabled turns the fuzzy (subsequence) name-match tier off
+// or on for subsequent queries. The zero value keeps fuzzy matching on
+// (config search.fuzzyDisabled; main.go wires it right after
+// construction).
+func (m *Manager) SetFuzzyDisabled(disabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.fuzzyDisabled = disabled
+}
+
 // Query searches the live store. limit <= 0 selects the configured
 // default. Returns nil when nothing matches.
 func (m *Manager) Query(q string, limit int) []Result {
@@ -81,7 +92,7 @@ func (m *Manager) Query(q string, limit int) []Result {
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.store.Query(q, limit)
+	return m.store.QueryWith(q, limit, QueryOptions{FuzzyDisabled: m.fuzzyDisabled})
 }
 
 // Add inserts or refreshes one entry (watcher pass-through).

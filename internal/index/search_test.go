@@ -153,7 +153,12 @@ func randomName(rng *rand.Rand, i int) string {
 	}
 }
 
-func TestQueryMatchesNaiveReference(t *testing.T) {
+// TestQueryFuzzyDisabledMatchesNaiveReference is the toggle-off
+// equivalence guard: with the fuzzy tier disabled the engine must be
+// behavior-identical to the pre-fuzzy substring engine, modeled by the
+// unchanged naiveQuery reference. (The fuzzy-enabled default is
+// cross-checked against the extended reference in fuzzy_test.go.)
+func TestQueryFuzzyDisabledMatchesNaiveReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 	s := NewStore()
 	var ref []refEntry
@@ -172,16 +177,17 @@ func TestQueryMatchesNaiveReference(t *testing.T) {
 		queries = append(queries, name[lo:hi])
 	}
 
+	off := QueryOptions{FuzzyDisabled: true}
 	for _, q := range queries {
 		if strings.IndexByte(q, 0) >= 0 {
 			continue
 		}
 		want := naiveQuery(ref, q, len(ref))
-		got := s.Query(q, len(ref))
+		got := s.QueryWith(q, len(ref), off)
 		require.Equal(t, want, got, "query %q (full result list)", q)
 
 		wantTop := naiveQuery(ref, q, 9)
-		gotTop := s.Query(q, 9)
+		gotTop := s.QueryWith(q, 9, off)
 		require.Equal(t, wantTop, gotTop, "query %q (limit 9)", q)
 	}
 }
@@ -207,7 +213,7 @@ func TestQueryNonASCIISlowPath(t *testing.T) {
 		"\u00e4hnl", "\u00c4HNLICH.TXT", "m\u00fcsic", "s\u00f6ng",
 		"stra\u00dfe", "Stra\u1e9eE", "\u00f6", "\u00e4hnlich.txt", "nix\u00e4",
 	} {
-		require.Equal(t, naiveQuery(ref, q, len(ref)), s.Query(q, len(ref)),
+		require.Equal(t, naiveQueryFuzzy(ref, q, len(ref)), s.Query(q, len(ref)),
 			"non-ASCII query %q", q)
 	}
 
@@ -235,7 +241,9 @@ func TestQueryTombstonesSkipped(t *testing.T) {
 
 // TestQueryParallelShardsMatchLinearScan pushes the store well past the
 // single-shard threshold and cross-checks the parallel result set
-// against a trivial linear scan over the fold reference.
+// against a trivial linear scan over the fold reference. Fuzzy is
+// disabled here so the reference stays a pure substring scan; the
+// fuzzy-enabled shard consistency lives in fuzzy_test.go.
 func TestQueryParallelShardsMatchLinearScan(t *testing.T) {
 	st := buildSynthStore(7, 3*minShardEntries+123)
 	for _, q := range []string{"data", "zzqx", "a", "_1", "qqnomatch"} {
@@ -248,7 +256,7 @@ func TestQueryParallelShardsMatchLinearScan(t *testing.T) {
 			}
 			return true
 		})
-		res := st.Query(q, st.Len())
+		res := st.QueryWith(q, st.Len(), QueryOptions{FuzzyDisabled: true})
 		got := make(map[string]bool, len(res))
 		for _, r := range res {
 			got[r.Path] = true
