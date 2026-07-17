@@ -63,7 +63,7 @@
         },
         "entries": {
           "type": "object",
-          "description": "Per-plugin overrides keyed by provider id (the built-in ids 'bangs', 'app' and 'apps' work here too).",
+          "description": "Per-plugin overrides keyed by provider id (the built-in ids 'bangs', 'app', 'apps' and 'apps-search' work here too).",
           "patternProperties": {
             "^[a-z0-9][a-z0-9_-]{0,31}$": { "$ref": "#/$defs/pluginEntry" }
           },
