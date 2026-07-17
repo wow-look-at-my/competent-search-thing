@@ -1,23 +1,30 @@
 package watch
 
 // Env-gated measurement harness for the CURRENT (pre-redesign) watch
-// layer, the sibling of internal/index/measure_test.go: nothing in this
-// file runs by default -- TestWatchMeasure skips unless
-// COMPETENT_SEARCH_WATCH_MEASURE=1 -- so CI and the normal gate are
-// unaffected. It produces the baseline numbers for the watcher-scale
-// work: watch registration wall/CPU cost and the kernel-side price of
-// the one-watch-per-directory model, event-storm throughput and index
-// convergence, idle cost, and shutdown latency.
+// layer, the sibling of internal/index's gated bench-phase harness:
+// nothing in this file runs by default -- BenchmarkWatchMeasure skips
+// unless COMPETENT_SEARCH_WATCH_MEASURE=1 -- so CI and the normal gate
+// are unaffected. It produces the baseline numbers for the
+// watcher-scale work: watch registration wall/CPU cost and the
+// kernel-side price of the one-watch-per-directory model, event-storm
+// throughput and index convergence, idle cost, and shutdown latency.
 //
-// Like the index harness, wall times taken under go-toolchain's test
-// phase are coverage-instrumented; the report notes label them, and
-// runs should only be compared against runs captured the same way.
+// The harness is a BENCHMARK, not a test, for the same reason the
+// index package's huge-store harness is (internal/index
+// measure_test.go): go-toolchain's test phase enforces a 30s per-test
+// budget, and a full run here (minutes of wall time, 10s of it
+// deliberate idle) does not fit -- there is no flag to raise that
+// budget. The benchmark phase has no such cap and is not
+// coverage-instrumented, so the wall times are honest; compare only
+// runs captured the same way. The work runs ONCE per invocation
+// (b.N is ignored, the gated-bench precedent): the body far exceeds
+// any benchtime at b.N=1, so the framework never ramps up.
 //
 // Knobs (all optional; defaults in the consts below):
 //
 //	COMPETENT_SEARCH_WATCH_MEASURE_DIRS   synthetic tree size (directories)
 //	COMPETENT_SEARCH_WATCH_MEASURE_STORM  storm create+delete op count
-//	COMPETENT_SEARCH_WATCH_MEASURE_ROOT   pre-created tree root (default t.TempDir)
+//	COMPETENT_SEARCH_WATCH_MEASURE_ROOT   pre-created tree root (default b.TempDir)
 //	COMPETENT_SEARCH_WATCH_MEASURE_OUT    report path (writes <out>.json + <out>.txt)
 //
 // A default run needs ~30k inotify watches and minutes of wall time
@@ -49,7 +56,7 @@ const (
 	measureEnv      = "COMPETENT_SEARCH_WATCH_MEASURE"       // gate: the harness runs only when set
 	measureDirsEnv  = "COMPETENT_SEARCH_WATCH_MEASURE_DIRS"  // synthetic tree directory count
 	measureStormEnv = "COMPETENT_SEARCH_WATCH_MEASURE_STORM" // storm create+delete op count
-	measureRootEnv  = "COMPETENT_SEARCH_WATCH_MEASURE_ROOT"  // pre-created tree root (else t.TempDir)
+	measureRootEnv  = "COMPETENT_SEARCH_WATCH_MEASURE_ROOT"  // pre-created tree root (else b.TempDir)
 	measureOutEnv   = "COMPETENT_SEARCH_WATCH_MEASURE_OUT"   // report file path (<out>.json + <out>.txt)
 )
 
@@ -359,32 +366,33 @@ func stormTargets(dirs []string, want int) []string {
 	return out
 }
 
-// TestWatchMeasure is the one env-gated measurement: synthetic tree ->
-// index build -> watch registration -> kernel accounting -> event storm
-// + convergence -> idle -> teardown, reported like the index harness.
-// Skips unless COMPETENT_SEARCH_WATCH_MEASURE=1.
-func TestWatchMeasure(t *testing.T) {
+// BenchmarkWatchMeasure is the one env-gated measurement: synthetic
+// tree -> index build -> watch registration -> kernel accounting ->
+// event storm + convergence -> idle -> teardown, reported like the
+// index harness. The work runs once; b.N is deliberately ignored (see
+// the file comment). Skips unless COMPETENT_SEARCH_WATCH_MEASURE=1.
+func BenchmarkWatchMeasure(b *testing.B) {
 	if os.Getenv(measureEnv) == "" {
-		t.Skip("set COMPETENT_SEARCH_WATCH_MEASURE=1 to run the watch-layer measurement")
+		b.Skip("set COMPETENT_SEARCH_WATCH_MEASURE=1 to run the watch-layer measurement")
 	}
 	dirs := envInt(measureDirsEnv, defaultTreeDirs)
 	stormN := envInt(measureStormEnv, defaultStormFiles)
 
 	// measureRootEnv lets the caller aim the tree at a specific
 	// filesystem (they pre-create the directory and own its cleanup);
-	// the default t.TempDir lands wherever TMPDIR points and is removed
+	// the default b.TempDir lands wherever TMPDIR points and is removed
 	// automatically after the watcher has stopped.
 	root := os.Getenv(measureRootEnv)
 	if root == "" {
-		root = t.TempDir()
+		root = b.TempDir()
 	} else {
 		fi, err := os.Stat(root)
-		require.Nil(t, err)
-		require.True(t, fi.IsDir())
+		require.Nil(b, err)
+		require.True(b, fi.IsDir())
 	}
 
 	rep := measureReport{
-		Label:          fmt.Sprintf("watch layer baseline: %d dirs, %d storm ops (test phase)", dirs, stormN),
+		Label:          fmt.Sprintf("watch layer baseline: %d dirs, %d storm ops (benchmark phase)", dirs, stormN),
 		GoVersion:      runtime.Version(),
 		NumCPU:         runtime.GOMAXPROCS(0),
 		GOOS:           runtime.GOOS,
@@ -394,7 +402,7 @@ func TestWatchMeasure(t *testing.T) {
 
 	// Phase 1: synthetic tree.
 	start := time.Now()
-	created, files := buildSynthTree(t, root, dirs)
+	created, files := buildSynthTree(b, root, dirs)
 	rep.TreeDirs = len(created)
 	rep.TreeFiles = files
 	rep.TreeBuildSeconds = time.Since(start).Seconds()
@@ -402,8 +410,8 @@ func TestWatchMeasure(t *testing.T) {
 	// Phase 2: index build.
 	mgr := index.NewManager([]string{root}, nil, 0)
 	entries, buildDur, err := mgr.BuildFromDisk(context.Background(), nil)
-	require.Nil(t, err)
-	require.Greater(t, entries, 0)
+	require.Nil(b, err)
+	require.Greater(b, entries, 0)
 	rep.IndexEntries = entries
 	rep.IndexBuildSeconds = buildDur.Seconds()
 
@@ -413,15 +421,15 @@ func TestWatchMeasure(t *testing.T) {
 	// change; the CPU delta also spans the quiet window, which is idle
 	// and adds ~nothing.
 	w := New(mgr, []string{root}, nil, Options{})
-	regUser0, regSys0 := rusageSelf(t)
+	regUser0, regSys0 := rusageSelf(b)
 	regStart := time.Now()
-	require.Nil(t, w.Start())
+	require.Nil(b, w.Start())
 	defer w.Stop() // safety net; the measured Stop below makes this a no-op
 	_, regLast := waitStable(func() int {
 		s := w.Stats()
 		return s.WatchedDirs + s.DroppedWatches
 	}, registerQuiet)
-	regUser1, regSys1 := rusageSelf(t)
+	regUser1, regSys1 := rusageSelf(b)
 	st := w.Stats()
 	rep.RegisterSeconds = regLast.Sub(regStart).Seconds()
 	rep.RegisterCPUUserSec = regUser1 - regUser0
@@ -447,20 +455,20 @@ func TestWatchMeasure(t *testing.T) {
 	rep.StormFiles = stormN
 	rep.LiveCountBefore = mgr.LiveCount()
 	preStats := w.Stats()
-	stormUser0, stormSys0 := rusageSelf(t)
+	stormUser0, stormSys0 := rusageSelf(b)
 	stormStart := time.Now()
 	paths := make([]string, stormN)
 	for i := range paths {
 		paths[i] = filepath.Join(targets[i%len(targets)], fmt.Sprintf("s%06d", i))
-		require.Nil(t, os.WriteFile(paths[i], nil, 0o644))
+		require.Nil(b, os.WriteFile(paths[i], nil, 0o644))
 	}
 	for _, p := range paths {
-		require.Nil(t, os.Remove(p))
+		require.Nil(b, os.Remove(p))
 	}
 	stormEnd := time.Now()
 	rep.StormSeconds = stormEnd.Sub(stormStart).Seconds()
 	_, convLast := waitStable(mgr.LiveCount, convergeQuiet)
-	stormUser1, stormSys1 := rusageSelf(t)
+	stormUser1, stormSys1 := rusageSelf(b)
 	postStats := w.Stats()
 	rep.ConvergeSeconds = convLast.Sub(stormEnd).Seconds()
 	rep.StormCPUUserSec = stormUser1 - stormUser0
@@ -471,11 +479,11 @@ func TestWatchMeasure(t *testing.T) {
 	rep.LiveCountAfter = mgr.LiveCount()
 
 	// Phase 6: idle cost, watcher live and the tree quiet.
-	idleUser0, idleSys0 := rusageSelf(t)
+	idleUser0, idleSys0 := rusageSelf(b)
 	idleStart := time.Now()
 	time.Sleep(idleWindow)
 	rep.IdleSeconds = time.Since(idleStart).Seconds()
-	idleUser1, idleSys1 := rusageSelf(t)
+	idleUser1, idleSys1 := rusageSelf(b)
 	rep.IdleCPUUserSec = idleUser1 - idleUser0
 	rep.IdleCPUSysSec = idleSys1 - idleSys0
 
@@ -485,7 +493,7 @@ func TestWatchMeasure(t *testing.T) {
 	rep.StopSeconds = time.Since(stopStart).Seconds()
 
 	rep.Notes = []string{
-		"wall times are COVERAGE-INSTRUMENTED under go-toolchain's test phase (same caveat as internal/index/measure_test.go); compare only runs captured the same way",
+		"wall times captured in go-toolchain's BENCHMARK phase (un-instrumented, same yardstick as internal/index's gated benches); compare only runs captured the same way",
 		"RegisterSeconds/ConvergeSeconds run to the LAST observed change; the stabilization quiet windows (2s/3s) are excluded from the wall numbers but included in the CPU deltas",
 		"CPU deltas are process-wide getrusage(RUSAGE_SELF): background GC and the stabilization polls are included",
 		fmt.Sprintf("EstimatedKernelBytes = WatchedDirs * %d B (kernel INOTIFY_WATCH_COST, x86-64); InotifyWatchDescs is the kernel's own fdinfo count", inotifyWatchCost),
@@ -493,5 +501,5 @@ func TestWatchMeasure(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		rep.Notes = append(rep.Notes, "kernel-side numbers (kernel version, max_user_watches, fdinfo counts) are zero: /proc is linux-only")
 	}
-	writeMeasureReport(t, rep)
+	writeMeasureReport(b, rep)
 }
