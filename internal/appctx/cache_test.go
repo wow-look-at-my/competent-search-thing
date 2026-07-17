@@ -20,13 +20,17 @@ type fakeSource struct {
 	runningOK   bool
 	installed   []InstalledApp
 	installedOK bool
+	windows     []WindowInfo
+	windowsOK   bool
 
 	blockRunning   chan struct{} // non-nil: RunningApps waits until closed
 	blockInstalled chan struct{} // non-nil: InstalledApps waits until closed
+	blockWindows   chan struct{} // non-nil: OpenWindows waits until closed
 
 	focusedCalls   atomic.Int32
 	runningCalls   atomic.Int32
 	installedCalls atomic.Int32
+	windowsCalls   atomic.Int32
 }
 
 func (f *fakeSource) FocusedApp() (AppInfo, bool) {
@@ -62,6 +66,19 @@ func (f *fakeSource) InstalledApps() ([]InstalledApp, bool) {
 	return f.installed, f.installedOK
 }
 
+func (f *fakeSource) OpenWindows() ([]WindowInfo, bool) {
+	f.windowsCalls.Add(1)
+	f.mu.Lock()
+	block := f.blockWindows
+	f.mu.Unlock()
+	if block != nil {
+		<-block
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.windows, f.windowsOK
+}
+
 func (f *fakeSource) set(fn func(*fakeSource)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -93,7 +110,7 @@ func waitIdle(t *testing.T, c *Cache) {
 	require.Eventually(t, func() bool {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		return !c.runningInFlight && !c.installedInFlight
+		return !c.runningInFlight && !c.installedInFlight && !c.windowsInFlight
 	}, 5*time.Second, 2*time.Millisecond)
 }
 
@@ -148,6 +165,53 @@ func TestCacheRefreshInstalledAsyncLands(t *testing.T) {
 	waitIdle(t, c)
 	require.EqualValues(t, 2, src.installedCalls.Load())
 	require.Len(t, c.Snapshot().Installed, 1, "failure keeps the old data")
+}
+
+func TestCacheRefreshWindowsAsyncLands(t *testing.T) {
+	src := &fakeSource{windows: []WindowInfo{{ID: 7, Title: "editor", App: "code", PID: 1}}, windowsOK: true}
+	c := NewCache(src)
+
+	c.RefreshWindowsAsync()
+	require.Eventually(t, func() bool {
+		return len(c.Snapshot().Windows) == 1
+	}, 5*time.Second, 2*time.Millisecond)
+	require.Equal(t, WindowInfo{ID: 7, Title: "editor", App: "code", PID: 1}, c.Snapshot().Windows[0])
+
+	// A failed refresh keeps the previous list.
+	src.set(func(f *fakeSource) { f.windowsOK = false; f.windows = nil })
+	c.RefreshWindowsAsync()
+	waitIdle(t, c)
+	require.EqualValues(t, 2, src.windowsCalls.Load())
+	require.Len(t, c.Snapshot().Windows, 1, "failure keeps the old data")
+}
+
+func TestCacheSingleFlightWindows(t *testing.T) {
+	block := make(chan struct{})
+	src := &fakeSource{
+		windows:      []WindowInfo{{ID: 1, Title: "x"}},
+		windowsOK:    true,
+		blockWindows: block,
+	}
+	c := NewCache(src)
+
+	c.RefreshWindowsAsync()
+	require.Eventually(t, func() bool {
+		return src.windowsCalls.Load() == 1
+	}, 5*time.Second, 2*time.Millisecond, "first refresh entered the source")
+
+	// While the first refresh is blocked, further kicks are dropped.
+	c.RefreshWindowsAsync()
+	c.RefreshWindowsAsync()
+	close(block)
+	waitIdle(t, c)
+	require.EqualValues(t, 1, src.windowsCalls.Load(), "in-flight refresh absorbed the extra kicks")
+	require.Len(t, c.Snapshot().Windows, 1)
+
+	// After completion the next kick runs again.
+	src.set(func(f *fakeSource) { f.blockWindows = nil })
+	c.RefreshWindowsAsync()
+	waitIdle(t, c)
+	require.EqualValues(t, 2, src.windowsCalls.Load())
 }
 
 func TestCacheSingleFlight(t *testing.T) {
@@ -257,11 +321,13 @@ func TestCacheSnapshotImmutability(t *testing.T) {
 		focused: AppInfo{Name: "term", PID: 7}, focusedOK: true,
 		running: []AppInfo{{Name: "a", PID: 1}}, runningOK: true,
 		installed: []InstalledApp{{Name: "b", ID: "b.desktop"}}, installedOK: true,
+		windows: []WindowInfo{{ID: 3, Title: "w", App: "c", PID: 2}}, windowsOK: true,
 	}
 	c := NewCache(src)
 	c.CaptureFocused()
 	c.RefreshRunningAsync()
 	c.RefreshInstalledAsync()
+	c.RefreshWindowsAsync()
 	waitIdle(t, c)
 
 	s := c.Snapshot()
@@ -269,11 +335,13 @@ func TestCacheSnapshotImmutability(t *testing.T) {
 	s.Focused.Name = "mutated"
 	s.Running[0] = AppInfo{Name: "mutated"}
 	s.Installed[0] = InstalledApp{Name: "mutated"}
+	s.Windows[0] = WindowInfo{Title: "mutated"}
 
 	s2 := c.Snapshot()
 	require.Equal(t, "term", s2.Focused.Name)
 	require.Equal(t, []AppInfo{{Name: "a", PID: 1}}, s2.Running)
 	require.Equal(t, []InstalledApp{{Name: "b", ID: "b.desktop"}}, s2.Installed)
+	require.Equal(t, []WindowInfo{{ID: 3, Title: "w", App: "c", PID: 2}}, s2.Windows)
 }
 
 func TestCacheNilAndZeroValueSafety(t *testing.T) {
@@ -282,6 +350,7 @@ func TestCacheNilAndZeroValueSafety(t *testing.T) {
 		c.CaptureFocused()
 		c.RefreshRunningAsync()
 		c.RefreshInstalledAsync()
+		c.RefreshWindowsAsync()
 		c.EnsureFreshInstalled(time.Minute)
 		require.Equal(t, Snapshot{}, c.Snapshot())
 	}

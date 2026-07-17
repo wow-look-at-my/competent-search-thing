@@ -83,6 +83,10 @@ type platformSeams struct {
 	open            func(path string) error
 	reveal          func(path string) error
 	run             func(argv []string) error
+	// activateWindow raises and focuses one open window by its
+	// window-system id (the activate_window plugin action); production
+	// is the native EWMH client message.
+	activateWindow func(id uint32) error
 	appSource       appctx.Source
 	// firefoxBases lists the Firefox profiles.ini base directories the
 	// frequent-sites discovery probes; production is
@@ -115,6 +119,7 @@ func defaultPlatformSeams() platformSeams {
 		open:            launcher.Open,
 		reveal:          launcher.Reveal,
 		run:             launcher.Run,
+		activateWindow:  native.ActivateWindow,
 		appSource:       native.AppSource(),
 		firefoxBases:    firefox.DefaultBaseDirs,
 	}
