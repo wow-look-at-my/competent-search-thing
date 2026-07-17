@@ -4,10 +4,10 @@ on:
   push:
 
 permissions:
+  # id-token lets the buildhost actions (the deb steps and the publish job)
+  # mint the OIDC token they authenticate to pazer.build with.
   id-token: write
   contents: read
-  # actions: read lets go-toolchain's autorelease step download the go-build
-  # run artifact it publishes to buildhost.
   actions: read
 
 jobs:
@@ -30,6 +30,18 @@ jobs:
           targets: linux/amd64,windows/amd64
           cgo: 'true'
           timeout: '20'
+
+      - name: Upload app binaries for the publish job
+        # Only the app binaries ride to the publish job; the example
+        # color-http server binaries also land in build/ but are a dev
+        # sample, not a published deliverable.
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-linux
+          path: |
+            build/competent-search-thing_linux_amd64
+            build/competent-search-thing_windows_amd64.exe
+          if-no-files-found: error
 
       - name: Build Debian package (carries runtime lib Depends)
         # buildhost's on-the-fly deb repackaging cannot declare package
@@ -122,3 +134,78 @@ jobs:
           targets: darwin/arm64
           cgo: 'true'
           timeout: '30'
+
+      - name: Upload app binary for the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-darwin
+          path: build/competent-search-thing_darwin_arm64
+          if-no-files-found: error
+
+  publish:
+    # ONE buildhost release per push, carrying every platform CI actually
+    # builds, so the app project's "latest" download is always a complete
+    # set. Runs on every branch unconditionally: branch pushes create
+    # branch releases (?branch=<name> downloads), while the bare "latest"
+    # URL only ever follows the default branch -- guaranteed by buildhost.
+    # The buildhost actions mint their own OIDC token (audience
+    # https://pazer.build) from the workflow's id-token: write grant.
+    # Deliberately NOT restored from the pre-#25 autorelease era: the
+    # color-http example server binary (project competent-search-thing/
+    # server) -- a dev sample, not a user-facing deliverable.
+    needs: [linux, darwin]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download linux and windows binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-linux
+          path: binaries
+
+      - name: Download darwin binary
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-darwin
+          path: binaries
+
+      - name: Create buildhost release
+        id: release
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-create-release@master
+        with:
+          project: competent-search-thing
+
+      - name: Upload linux/amd64 binary
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-upload-artifact@master
+        with:
+          project: competent-search-thing
+          version: ${{ steps.release.outputs.version }}
+          os: linux
+          arch: amd64
+          path: binaries/competent-search-thing_linux_amd64
+          filename: competent-search-thing
+
+      - name: Upload windows/amd64 binary
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-upload-artifact@master
+        with:
+          project: competent-search-thing
+          version: ${{ steps.release.outputs.version }}
+          os: windows
+          arch: amd64
+          path: binaries/competent-search-thing_windows_amd64.exe
+          filename: competent-search-thing.exe
+
+      - name: Upload darwin/arm64 binary
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-upload-artifact@master
+        with:
+          project: competent-search-thing
+          version: ${{ steps.release.outputs.version }}
+          os: darwin
+          arch: arm64
+          path: binaries/competent-search-thing_darwin_arm64
+          filename: competent-search-thing
+
+      - name: Publish buildhost release
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-release@master
+        with:
+          project: competent-search-thing
+          version: ${{ steps.release.outputs.version }}
