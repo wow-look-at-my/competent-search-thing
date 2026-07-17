@@ -349,8 +349,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   provider disabled = zero Emission) -- the app binds it for the
   frontend's empty-query cheat sheet. `Close()` drops idle
   HTTP connections; reload = build a new Registry, swap atomically,
-  Close the old. Builtins (in-process, no sanitizer; bang-targeted
-  except the last):
+  Close the old. Builtins (in-process, no sanitizer; targeted-only
+  except apps-search and firefox-frequent):
   builtin_bangs.go "bangs"/Commands -- bang completions (resolved
   bang first, primary-sigil titles, typed-sigil set_query preserving
   the query rest, cap 12); builtin_app.go "app"/App Commands --
@@ -359,7 +359,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   "apps"/Launch -- !app/!launch over the Options.InstalledApps
   snapshot (empty query = first 15 alphabetical, prefix 100 /
   substring 80, cap 15, run_command argv via `parseDesktopExec`:
-  quotes, backslash escapes, %-field codes stripped);
+  quotes, backslash escapes, %-field codes stripped; the shared
+  scoring/sort/cap/result-build helper is `collectAppResults`);
+  builtin_apps_search.go "apps-search"/Apps -- installed apps in
+  NORMAL results: no bangs, a real all_queries Trigger (match
+  override on builtinBase, effective min 2 runes), ranking exact 100
+  / prefix 90 / word-start 75 (words = letter/digit runs, so spaces,
+  hyphens, dots split) / substring 60, cap 6, same run_command
+  launch; bang routing keeps it exclusive with the targeted !app
+  path, and a nil/empty snapshot emits nothing;
   builtin_firefox.go "firefox-frequent"/Frequent Sites -- NO bangs,
   all-queries semantics (>= 2 trimmed runes), registered ONLY when
   Options.FrequentSites (the app-layer getter yielding []SiteInfo, a

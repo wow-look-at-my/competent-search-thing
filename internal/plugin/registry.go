@@ -239,9 +239,10 @@ func New(opts Options) *Registry {
 }
 
 // builtinBase supplies the boring provider methods shared by the
-// builtin providers: fixed id/name/bangs, no debounce, and -- because
-// builtins are bang-targeted or registry-special-cased only -- no
-// non-targeted matching.
+// builtin providers: fixed id/name/bangs, no debounce, and no
+// non-targeted matching (the builtins are bang-targeted or
+// registry-special-cased, except apps-search, which overrides match
+// with its all_queries trigger).
 type builtinBase struct {
 	pid   string
 	name  string
@@ -255,7 +256,8 @@ func (b *builtinBase) debounce() time.Duration                    { return 0 }
 func (b *builtinBase) match(string, *AppInfo) (string, int, bool) { return "", 0, false }
 
 // addBuiltins registers the builtin providers (bang suggestions, app
-// commands, installed-app launcher, frequent sites) unless
+// commands, installed-app launcher, untargeted app search, frequent
+// sites) unless
 // individually disabled. Builtins register BEFORE external plugins so
 // a manifest can never shadow an app bang or claim a builtin id.
 func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
@@ -271,6 +273,9 @@ func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
 	}
 	if !disabled(builtinAppsID) {
 		r.register(newAppsProvider(opts.InstalledApps))
+	}
+	if !disabled(builtinAppsSearchID) {
+		r.register(newAppsSearchProvider(opts.InstalledApps))
 	}
 	// The frequent-sites provider exists only when the app layer found
 	// a Firefox profile and supplied a source (see Options).

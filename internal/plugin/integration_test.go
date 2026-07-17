@@ -152,7 +152,9 @@ func TestExampleCalcEndToEnd(t *testing.T) {
 				Action: &Action{Type: ActionCopyText, Value: "4"},
 			}},
 		}, e)
-		requireNoEmission(t, ch, 200*time.Millisecond) // only calc matches "="
+		// Only calc emits: apps-search also matches but this registry
+		// has no InstalledApps snapshot.
+		requireNoEmission(t, ch, 200*time.Millisecond)
 	})
 
 	t.Run("targeted via registered short bang", func(t *testing.T) {
