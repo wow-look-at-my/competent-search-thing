@@ -71,6 +71,13 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 			Aliases: map[string]string{"math": "calc"},
 		},
 		Tray: TrayConfig{Disabled: true},
+		Firefox: FirefoxConfig{FrequentSites: FrequentSitesConfig{
+			MinVisitsMonth: 20,
+			MinVisitsWeek:  2,
+			RefreshMinutes: 30,
+			MaxResults:     10,
+			ProfileDir:     "/home/me/.mozilla/firefox/abc.default",
+		}},
 	}
 	data, err = json.Marshal(full)
 	require.NoError(t, err)
@@ -95,6 +102,13 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"unknown top-level typo": `{"maxResluts":50}`,
 		"tray disabled typo":     `{"tray":{"disabld":true}}`,
 		"non-bool tray disabled": `{"tray":{"disabled":"yes"}}`,
+		"zero firefox month":     `{"firefox":{"frequentSites":{"minVisitsMonth":0}}}`,
+		"negative firefox week":  `{"firefox":{"frequentSites":{"minVisitsWeek":-1}}}`,
+		"zero firefox refresh":   `{"firefox":{"frequentSites":{"refreshMinutes":0}}}`,
+		"zero firefox max":       `{"firefox":{"frequentSites":{"maxResults":0}}}`,
+		"firefox key typo":       `{"firefox":{"frequentSites":{"profileDirr":"/x"}}}`,
+		"non-string profileDir":  `{"firefox":{"frequentSites":{"profileDir":7}}}`,
+		"unknown firefox block":  `{"firefox":{"telemetry":{}}}`,
 	}
 	for name, doc := range cases {
 		require.Error(t, validateConfigJSON(sch, []byte(doc)), "case %q must fail validation", name)
@@ -166,4 +180,8 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json $defs/bangsConfig out of sync with BangsConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(TrayConfig{})), configSchemaProperties(t, "trayConfig"),
 		"config.schema.json $defs/trayConfig out of sync with TrayConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(FirefoxConfig{})), configSchemaProperties(t, "firefoxConfig"),
+		"config.schema.json $defs/firefoxConfig out of sync with FirefoxConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(FrequentSitesConfig{})), configSchemaProperties(t, "frequentSitesConfig"),
+		"config.schema.json $defs/frequentSitesConfig out of sync with FrequentSitesConfig")
 }

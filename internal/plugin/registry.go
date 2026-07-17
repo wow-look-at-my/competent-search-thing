@@ -157,6 +157,13 @@ type Options struct {
 	// InstalledApps supplies the installed-application snapshot for
 	// the builtin launcher; nil means the launcher returns nothing.
 	InstalledApps func() []InstalledApp
+	// FrequentSites supplies the frequently-visited-sites snapshot for
+	// the builtin firefox-frequent provider; nil (no Firefox profile)
+	// means the provider is not registered at all.
+	FrequentSites func() []SiteInfo
+	// FrequentSitesMax caps one firefox-frequent response (config
+	// firefox.frequentSites.maxResults; non-positive = the default 6).
+	FrequentSitesMax int
 	// Logf receives all registry logging (default log.Printf).
 	Logf func(format string, args ...any)
 }
@@ -248,9 +255,9 @@ func (b *builtinBase) debounce() time.Duration                    { return 0 }
 func (b *builtinBase) match(string, *AppInfo) (string, int, bool) { return "", 0, false }
 
 // addBuiltins registers the builtin providers (bang suggestions, app
-// commands, installed-app launcher) unless individually disabled.
-// Builtins register BEFORE external plugins so a manifest can never
-// shadow an app bang or claim a builtin id.
+// commands, installed-app launcher, frequent sites) unless
+// individually disabled. Builtins register BEFORE external plugins so
+// a manifest can never shadow an app bang or claim a builtin id.
 func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
 	if !disabled(builtinSuggestID) {
 		s := newBangSuggestProvider(r)
@@ -264,6 +271,11 @@ func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
 	}
 	if !disabled(builtinAppsID) {
 		r.register(newAppsProvider(opts.InstalledApps))
+	}
+	// The frequent-sites provider exists only when the app layer found
+	// a Firefox profile and supplied a source (see Options).
+	if opts.FrequentSites != nil && !disabled(builtinFirefoxID) {
+		r.register(newFirefoxProvider(opts.FrequentSites, opts.FrequentSitesMax))
 	}
 }
 

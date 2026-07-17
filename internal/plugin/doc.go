@@ -22,8 +22,9 @@
 //     query out to matching providers on their own goroutines;
 //   - the builtin providers (builtin_bangs.go bang suggestions,
 //     builtin_app.go app commands, builtin_apps.go installed-app
-//     launcher) -- trusted in-process providers that may emit the
-//     internal-only actions.
+//     launcher, builtin_firefox.go frequently-visited Firefox sites)
+//     -- trusted in-process providers that may emit the internal-only
+//     actions.
 //
 // The Wails app wiring (bound methods, events, cancellation by query
 // generation) lands in internal/app. File search never waits on
