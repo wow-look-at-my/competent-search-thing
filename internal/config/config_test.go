@@ -327,3 +327,61 @@ func TestDefaultBangSigilsReturnsFreshSlice(t *testing.T) {
 	a[0] = "X"
 	require.Equal(t, []string{"!", "/", "@"}, DefaultBangSigils())
 }
+
+func TestFirefoxConfig(t *testing.T) {
+	setConfigDir(t)
+	require.Equal(t, FirefoxConfig{
+		FrequentSites: FrequentSitesConfig{
+			MinVisitsMonth: 11,
+			MinVisitsWeek:  1,
+			RefreshMinutes: 10,
+			MaxResults:     6,
+		},
+		OpenTabs: OpenTabsConfig{MaxResults: 6},
+	}, Default().Firefox, "the defaults encode 'more than 10 in 30 days AND once in 7'")
+
+	// A config predating the firefox block normalizes to the defaults.
+	var c Config
+	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
+	c.Normalize()
+	require.Equal(t, DefaultFirefox(), c.Firefox)
+
+	// Zero and negative knobs are repaired; real values survive.
+	c = Config{Firefox: FirefoxConfig{
+		FrequentSites: FrequentSitesConfig{
+			MinVisitsMonth: -3,
+			MinVisitsWeek:  0,
+			RefreshMinutes: 42,
+			MaxResults:     9,
+			ProfileDir:     "/custom/profile",
+		},
+		OpenTabs: OpenTabsConfig{MaxResults: -1, ProfileDir: "/tabs/profile"},
+	}}
+	c.Normalize()
+	require.Equal(t, DefaultFirefoxMinVisitsMonth, c.Firefox.FrequentSites.MinVisitsMonth)
+	require.Equal(t, DefaultFirefoxMinVisitsWeek, c.Firefox.FrequentSites.MinVisitsWeek)
+	require.Equal(t, 42, c.Firefox.FrequentSites.RefreshMinutes)
+	require.Equal(t, 9, c.Firefox.FrequentSites.MaxResults)
+	require.Equal(t, "/custom/profile", c.Firefox.FrequentSites.ProfileDir, "the override is never touched")
+	require.Equal(t, DefaultFirefoxTabsMaxResults, c.Firefox.OpenTabs.MaxResults)
+	require.Equal(t, "/tabs/profile", c.Firefox.OpenTabs.ProfileDir, "the override is never touched")
+
+	// Real openTabs values survive Normalize.
+	c = Config{Firefox: FirefoxConfig{OpenTabs: OpenTabsConfig{MaxResults: 12}}}
+	c.Normalize()
+	require.Equal(t, 12, c.Firefox.OpenTabs.MaxResults)
+
+	// The block round-trips through Save/Load.
+	in := Default()
+	in.Firefox.FrequentSites.MinVisitsMonth = 20
+	in.Firefox.FrequentSites.ProfileDir = "/custom/profile"
+	in.Firefox.OpenTabs.MaxResults = 3
+	in.Firefox.OpenTabs.ProfileDir = "/tabs/profile"
+	require.NoError(t, Save(in))
+	got, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 20, got.Firefox.FrequentSites.MinVisitsMonth)
+	require.Equal(t, "/custom/profile", got.Firefox.FrequentSites.ProfileDir)
+	require.Equal(t, 3, got.Firefox.OpenTabs.MaxResults)
+	require.Equal(t, "/tabs/profile", got.Firefox.OpenTabs.ProfileDir)
+}

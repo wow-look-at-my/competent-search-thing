@@ -74,9 +74,11 @@ func (a *App) startPlugins() {
 
 // buildRegistry loads config.json and the plugin manifests and
 // assembles a fresh Registry. It never fails: config problems fall
-// back to defaults, and everything the registry collected (manifest
-// load errors, bad sigils, duplicate bangs/ids) is logged here, once,
-// with a "plugin:" prefix. It is the production value behind the
+// back to defaults, a machine without a Firefox profile just gets no
+// frequent-sites or open-tabs sources (ONE shared discovery, see
+// firefox.go), and everything the registry collected (manifest load
+// errors, bad sigils, duplicate bangs/ids) is logged here, once, with
+// a "plugin:" prefix. It is the production value behind the
 // newRegistry seam.
 func (a *App) buildRegistry() dispatcher {
 	cfg, err := config.Load()
@@ -95,16 +97,21 @@ func (a *App) buildRegistry() dispatcher {
 	for id, e := range cfg.Plugins.Entries {
 		entries[id] = plugin.Entry{Disabled: e.Disabled, Settings: e.Settings}
 	}
+	sites, tabs := a.firefoxSources(cfg.Firefox)
 	reg := plugin.New(plugin.Options{
-		Manifests:     manifests,
-		LoadErrors:    loadErrs,
-		Sigils:        cfg.Bangs.Sigils,
-		Aliases:       cfg.Bangs.Aliases,
-		AllDisabled:   cfg.Plugins.Disabled,
-		Entries:       entries,
-		Version:       Version,
-		InstalledApps: a.installedApps,
-		Logf:          log.Printf,
+		Manifests:        manifests,
+		LoadErrors:       loadErrs,
+		Sigils:           cfg.Bangs.Sigils,
+		Aliases:          cfg.Bangs.Aliases,
+		AllDisabled:      cfg.Plugins.Disabled,
+		Entries:          entries,
+		Version:          Version,
+		InstalledApps:    a.installedApps,
+		FrequentSites:    sites,
+		FrequentSitesMax: cfg.Firefox.FrequentSites.MaxResults,
+		OpenTabs:         tabs,
+		OpenTabsMax:      cfg.Firefox.OpenTabs.MaxResults,
+		Logf:             log.Printf,
 	})
 	for _, err := range reg.Errors() {
 		log.Printf("plugin: %v", err)

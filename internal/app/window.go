@@ -10,6 +10,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
+	"github.com/wow-look-at-my/competent-search-thing/internal/firefox"
 	"github.com/wow-look-at-my/competent-search-thing/internal/gsettings"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform/native"
@@ -83,6 +84,10 @@ type platformSeams struct {
 	reveal          func(path string) error
 	run             func(argv []string) error
 	appSource       appctx.Source
+	// firefoxBases lists the Firefox profiles.ini base directories the
+	// frequent-sites discovery probes; production is
+	// firefox.DefaultBaseDirs (the real home), tests pin it.
+	firefoxBases func() []string
 }
 
 func defaultPlatformSeams() platformSeams {
@@ -111,6 +116,7 @@ func defaultPlatformSeams() platformSeams {
 		reveal:          launcher.Reveal,
 		run:             launcher.Run,
 		appSource:       native.AppSource(),
+		firefoxBases:    firefox.DefaultBaseDirs,
 	}
 }
 

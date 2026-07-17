@@ -231,7 +231,16 @@ The file is created with defaults on first run:
   "plugins": { "disabled": false, "entries": {} },
   "bangs": { "sigils": ["!", "/", "@"], "aliases": {} },
   "tray": { "disabled": false },
-  "history": { "persistDisabled": false }
+  "history": { "persistDisabled": false },
+  "firefox": {
+    "frequentSites": {
+      "minVisitsMonth": 11,
+      "minVisitsWeek": 1,
+      "refreshMinutes": 10,
+      "maxResults": 6,
+      "profileDir": ""
+    }
+  }
 }
 ```
 
@@ -274,10 +283,11 @@ Field reference:
   `entries` maps a provider id to per-plugin config:
   `{ "entries": { "calc": { "disabled": false, "settings": { } } } }`.
   `disabled` turns that one provider off (the built-in ids `bangs`,
-  `app`, `apps` and `apps-search` work here too); `settings` is an
-  opaque JSON object
-  passed verbatim to that plugin in every request (its `settings`
-  field), so plugins can be configured without editing their manifest.
+  `app`, `apps`, `apps-search`, `firefox-frequent` and `firefox-tabs`
+  work here too);
+  `settings` is an opaque JSON object passed verbatim to that plugin
+  in every request (its `settings` field), so plugins can be
+  configured without editing their manifest.
 - `bangs` -- bang parsing. `sigils` lists the characters that may start
   a bang query (default `["!", "/", "@"]`; each must be exactly one
   character and not a letter, digit, or space -- invalid sigils are
@@ -297,6 +307,18 @@ Field reference:
   history in memory only: nothing is read from or written to
   `history.json`, while in-session Up/Down recall keeps working.
   Delete `history.json` to forget previously saved entries.
+- `firefox` -- the Firefox-backed sections. `frequentSites` configures
+  [Frequent sites (Firefox)](#frequent-sites-firefox): the visit
+  thresholds (`minVisitsMonth`, `minVisitsWeek`), the cache refresh
+  interval (`refreshMinutes`), the section's result cap
+  (`maxResults`), and the optional `profileDir` discovery override.
+  `openTabs` configures [Open tabs (Firefox)](#open-tabs-firefox): its
+  result cap (`maxResults`) and its own optional `profileDir`
+  override (empty = the same discovery `frequentSites` uses).
+  Everything is read locally from your own profile and never
+  transmitted; disable the sections via
+  `plugins.entries["firefox-frequent"].disabled` and
+  `plugins.entries["firefox-tabs"].disabled`.
 
 The full format is formally described by
 [`schemas/config.schema.json`](schemas/config.schema.json) -- add a
@@ -760,9 +782,10 @@ be shadowed.
 
 ### Built-in commands
 
-Four built-in providers ship inside the app and go through the same
+Six built-in providers ship inside the app and go through the same
 pipeline (disable them like any plugin via `plugins.entries` with ids
-`bangs`, `app`, `apps`, `apps-search`):
+`bangs`, `app`, `apps`, `apps-search`, `firefox-frequent`,
+`firefox-tabs`):
 
 | bang | does |
 |------|------|
@@ -806,6 +829,178 @@ exactly like `!app` does. This is the fourth built-in provider,
 
 ```json
 { "plugins": { "entries": { "apps-search": { "disabled": true } } } }
+```
+
+The remaining built-ins, `firefox-frequent` and `firefox-tabs`, have
+no bangs: they answer plain queries with a "Frequent Sites" and an
+"Open Tabs" section -- see the next two sections.
+
+### Frequent sites (Firefox)
+
+When the machine has a Firefox profile, plain queries (two or more
+characters) also search the pages you visit frequently. Matches appear
+as a "Frequent Sites" section below the file results, each row showing
+the page title (or its host when untitled), the full URL, and a globe
+icon; activating a row opens the page in your default browser.
+
+**"Frequent" means: visited more than 10 times in the past 30 days AND
+at least once in the past 7 days.** Both thresholds are configurable
+(the defaults encode that exact rule as `minVisitsMonth: 11`,
+`minVisitsWeek: 1`).
+
+**Privacy**: the history is read locally, from your own Firefox
+profile, by the app running on your machine -- the same data the
+awesome bar uses. Nothing is transmitted anywhere, no browser
+extension is involved, and the only network traffic ever caused by
+this feature is you opening a result in your browser.
+
+How it works:
+
+- **Profile discovery** probes the `profiles.ini` base directories in
+  order: the classic `~/.mozilla/firefox`, the snap install
+  `~/snap/firefox/common/.mozilla/firefox` (Ubuntu 22.04's default
+  Firefox), and the flatpak install
+  `~/.var/app/org.mozilla.firefox/.mozilla/firefox`; on Windows,
+  `%APPDATA%\Mozilla\Firefox`. Within a base, an `[Install...]`
+  section's `Default=` entry names the profile (that is the one the
+  last-used Firefox install actually opens), falling back to the
+  `[Profile]` section marked `Default=1`, then to a lone `[Profile]`
+  section. When more than one base yields a profile, the one whose
+  `places.sqlite` was modified most recently -- the profile actually
+  in use -- wins. No profile anywhere: one quiet log line, and the
+  section simply never exists.
+- **The history database is never opened in place.** Firefox keeps
+  `places.sqlite` locked (WAL mode) while running, so the file and its
+  `-wal` sidecar are copied to a private temp directory, the copy is
+  queried read-only, and the copy is deleted. Your profile is never
+  written, and the app cannot corrupt it.
+- **Counting**: only normal `http(s)` page loads count. Redirect
+  bookkeeping entries (`hidden=1`) and embedded-frame transitions
+  (visit types 4 and 8) are excluded, so ad iframes cannot make a site
+  "frequent".
+- **Caching**: the site list is read in the background and cached; a
+  query never waits on the database. The list refreshes at most every
+  `refreshMinutes`, failures keep the previous list, and the first
+  query after startup may show the section one keystroke late while
+  the initial read runs.
+
+Configuration (`config.json`, all fields optional; shown with
+defaults):
+
+```json
+{
+  "firefox": {
+    "frequentSites": {
+      "minVisitsMonth": 11,
+      "minVisitsWeek": 1,
+      "refreshMinutes": 10,
+      "maxResults": 6,
+      "profileDir": ""
+    }
+  }
+}
+```
+
+- `minVisitsMonth` -- minimum visits in the past 30 days (default 11,
+  i.e. "more than 10 times").
+- `minVisitsWeek` -- minimum visits in the past 7 days (default 1).
+- `refreshMinutes` -- how old the cached list may get before a query
+  kicks a background re-read (default 10).
+- `maxResults` -- cap on one Frequent Sites section (default 6).
+- `profileDir` -- absolute path of a Firefox profile directory; when
+  set, discovery is skipped and that profile's `places.sqlite` is
+  used. Set this if you use multiple profiles or a portable install.
+
+Ranking within the section: a query matching the start of the host
+(`git` -> `github.com`; a leading `www.` is ignored) scores highest,
+then a word start in the title, then a substring of the host, then a
+substring anywhere in the title or URL; ties go to the more-visited
+page. To turn the section off entirely:
+
+```json
+{ "plugins": { "entries": { "firefox-frequent": { "disabled": true } } } }
+```
+
+Zero or negative numbers are repaired to the defaults on load. The
+snap-location discovery order matches Ubuntu 22.04's stock Firefox
+packaging; other browsers (Chromium, and Firefox forks using different
+profile paths) are not read -- `profileDir` accepts any directory that
+contains a Firefox-format `places.sqlite`.
+
+### Open tabs (Firefox)
+
+Plain queries (two or more characters) also search the tabs currently
+open in Firefox. Matches appear as an "Open Tabs" section, each row
+showing the tab title (or its host when untitled), the full URL, a
+link icon, and a `pinned` badge on pinned tabs.
+
+**Honesty note -- activating a row re-OPENS the URL, it does not focus
+the existing tab.** The app hands the URL to your default browser,
+which in a running Firefox almost always means a NEW tab of the same
+page. Actually switching to the already-open tab is not possible from
+the outside: Firefox exposes no such command to other processes, so
+true tab focusing would require a companion browser extension. That is
+a possible future option, deliberately out of scope here. Use the
+section to find and re-open what you already have; do not expect it to
+de-duplicate your tab bar.
+
+**Privacy**: the tab list is read locally from your own profile's
+crash-recovery session snapshot
+(`<profile>/sessionstore-backups/recovery.jsonlz4`), by the app
+running on your machine. Nothing is transmitted anywhere, and no
+browser extension is involved. Private windows never appear -- Firefox
+does not persist them into the snapshot at all.
+
+How it works, and what "current" means here:
+
+- **The snapshot is Firefox's own crash-recovery file**, rewritten
+  roughly every 15 seconds while the browser runs. The app decodes its
+  `mozLz4` container with a small built-in LZ4 block decoder (pure Go,
+  bounds-checked, 64 MiB cap) and keeps only visible tabs' current
+  pages with `http(s)` URLs -- hidden tabs and `about:`/extension/file
+  pages are dropped.
+- **Freshness**: queries never parse the file directly; a cached list
+  is served and refreshed in the background when the snapshot's mtime
+  changes or after ~15 seconds, whichever comes first (the mtime is
+  probed at most once a second while you type). A just-opened tab can
+  therefore take up to ~30 seconds to appear, and a just-closed one to
+  disappear. Read failures keep the previous list and log once.
+- **A closed Firefox means an empty section** -- deliberately. Without
+  a running browser there IS no recovery snapshot, only the last
+  closed session (`sessionstore.jsonlz4`), and showing those tabs as
+  "open" would lie. The section reappears within seconds of Firefox
+  starting.
+
+Configuration (`config.json`, all fields optional; shown with
+defaults):
+
+```json
+{
+  "firefox": {
+    "openTabs": {
+      "maxResults": 6,
+      "profileDir": ""
+    }
+  }
+}
+```
+
+- `maxResults` -- cap on one Open Tabs section (default 6; zero or
+  negative values are repaired on load).
+- `profileDir` -- absolute path of a Firefox profile directory; when
+  set, discovery is skipped for this section. Empty means the same
+  profile discovery Frequent Sites uses (the two sections share one
+  discovery pass).
+
+Ranking within the section: a query starting a word in the tab title
+(`pull` -> "Pull requests") scores highest -- an open tab is usually
+recalled by what it shows, so the title outranks the host here --
+then a host prefix (`git` -> `github.com`, a leading `www.` ignored),
+then a title substring, then a substring anywhere in the URL; ties go
+to the most recently used tab. To turn the section off entirely:
+
+```json
+{ "plugins": { "entries": { "firefox-tabs": { "disabled": true } } } }
 ```
 
 ### Trust model
