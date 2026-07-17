@@ -86,6 +86,57 @@ func BenchmarkSearch(b *testing.B) {
 	}
 }
 
+// benchPathQueries covers the path-mode query shapes. "1/data"
+// straddles the dir/name join deep in the tree (dirs named *_1 whose
+// children start with "data"); "bench/" and "/b" hit every entry
+// through the dir prematch (substring resp. path-prefix class);
+// "/bench" is the root dir path itself (path-prefix everywhere).
+var benchPathQueries = []struct{ name, q string }{
+	{"straddle", "1/data"},
+	{"dirheavy", "bench/"},
+	{"shallow", "/b"},
+	{"exactish", "/bench"},
+	{"nomatch", "qq/zz"},
+}
+
+// countPathMatches is the naive reference count of live entries whose
+// lowered full path contains q (the hits metric, outside timing).
+func countPathMatches(st *Store, q string) int {
+	ql := strings.ToLower(q)
+	n := 0
+	st.ForEachLive(func(id int32) bool {
+		if strings.Contains(strings.ToLower(st.EntryPath(id)), ql) {
+			n++
+		}
+		return true
+	})
+	return n
+}
+
+func BenchmarkSearchPath(b *testing.B) {
+	s100k, s1M := searchFixtures()
+	sizes := []struct {
+		name string
+		st   *Store
+	}{
+		{"100k", s100k},
+		{"1M", s1M},
+	}
+	for _, size := range sizes {
+		for _, bq := range benchPathQueries {
+			b.Run(size.name+"/"+bq.name, func(b *testing.B) {
+				hits := countPathMatches(size.st, bq.q)
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					_ = size.st.Query(bq.q, 50)
+				}
+				b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N), "ms/query")
+				b.ReportMetric(float64(hits), "hits")
+			})
+		}
+	}
+}
+
 // On-disk walk fixture: ~50k entries (250 dirs x 200 files), built once
 // per process on first use, removed by TestMain. Kept at 50k (not 100k)
 // to bound CI benchmark wall time; see BENCH notes.
