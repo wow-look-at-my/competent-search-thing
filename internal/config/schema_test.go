@@ -84,19 +84,19 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 func TestConfigSchemaRejectsInvalid(t *testing.T) {
 	sch := compileConfigSchema(t)
 	cases := map[string]string{
-		"two-char sigil":         `{"bangs":{"sigils":["ab"]}}`,
-		"letter sigil":           `{"bangs":{"sigils":["x"]}}`,
-		"digit sigil":            `{"bangs":{"sigils":["7"]}}`,
-		"space sigil":            `{"bangs":{"sigils":[" "]}}`,
-		"negative rescan":        `{"rescanIntervalMinutes":-5}`,
-		"zero maxResults":        `{"maxResults":0}`,
-		"bad theme name":         `{"theme":"../evil"}`,
-		"bad plugin entry id":    `{"plugins":{"entries":{"Bad ID":{}}}}`,
-		"non-object settings":    `{"plugins":{"entries":{"calc":{"settings":"loud"}}}}`,
-		"unknown top-level typo": `{"maxResluts":50}`,
-		"tray disabled typo":     `{"tray":{"disabld":true}}`,
-		"non-bool tray disabled": `{"tray":{"disabled":"yes"}}`,
-		"history persist typo":   `{"history":{"persistDisabld":true}}`,
+		"two-char sigil":                   `{"bangs":{"sigils":["ab"]}}`,
+		"letter sigil":                     `{"bangs":{"sigils":["x"]}}`,
+		"digit sigil":                      `{"bangs":{"sigils":["7"]}}`,
+		"space sigil":                      `{"bangs":{"sigils":[" "]}}`,
+		"negative rescan":                  `{"rescanIntervalMinutes":-5}`,
+		"zero maxResults":                  `{"maxResults":0}`,
+		"bad theme name":                   `{"theme":"../evil"}`,
+		"bad plugin entry id":              `{"plugins":{"entries":{"Bad ID":{}}}}`,
+		"non-object settings":              `{"plugins":{"entries":{"calc":{"settings":"loud"}}}}`,
+		"unknown top-level typo":           `{"maxResluts":50}`,
+		"tray disabled typo":               `{"tray":{"disabld":true}}`,
+		"non-bool tray disabled":           `{"tray":{"disabled":"yes"}}`,
+		"history persist typo":             `{"history":{"persistDisabld":true}}`,
 		"non-bool history persistDisabled": `{"history":{"persistDisabled":"yes"}}`,
 	}
 	for name, doc := range cases {
