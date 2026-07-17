@@ -14,7 +14,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   file and stays minimal (see coverage note below).
 - `internal/app` -- the Wails-bound App object and its methods
   (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/DomReady/
-  Shutdown/QueryPlugins/RunPluginAction/CheatSheet). Bound methods
+  Shutdown/QueryPlugins/RunPluginAction/CheatSheet/GetHistory/
+  AddHistory). Bound methods
   appear in JS as `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
   saves the runtime ctx, brings up the global hotkey once through a
   session-dependent backend plan (hotkey.go: empty spec = skip, parse
@@ -168,7 +169,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   plugin.Emission` returns the registry's bang cheat sheet (see
   internal/plugin) under the same pluginMu the reload swap uses --
   synchronous, dispatch-free, nil registry = zero Emission, Results
-  always non-nil so JS sees results: []. `RunPluginAction(pluginID
+  always non-nil so JS sees results: []. `GetHistory() []string` /
+  `AddHistory(entry string)` (history.go) wrap the internal/history
+  store Startup builds once: <configDir>/history.json, persist =
+  !Options.HistoryPersistDisabled (main.go wires config's
+  history.persistDisabled there, like TrayDisabled); an unresolvable
+  config dir or a failed Load logs once with a "history: " prefix
+  and the app runs on -- nil store = GetHistory returns a non-nil
+  empty slice and AddHistory no-ops, so newTestApp needs no extra
+  wiring. The frontend commits a query only after its activation
+  actually ran. `RunPluginAction(pluginID
   string, action plugin.Action) error` RE-validates every action the
   frontend echoes back (defense in depth), logs it, then executes:
   copy_text -> ClipboardSetText (bar stays open); open_path (abs
@@ -257,16 +267,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/config` -- config.json load/save (roots, excludes, hotkey,
   rescanIntervalMinutes, maxResults, theme, plugins {disabled, entries
   {<id>: {disabled, settings}}}, bangs {sigils, aliases}, tray
-  {disabled}, firefox {frequentSites {minVisitsMonth 11,
-  minVisitsWeek 1, refreshMinutes 10, maxResults 6, profileDir ""},
-  openTabs {maxResults 6, profileDir ""}}
-  -- the frequentSites defaults encode ">10 visits in 30 days AND >=1
-  in 7"; the numeric knobs are Normalize-repaired to defaults when
-  <= 0, both profileDirs are passed through verbatim). Lives under
+  {disabled}, history {persistDisabled}, firefox {frequentSites
+  {minVisitsMonth 11, minVisitsWeek 1, refreshMinutes 10, maxResults
+  6, profileDir ""}, openTabs {maxResults 6, profileDir ""}} -- the
+  frequentSites defaults encode ">10 visits in 30 days AND >=1 in 7";
+  the numeric knobs are Normalize-repaired to defaults when <= 0,
+  both profileDirs are passed through verbatim). Lives under
   os.UserConfigDir(); the `COMPETENT_SEARCH_CONFIG_DIR` env var
   overrides the directory (tests rely on this); `Dir()` exposes that
-  directory (the plugins/ and themes/ dirs live inside it, next to
-  config.json). The app's OTHER env knobs live with their owners:
+  directory (the plugins/ and themes/ dirs and history.json live
+  inside it, next to config.json). The app's OTHER env knobs live with their owners:
   `COMPETENT_SEARCH_SOCKET` (internal/ipc, the single-instance socket
   path) and `COMPETENT_SEARCH_HOTKEY_BACKEND` (internal/app hotkey.go,
   backend override) -- all three are documented in the README. `Load` never crashes: missing file -> defaults
@@ -274,8 +284,26 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   `Normalize` repairs zero values (empty theme -> dark, nil plugin
   entries/bang aliases -> empty maps, empty sigils -> the ! / @
   defaults, non-positive firefox.frequentSites and firefox.openTabs
-  numbers -> their defaults); entry settings are opaque
-  json.RawMessage forwarded verbatim to that plugin.
+  numbers -> their defaults; history needs nothing -- its zero value
+  means persistence ON, the tray.disabled convention); entry settings
+  are opaque json.RawMessage forwarded verbatim to that plugin.
+- `internal/history` -- the query-history store behind the frontend's
+  Up/Down recall, pure and exhaustively unit-tested. `New(path,
+  persist)`; `Load()` (missing file or memory-only store = empty +
+  nil error; corrupt/non-string-array = empty + error returned for
+  one-shot logging; loaded lists get the Add invariants: trimmed,
+  blanks dropped, duplicates keep their newest occurrence, capped);
+  `Add(entry)` (TrimSpace, blank = silent skip; exact-match
+  move-to-newest dedup; cap 100 -- unexported const -- oldest
+  dropped; when persist: atomic temp-file-then-rename write, 0600,
+  MkdirAll the parent like config.Save -- the in-memory list updates
+  even when the write fails, so in-session recall survives disk
+  problems); `Entries()` (defensive copy, oldest -> newest, never
+  nil). Mutex-guarded (the app's bound methods run on arbitrary
+  goroutines); persist=false never touches the disk, not even reads.
+  Persist format: a plain JSON array of strings at
+  <configDir>/history.json (wired by internal/app history.go;
+  config.json's history.persistDisabled opts out).
 - `internal/theme` -- design-token resolution. WARNING: the 22
   `TokenNames` (bg, bg-elevated, fg, fg-dim, accent, accent-fg,
   selection-bg, selection-fg, border, highlight, warning, badge-bg,
@@ -786,7 +814,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   explicitly (Down -> first row, Up -> last); wire() kicks the
   pipeline once at startup so the sheet is already rendered before
   the first summon (an app:shown emitted while EventsOn registration
-  is still in flight is missed -- observed on cold WebKit starts);
+  is still in flight is missed -- observed on cold WebKit starts) and
+  fetches GetHistory into histEntries (refetched after each
+  successful AddHistory). QUERY HISTORY modality (histCursor: -1 =
+  not browsing, 0 = newest): Up recalls older entries when the input
+  is blank OR histCursor >= 0 (the input is still exactly a recall's
+  text -- every 'input' event and setQueryLocal reset histCursor to
+  -1, so typing or picking a completion exits browse mode and the
+  arrows navigate the result list again); Down while browsing moves
+  forward, and forward past the newest entry clears the bar back to
+  the empty state (cheat sheet); recall = replace the input, caret
+  to end, re-run the pipeline (the recalled query renders its
+  results live, Enter activates as usual; programmatic value writes
+  fire no 'input' event, so the cursor survives). History COMMITS
+  (AddHistory(state.query), fire-and-forget, then refetch) only when
+  an activation actually executed: a file row's Open/Reveal resolved
+  without error, or RunPluginAction resolved without error --
+  set_query and blank queries never commit;
   "plugin:results" emissions are dropped unless gen === seq, else
   upsert that plugin's section (keyed by id) and re-render the plugin
   area BELOW the file rows, never displacing them; selection is one
@@ -799,8 +843,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   "Copied" ~1.2s in the status bar, action errors -- plugin actions
   AND file-row open/reveal failures -- flash ~2s; #empty
   shows only when a non-blank query has neither files nor sections;
-  Esc + window blur -> Hide; runtime events: "app:shown" ->
-  focus+select+refresh (plugins re-query through the same path),
+  Esc + window blur -> Hide; runtime events: "app:shown" -> CLEAR
+  the input (the bar always summons empty; the pre-hide text is
+  deliberately dropped) + reset histCursor + focus + refresh (renders
+  the cheat sheet; plugins re-query through the same path),
   "index:progress" -> status text, "watch:degraded" -> warning chip)
   + `src/render.ts` (pure text-node DOM builders, no innerHTML
   anywhere: file rows with highlighted match + dim parent dir; plugin

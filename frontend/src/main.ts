@@ -3,9 +3,10 @@
 // actions, the async plugin pipeline (fire-and-forget QueryPlugins,
 // "plugin:results" sections below the file rows, the bang-target
 // chip, plugin action dispatch), the empty-query command cheat sheet
-// (CheatSheet, rendered unselected), and the runtime events the Go
-// side emits (app:shown, index:progress, watch:degraded,
-// theme:changed).
+// (CheatSheet, rendered unselected), the query history (the bar
+// summons empty; Up/Down recall committed queries -- see the history
+// section below), and the runtime events the Go side emits
+// (app:shown, index:progress, watch:degraded, theme:changed).
 // Rendering lives in render.ts; theme token/custom-css application
 // lives in theme.ts.
 
@@ -54,6 +55,8 @@ interface UIState {
   visible: boolean; // mirrors the Go side; gates the blur auto-hide
   indexMsg: string; // last index build status, shown while idle
   query: string; // query of the current generation (empty-state check)
+  histEntries: string[]; // committed query history, oldest -> newest
+  histCursor: number; // -1 = not browsing history; 0 = newest entry
 }
 
 const state: UIState = {
@@ -69,6 +72,8 @@ const state: UIState = {
   visible: false,
   indexMsg: "",
   query: "",
+  histEntries: [],
+  histCursor: -1,
 };
 
 let debounceHandle: number | undefined;
@@ -190,6 +195,73 @@ function renderPluginArea(): void {
   select(sel);
 }
 
+/* --- query history ---------------------------------------------------- */
+
+// THE RULE: Up recalls older history entries when the query is blank
+// OR still exactly what a previous Up/Down recall filled in (you have
+// not typed since). Down then moves forward; moving forward past the
+// newest entry clears the bar back to the empty state (the cheat
+// sheet). The moment you type or pick a completion, Up/Down go back
+// to navigating the result list.
+//
+// histCursor is the position while browsing (-1 = not browsing, 0 =
+// newest, older upward). Programmatic input writes fire no "input"
+// event, so a recall keeps the cursor; real typing (and set_query
+// completions) reset it to -1.
+
+// historyEligible reports whether ArrowUp should step back through
+// history instead of moving the list selection.
+function historyEligible(): boolean {
+  return inputEl.value.trim() === "" || state.histCursor >= 0;
+}
+
+// recallHistory replaces the input with the entry at histCursor --
+// or restores the empty bar at -1 -- puts the caret at the end, and
+// re-runs the normal pipeline, so the recalled query renders its
+// results live (Enter then activates the selected row as usual).
+function recallHistory(app: WailsAppBindings): void {
+  const value =
+    state.histCursor >= 0
+      ? state.histEntries[state.histEntries.length - 1 - state.histCursor]
+      : "";
+  inputEl.value = value;
+  inputEl.focus();
+  inputEl.setSelectionRange(value.length, value.length);
+  scheduleSearch(app);
+}
+
+// commitHistory records the query whose activation actually ran
+// (fire-and-forget; the Go side trims and skips blanks too), then
+// refetches the committed list so the next Up already sees it.
+function commitHistory(app: WailsAppBindings): void {
+  const query = state.query;
+  if (query.trim() === "") {
+    return; // blank queries are never history material
+  }
+  app
+    .AddHistory(query)
+    .then(() => {
+      refreshHistory(app);
+    })
+    .catch((err: unknown) => {
+      console.warn("history add failed: " + String(err));
+    });
+}
+
+// refreshHistory pulls the committed history (oldest -> newest) and
+// leaves browse mode, so the next Up starts from the newest entry.
+function refreshHistory(app: WailsAppBindings): void {
+  app
+    .GetHistory()
+    .then((entries) => {
+      state.histEntries = entries ?? []; // tolerate a null payload
+      state.histCursor = -1;
+    })
+    .catch((err: unknown) => {
+      console.warn("history fetch failed: " + String(err));
+    });
+}
+
 /* --- activation ------------------------------------------------------ */
 
 function activate(index: number, reveal: boolean): void {
@@ -203,13 +275,17 @@ function activate(index: number, reveal: boolean): void {
     const action = reveal
       ? app.Reveal(item.file.path)
       : app.Open(item.file.path);
-    action.catch((err: unknown) => {
-      state.visible = true;
-      flashStatus(
-        (reveal ? "reveal" : "open") + " failed: " + String(err),
-        FLASH_ERROR_MS,
-      );
-    });
+    action
+      .then(() => {
+        commitHistory(app); // the activation actually ran
+      })
+      .catch((err: unknown) => {
+        state.visible = true;
+        flashStatus(
+          (reveal ? "reveal" : "open") + " failed: " + String(err),
+          FLASH_ERROR_MS,
+        );
+      });
     return;
   }
   activatePlugin(app, item.pluginId, item.result);
@@ -246,6 +322,7 @@ function activatePlugin(
       if (staysOpen) {
         flashStatus("Copied", FLASH_COPIED_MS);
       }
+      commitHistory(app); // the action actually ran
     })
     .catch((err: unknown) => {
       state.visible = true;
@@ -255,8 +332,10 @@ function activatePlugin(
 
 // setQueryLocal replaces the input (bang-suggestion completion), puts
 // the caret at the end, and re-runs the debounced search + plugin
-// pipeline with a fresh generation.
+// pipeline with a fresh generation. Picking a completion counts as
+// typing: it exits history browse mode (set_query never commits).
 function setQueryLocal(app: WailsAppBindings, value: string): void {
+  state.histCursor = -1;
   inputEl.value = value;
   inputEl.focus();
   inputEl.setSelectionRange(value.length, value.length);
@@ -378,10 +457,22 @@ function onKeydown(app: WailsAppBindings, ev: KeyboardEvent): void {
   switch (ev.key) {
     case "ArrowDown":
       ev.preventDefault();
+      if (state.histCursor >= 0) {
+        // Browsing history: Down moves forward; past the newest entry
+        // (cursor -1) the bar clears back to the empty state.
+        state.histCursor--;
+        recallHistory(app);
+        break;
+      }
       moveSelection(1);
       break;
     case "ArrowUp":
       ev.preventDefault();
+      if (historyEligible() && state.histCursor + 1 < state.histEntries.length) {
+        state.histCursor++;
+        recallHistory(app);
+        break;
+      }
       moveSelection(-1);
       break;
     case "Home":
@@ -413,10 +504,13 @@ function onKeydown(app: WailsAppBindings, ev: KeyboardEvent): void {
 function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
   rt.EventsOn("app:shown", () => {
     state.visible = true;
+    // The bar always summons empty: the pre-hide text is deliberately
+    // dropped (press Up to get past searches back), and any history
+    // browsing is reset. The pipeline re-run renders the empty-query
+    // cheat sheet and doubles as the plugin cancel signal.
+    inputEl.value = "";
+    state.histCursor = -1;
     inputEl.focus();
-    inputEl.select();
-    // The index may have changed while hidden; refresh the results
-    // (plugins re-query naturally through the same path).
     scheduleSearch(app);
   });
 
@@ -468,6 +562,7 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
 function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   initTheme(app, rt);
   inputEl.addEventListener("input", () => {
+    state.histCursor = -1; // typing exits history browse mode
     scheduleSearch(app);
   });
   document.addEventListener("keydown", (ev: KeyboardEvent) => {
@@ -481,6 +576,7 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   wireEvents(app, rt);
   state.indexMsg = "ready";
   refreshIdleStatus();
+  refreshHistory(app); // committed history from previous runs
   // Run the pipeline once at wire-up so the empty-query cheat sheet
   // is rendered before the first summon -- an app:shown emitted while
   // EventsOn registration was still in flight would otherwise be

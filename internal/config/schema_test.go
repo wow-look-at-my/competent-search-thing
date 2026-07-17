@@ -70,7 +70,8 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 			Sigils:  []string{"!", "/", "@"},
 			Aliases: map[string]string{"math": "calc"},
 		},
-		Tray: TrayConfig{Disabled: true},
+		Tray:    TrayConfig{Disabled: true},
+		History: HistoryConfig{PersistDisabled: true},
 		Firefox: FirefoxConfig{
 			FrequentSites: FrequentSitesConfig{
 				MinVisitsMonth: 20,
@@ -96,29 +97,31 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 func TestConfigSchemaRejectsInvalid(t *testing.T) {
 	sch := compileConfigSchema(t)
 	cases := map[string]string{
-		"two-char sigil":         `{"bangs":{"sigils":["ab"]}}`,
-		"letter sigil":           `{"bangs":{"sigils":["x"]}}`,
-		"digit sigil":            `{"bangs":{"sigils":["7"]}}`,
-		"space sigil":            `{"bangs":{"sigils":[" "]}}`,
-		"negative rescan":        `{"rescanIntervalMinutes":-5}`,
-		"zero maxResults":        `{"maxResults":0}`,
-		"bad theme name":         `{"theme":"../evil"}`,
-		"bad plugin entry id":    `{"plugins":{"entries":{"Bad ID":{}}}}`,
-		"non-object settings":    `{"plugins":{"entries":{"calc":{"settings":"loud"}}}}`,
-		"unknown top-level typo": `{"maxResluts":50}`,
-		"tray disabled typo":     `{"tray":{"disabld":true}}`,
-		"non-bool tray disabled": `{"tray":{"disabled":"yes"}}`,
-		"zero firefox month":     `{"firefox":{"frequentSites":{"minVisitsMonth":0}}}`,
-		"negative firefox week":  `{"firefox":{"frequentSites":{"minVisitsWeek":-1}}}`,
-		"zero firefox refresh":   `{"firefox":{"frequentSites":{"refreshMinutes":0}}}`,
-		"zero firefox max":       `{"firefox":{"frequentSites":{"maxResults":0}}}`,
-		"firefox key typo":       `{"firefox":{"frequentSites":{"profileDirr":"/x"}}}`,
-		"non-string profileDir":  `{"firefox":{"frequentSites":{"profileDir":7}}}`,
-		"unknown firefox block":  `{"firefox":{"telemetry":{}}}`,
-		"zero openTabs max":      `{"firefox":{"openTabs":{"maxResults":0}}}`,
-		"negative openTabs max":  `{"firefox":{"openTabs":{"maxResults":-2}}}`,
-		"openTabs key typo":      `{"firefox":{"openTabs":{"maxResluts":6}}}`,
-		"non-string tabs dir":    `{"firefox":{"openTabs":{"profileDir":7}}}`,
+		"two-char sigil":                   `{"bangs":{"sigils":["ab"]}}`,
+		"letter sigil":                     `{"bangs":{"sigils":["x"]}}`,
+		"digit sigil":                      `{"bangs":{"sigils":["7"]}}`,
+		"space sigil":                      `{"bangs":{"sigils":[" "]}}`,
+		"negative rescan":                  `{"rescanIntervalMinutes":-5}`,
+		"zero maxResults":                  `{"maxResults":0}`,
+		"bad theme name":                   `{"theme":"../evil"}`,
+		"bad plugin entry id":              `{"plugins":{"entries":{"Bad ID":{}}}}`,
+		"non-object settings":              `{"plugins":{"entries":{"calc":{"settings":"loud"}}}}`,
+		"unknown top-level typo":           `{"maxResluts":50}`,
+		"tray disabled typo":               `{"tray":{"disabld":true}}`,
+		"non-bool tray disabled":           `{"tray":{"disabled":"yes"}}`,
+		"history persist typo":             `{"history":{"persistDisabld":true}}`,
+		"non-bool history persistDisabled": `{"history":{"persistDisabled":"yes"}}`,
+		"zero firefox month":               `{"firefox":{"frequentSites":{"minVisitsMonth":0}}}`,
+		"negative firefox week":            `{"firefox":{"frequentSites":{"minVisitsWeek":-1}}}`,
+		"zero firefox refresh":             `{"firefox":{"frequentSites":{"refreshMinutes":0}}}`,
+		"zero firefox max":                 `{"firefox":{"frequentSites":{"maxResults":0}}}`,
+		"firefox key typo":                 `{"firefox":{"frequentSites":{"profileDirr":"/x"}}}`,
+		"non-string profileDir":            `{"firefox":{"frequentSites":{"profileDir":7}}}`,
+		"unknown firefox block":            `{"firefox":{"telemetry":{}}}`,
+		"zero openTabs max":                `{"firefox":{"openTabs":{"maxResults":0}}}`,
+		"negative openTabs max":            `{"firefox":{"openTabs":{"maxResults":-2}}}`,
+		"openTabs key typo":                `{"firefox":{"openTabs":{"maxResluts":6}}}`,
+		"non-string tabs dir":              `{"firefox":{"openTabs":{"profileDir":7}}}`,
 	}
 	for name, doc := range cases {
 		require.Error(t, validateConfigJSON(sch, []byte(doc)), "case %q must fail validation", name)
@@ -190,6 +193,8 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json $defs/bangsConfig out of sync with BangsConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(TrayConfig{})), configSchemaProperties(t, "trayConfig"),
 		"config.schema.json $defs/trayConfig out of sync with TrayConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(HistoryConfig{})), configSchemaProperties(t, "historyConfig"),
+		"config.schema.json $defs/historyConfig out of sync with HistoryConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(FirefoxConfig{})), configSchemaProperties(t, "firefoxConfig"),
 		"config.schema.json $defs/firefoxConfig out of sync with FirefoxConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(FrequentSitesConfig{})), configSchemaProperties(t, "frequentSitesConfig"),
