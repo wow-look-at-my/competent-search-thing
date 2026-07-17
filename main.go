@@ -50,7 +50,7 @@ func main() {
 func runGUI(opts cli.RunOptions) error {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Printf("config: %v (continuing with defaults)", err)
+		log.Printf("config: %v (continuing with the returned config)", err)
 	}
 	a := app.New(index.NewManager(cfg.Roots, cfg.Excludes, cfg.MaxResults), app.Options{
 		RescanEvery:            time.Duration(cfg.RescanIntervalMinutes) * time.Minute,
@@ -59,6 +59,7 @@ func runGUI(opts cli.RunOptions) error {
 		ShowOnStartup:          opts.ShowOnStartup,
 		TrayDisabled:           cfg.Tray.Disabled,
 		HistoryPersistDisabled: cfg.History.PersistDisabled,
+		ConfigNotes:            cfg.MigrationNotes,
 	})
 
 	wailsOpts := &options.App{

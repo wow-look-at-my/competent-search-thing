@@ -73,7 +73,9 @@ export function renderResults(
 
     const dir = document.createElement("span");
     dir.className = "dir";
-    dir.textContent = parentDir(item.path, item.name);
+    // A non-empty hint (the outside-indexed-roots note) takes the
+    // parent-dir slot; everything else about the row stays identical.
+    dir.textContent = item.hint ? item.hint : parentDir(item.path, item.name);
     dir.title = item.path;
     row.append(dir);
 

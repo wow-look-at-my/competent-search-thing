@@ -40,6 +40,34 @@ func TestRescannerRequestRebuildsAndSyncsWatcher(t *testing.T) {
 	require.Equal(t, 0, s.Failed)
 }
 
+func TestRescanSyncWatchesTracksVanishedAndNewDirs(t *testing.T) {
+	root := t.TempDir()
+	tree := mkTree(t, root, "stays/", "goes/")
+	m := buildManager(t, root, nil)
+	f := newFakeNotifier()
+	w := newTestWatcher(t, m, f)
+	r := NewRescanner(m, w, RescanOptions{MinGap: time.Millisecond})
+	startWatcher(t, w)
+	require.NoError(t, r.Start())
+	t.Cleanup(r.Stop)
+	waitFor(t, func() bool { return f.has(tree["stays/"]) && f.has(tree["goes/"]) },
+		"both indexed directories are watched initially")
+
+	// Change what the manager's roots yield ON DISK while the fake
+	// notifier stays silent: goes/ vanishes, born/ appears. Only the
+	// rescan's rebuild + syncWatches can reconcile the watch set.
+	require.NoError(t, os.RemoveAll(tree["goes/"]))
+	born := filepath.Join(root, "born")
+	require.NoError(t, os.Mkdir(born, 0o755))
+
+	r.Request()
+	waitFor(t, func() bool { return f.has(born) }, "the resync registers the appeared directory")
+	waitFor(t, func() bool { return !f.has(tree["goes/"]) }, "the resync drops the vanished directory's watch")
+	require.True(t, f.has(tree["stays/"]), "surviving directories keep their watch")
+	require.True(t, f.has(root), "the root keeps its watch")
+	require.False(t, w.Degraded())
+}
+
 func TestRescannerMinGapSpacesRequests(t *testing.T) {
 	root := t.TempDir()
 	m := buildManager(t, root, nil)

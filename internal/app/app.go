@@ -81,6 +81,10 @@ type Options struct {
 	// (wire config's history.persistDisabled here); the default zero
 	// value persists it to <configDir>/history.json. See history.go.
 	HistoryPersistDisabled bool
+	// ConfigNotes are the human-readable migration notes config.Load
+	// produced (wire cfg.MigrationNotes here); Startup logs each one
+	// loudly, exactly once, so a changed index scope is never silent.
+	ConfigNotes []string
 }
 
 // App is the Wails-bound application object. It carries the Wails
@@ -92,6 +96,7 @@ type App struct {
 	opt       Options
 	buildOnce sync.Once
 	hkOnce    sync.Once
+	notesOnce sync.Once
 
 	mu         sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, lastThemeErr, domReady, pendingShow, history
 	ctx        context.Context
@@ -205,6 +210,11 @@ func (a *App) Startup(ctx context.Context) {
 		a.pendingShow = true
 	}
 	a.mu.Unlock()
+	a.notesOnce.Do(func() {
+		for _, n := range a.opt.ConfigNotes {
+			log.Printf("config: %s", n)
+		}
+	})
 	a.hkOnce.Do(a.registerHotkey)
 	a.trayOnce.Do(a.startTray)
 	if a.opt.IPC != nil {
@@ -420,14 +430,19 @@ func (a *App) Shutdown(_ context.Context) {
 // Search returns index entries whose name contains query,
 // case-insensitively, best matches first (limit: the configured
 // MaxResults). It always returns a non-nil slice so the frontend can
-// iterate without null checks.
+// iterate without null checks. An absolute-path query with zero index
+// results may yield one synthetic outside-indexed-roots hint result
+// instead of nothing (see hint.go).
 func (a *App) Search(query string) []Result {
 	q := strings.TrimSpace(query)
 	if q == "" || a.manager == nil {
 		return []Result{}
 	}
 	res := a.manager.Query(q, 0)
-	if res == nil {
+	if len(res) == 0 {
+		if r, ok := a.outsideRootsHint(q); ok {
+			return []Result{r}
+		}
 		return []Result{}
 	}
 	return res

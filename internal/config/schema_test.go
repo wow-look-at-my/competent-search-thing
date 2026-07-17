@@ -55,6 +55,7 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 	// too (built from the Go structs so renames are caught here).
 	full := Config{
 		Roots:                 []string{"/home/me"},
+		RootsVersion:          2,
 		Excludes:              []string{".git", "*.tmp", "/home/*/secret"},
 		Hotkey:                "ctrl+shift+k",
 		RescanIntervalMinutes: 30,
@@ -103,6 +104,8 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"digit sigil":                      `{"bangs":{"sigils":["7"]}}`,
 		"space sigil":                      `{"bangs":{"sigils":[" "]}}`,
 		"negative rescan":                  `{"rescanIntervalMinutes":-5}`,
+		"negative rootsVersion":            `{"rootsVersion":-1}`,
+		"non-integer rootsVersion":         `{"rootsVersion":"2"}`,
 		"zero maxResults":                  `{"maxResults":0}`,
 		"bad theme name":                   `{"theme":"../evil"}`,
 		"bad plugin entry id":              `{"plugins":{"entries":{"Bad ID":{}}}}`,

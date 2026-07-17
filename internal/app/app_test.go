@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -161,6 +162,10 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 		defer r.mu.Unlock()
 		return r.moveOK
 	}
+	// The hint probe answers "nothing exists" so Search never touches
+	// the real disk; hint tests override it (some with the real
+	// os.Lstat over temp trees).
+	a.plat.lstat = func(string) (os.FileInfo, error) { return nil, fs.ErrNotExist }
 	a.plat.open = func(path string) error { r.call("open:" + path); return nil }
 	a.plat.reveal = func(path string) error { r.call("reveal:" + path); return nil }
 	a.plat.run = func(argv []string) error { r.call("run:" + strings.Join(argv, " ")); return nil }
@@ -193,6 +198,24 @@ func TestStartupSavesContext(t *testing.T) {
 	ctx := context.WithValue(context.Background(), key{}, "marker")
 	a.Startup(ctx)
 	require.Equal(t, ctx, a.runtimeCtx())
+}
+
+func TestStartupLogsConfigNotesOnce(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	a, _ := newTestApp(t, nil, Options{ConfigNotes: []string{
+		"index roots upgraded to the whole-filesystem default (/)",
+		"system exclude patterns added for whole-filesystem indexing: /proc",
+	}})
+	a.Startup(context.Background())
+	a.Startup(context.Background()) // a second Startup must not repeat them
+
+	out := buf.String()
+	require.Equal(t, 1, strings.Count(out, "config: index roots upgraded to the whole-filesystem default (/)"),
+		"each migration note is logged exactly once, config-prefixed")
+	require.Equal(t, 1, strings.Count(out, "config: system exclude patterns added"))
 }
 
 func TestSearchBlankQueryReturnsEmpty(t *testing.T) {

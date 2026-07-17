@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -193,4 +194,92 @@ func BenchmarkWalk(b *testing.B) {
 
 	}
 	b.ReportMetric(float64(want)*float64(b.N)/b.Elapsed().Seconds(), "entries/s")
+}
+
+// BenchmarkWalkRootMeasure walks the container's whole filesystem
+// ("/", default excludes + mount skips, composed like BuildFromDisk)
+// into a fresh store per iteration. The benchmark phase is not
+// coverage-instrumented, so this is the honest wall-clock walk time
+// (page-cache-hot after the first pass). Skips unless
+// COMPETENT_SEARCH_MEASURE=1 -- see measure_test.go.
+func BenchmarkWalkRootMeasure(b *testing.B) {
+	if os.Getenv(measureEnv) == "" {
+		b.Skip("set COMPETENT_SEARCH_MEASURE=1 to run the whole-filesystem walk benchmark")
+	}
+	roots := []string{"/"}
+	excludes, _ := measureExcludes(roots)
+	indexed := 0
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		st := NewStore()
+		stats, err := Walk(context.Background(), st, roots, excludes, nil)
+		require.Nil(b, err)
+		require.Greater(b, stats.Indexed, 0)
+		indexed = stats.Indexed
+	}
+	b.ReportMetric(float64(indexed)*float64(b.N)/b.Elapsed().Seconds(), "entries/s")
+	b.ReportMetric(float64(indexed), "entries")
+}
+
+// The huge-store query battery: the interesting name shapes plus the
+// path-mode shapes (straddle = dir/name join, dirheavy = substring in
+// every dir, exactish = path prefix of everything). Hit counts come
+// from the cached reference scans in measure_test.go.
+var hugeNameQueries = []struct{ name, q string }{
+	{"rare", "zzqx"},
+	{"common", "data"},
+	{"prefix", "re"},
+	{"nomatch", "qqqqzz"},
+}
+
+var hugePathQueries = []struct{ name, q string }{
+	{"straddle", "1/data"},
+	{"dirheavy", "bench/"},
+	{"exactish", "/bench"},
+	{"nomatch", "qq/zz"},
+}
+
+// BenchmarkSearchHuge measures query latency against the shared huge
+// synthetic store (hugeStoreEntries entries; built once per process on
+// first use, outside the timed sections). Skips unless
+// COMPETENT_SEARCH_MEASURE_HUGE=1.
+func BenchmarkSearchHuge(b *testing.B) {
+	if os.Getenv(measureHugeEnv) == "" {
+		b.Skip("set COMPETENT_SEARCH_MEASURE_HUGE=1 to run the huge-store search benchmarks")
+	}
+	st := hugeStore(b)
+	run := func(kind string, queries []struct{ name, q string }, pathMode bool) {
+		for _, bq := range queries {
+			b.Run(kind+"/"+bq.name, func(b *testing.B) {
+				hits := hugeHitCount(st, bq.q, pathMode)
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					_ = st.Query(bq.q, 50)
+				}
+				b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N), "ms/query")
+				b.ReportMetric(float64(hits), "hits")
+			})
+		}
+	}
+	run("name", hugeNameQueries, false)
+	run("path", hugePathQueries, true)
+}
+
+// BenchmarkHugeStoreMeasure performs the one-shot huge-store memory
+// measurement (footprint, heap, timed live GCs, then release +
+// baseline GCs -- see hugeMeasureAndReport) and afterwards times
+// forced GCs on the emptied heap as its b.N loop, so ns/op is the
+// post-release GC baseline. Declared AFTER BenchmarkSearchHuge: the
+// measurement releases the shared store when done. Skips unless
+// COMPETENT_SEARCH_MEASURE_HUGE=1.
+func BenchmarkHugeStoreMeasure(b *testing.B) {
+	if os.Getenv(measureHugeEnv) == "" {
+		b.Skip("set COMPETENT_SEARCH_MEASURE_HUGE=1 to run the huge-store measurement")
+	}
+	hugeMeasureAndReport(b)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		runtime.GC()
+	}
+	b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N), "ms/baselineGC")
 }

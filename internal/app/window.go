@@ -80,9 +80,12 @@ type platformSeams struct {
 	mediaKeysDaemon func(ctx context.Context) (bool, error)
 	cursorInfo      func() (cx, cy int, ds []platform.Display, ok bool)
 	moveWindow      func(x, y int) bool
-	open            func(path string) error
-	reveal          func(path string) error
-	run             func(argv []string) error
+	// lstat probes the disk for the outside-roots hint (hint.go);
+	// production is os.Lstat, tests pin it so no real IO happens.
+	lstat  func(path string) (os.FileInfo, error)
+	open   func(path string) error
+	reveal func(path string) error
+	run    func(argv []string) error
 	// activateWindow raises and focuses one open window by its
 	// window-system id (the activate_window plugin action); production
 	// is the native EWMH client message.
@@ -116,6 +119,7 @@ func defaultPlatformSeams() platformSeams {
 		mediaKeysDaemon: gsettings.DaemonRunning,
 		cursorInfo:      native.CursorDisplays,
 		moveWindow:      native.MoveWindow,
+		lstat:           os.Lstat,
 		open:            launcher.Open,
 		reveal:          launcher.Reveal,
 		run:             launcher.Run,
