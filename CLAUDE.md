@@ -280,12 +280,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   per-pixel-alpha window flag main.go reads via
   app.WindowTranslucent(); zero value = opaque = the safe default,
   needs a compositor, README "Translucent window" holds the measured
-  evidence}, firefox {frequentSites {minVisitsMonth 11,
-  minVisitsWeek 1, refreshMinutes 10, maxResults 6, profileDir ""},
-  openTabs {maxResults 6, profileDir ""}}
-  -- the frequentSites defaults encode ">10 visits in 30 days AND >=1
-  in 7"; the numeric knobs are Normalize-repaired to defaults when
-  <= 0, both profileDirs are passed through verbatim). Lives under
+  evidence}, firefox {frequentSites
+  {minVisitsMonth 11, minVisitsWeek 1, refreshMinutes 10, maxResults
+  6, profileDir ""}, openTabs {maxResults 6, profileDir ""}} -- the
+  frequentSites defaults encode ">10 visits in 30 days AND >=1 in 7";
+  the numeric knobs are Normalize-repaired to defaults when <= 0,
+  both profileDirs are passed through verbatim). Lives under
   os.UserConfigDir(); the `COMPETENT_SEARCH_CONFIG_DIR` env var
   overrides the directory (tests rely on this); `Dir()` exposes that
   directory (the plugins/ and themes/ dirs and history.json live
