@@ -135,6 +135,6 @@ func (p *windowsProvider) query(_ context.Context, req Request) ([]Result, []str
 	return results, nil, nil
 }
 
-// Word-start matching ("main" starts a word in "app - main.go" and
-// "foo-main" but not in "domain") is the shared wordStart helper in
-// builtin_firefox.go.
+// The word-start matching this provider scores with lives in
+// builtin_firefox.go's wordStart -- one shared helper for the whole
+// package (a second same-named copy here is a compile error).

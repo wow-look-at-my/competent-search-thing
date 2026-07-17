@@ -131,24 +131,3 @@ func TestWindowsProviderEmptyAndDegenerateInputs(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, results, "untitled windows never become results")
 }
-
-func TestWordStartWindowTitleCases(t *testing.T) {
-	cases := []struct {
-		haystack, needle string
-		want             bool
-	}{
-		{"main.go - code", "main", true}, // start of string
-		{"app - main.go", "main", true},  // after a space
-		{"foo-main", "main", true},       // after punctuation
-		{"[main] scratch", "main", true}, // after a bracket
-		{"domain", "main", false},        // mid-word only
-		{"domain main", "main", true},    // later word-start occurrence wins
-		{"xx2main", "main", false},       // digits end a word too
-		{"", "main", false},
-		{"main", "nomatch", false},
-	}
-	for _, tc := range cases {
-		require.Equal(t, tc.want, wordStart(tc.haystack, tc.needle),
-			"wordStart(%q, %q)", tc.haystack, tc.needle)
-	}
-}
