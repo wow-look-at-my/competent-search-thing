@@ -135,13 +135,23 @@ func (s *Store) queryNamesFuzzy(qs string, ascii bool, n, limit int) []Result {
 	if total < limit && fuzzyViable(qs, ascii) {
 		// The wg.Wait above is the barrier: phase 2 reads the bitset,
 		// nothing writes it anymore.
+		anchor := byte(0)
+		if ascii {
+			anchor = s.fuzzyAnchorByte(qs)
+			if s.blobByteCount(anchor) == 0 {
+				// The rarest pattern byte never occurs in the blob at
+				// all (exact histogram): no name can hold the
+				// subsequence, so phase 2 is provably empty.
+				return s.selectTop(heaps, limit)
+			}
+		}
 		patUnits := fuzzyPatternUnits(qs, ascii)
 		runPhase(func(w, lo, hi int) {
 			sc := fuzzyScratchGet()
 			defer fuzzyScratchPut(sc)
 			sc.pat = patUnits
 			if ascii {
-				s.scanRangeFuzzy(qs, lo, hi, heaps[w], marks, sc)
+				s.scanRangeFuzzy(qs, anchor, lo, hi, heaps[w], marks, sc)
 			} else {
 				s.scanRangeFuzzyFold(patUnits, lo, hi, heaps[w], marks, sc)
 			}
@@ -178,14 +188,16 @@ func fuzzyPatternUnits(qs string, ascii bool) []int32 {
 }
 
 // scanRangeFuzzy is the phase-2 candidate sweep for ASCII patterns
-// over entries [lo, hi): a ciScan for the anchor byte alone (both case
-// variants, persistent IndexByte streams), entry mapping and
-// skip-to-entry-end exactly like scanRange, then the subsequence check
-// and scoring on unmarked live survivors.
-func (s *Store) scanRangeFuzzy(pat string, lo, hi int, h *topK, marks []uint64, sc *fuzzyScratch) {
+// over entries [lo, hi): persistent IndexByte streams for the anchor
+// byte's case variants (a variant the histogram proves absent from
+// the blob is never scanned -- half the sweep on single-case
+// corpora), entry mapping and skip-to-entry-end exactly like
+// scanRange, then the subsequence check and scoring on unmarked live
+// survivors.
+func (s *Store) scanRangeFuzzy(pat string, anchor byte, lo, hi int, h *topK, marks []uint64, sc *fuzzyScratch) {
 	base := s.nameOff[lo]
 	blob := s.names[base:s.nameOff[hi]]
-	scn := newCiScan(blob, s.fuzzyAnchor(pat))
+	scn := s.newFuzzyAnchorScan(blob, anchor)
 	off := 0
 	cur := lo
 	for {
@@ -208,6 +220,57 @@ func (s *Store) scanRangeFuzzy(pat string, lo, hi int, h *topK, marks []uint64, 
 		off = int(s.nameOff[next] - base)
 		cur = next
 	}
+}
+
+// fuzzyAnchorScan iterates the blob positions holding either case
+// variant of the anchor byte: the phase-2 counterpart of ciScan's
+// two-variant stream (same persistence contract -- successive next
+// offsets must not decrease and must move past the previous hit), but
+// without a pattern verification step, and with a variant whose exact
+// blob count is zero never scanned at all.
+type fuzzyAnchorScan struct {
+	blob   []byte
+	c1, c2 byte // c2 == c1 when there is no second variant to scan
+	n1, n2 int  // next occurrence at/after the cursor; -1 = exhausted
+}
+
+// newFuzzyAnchorScan arms the streams for the folded anchor byte c,
+// consulting the byte histogram to drop provably-empty variants. The
+// caller has already established that at least one variant occurs
+// (blobByteCount > 0).
+func (s *Store) newFuzzyAnchorScan(blob []byte, c byte) fuzzyAnchorScan {
+	sc := fuzzyAnchorScan{blob: blob, c1: c, c2: c, n1: -1, n2: -1}
+	if u := upperVariant(c); u != c {
+		switch {
+		case s.byteFreq[c] == 0:
+			sc.c1 = u // only the uppercase form exists
+		case s.byteFreq[u] > 0:
+			sc.c2 = u // both exist: two streams
+		}
+	}
+	hi := len(blob) - 1
+	sc.n1 = nextIndexByte(blob, sc.c1, 0, hi)
+	if sc.c2 != sc.c1 {
+		sc.n2 = nextIndexByte(blob, sc.c2, 0, hi)
+	}
+	return sc
+}
+
+// next returns the first anchor occurrence at or after off, or -1.
+// Successive calls must not decrease off.
+func (sc *fuzzyAnchorScan) next(off int) int {
+	hi := len(sc.blob) - 1
+	if sc.n1 >= 0 && sc.n1 < off {
+		sc.n1 = nextIndexByte(sc.blob, sc.c1, off, hi)
+	}
+	if sc.n2 >= 0 && sc.n2 < off {
+		sc.n2 = nextIndexByte(sc.blob, sc.c2, off, hi)
+	}
+	h := sc.n1
+	if h < 0 || (sc.n2 >= 0 && sc.n2 < h) {
+		h = sc.n2
+	}
+	return h
 }
 
 // scanRangeFuzzyFold is the phase-2 scan for patterns carrying
@@ -239,20 +302,20 @@ func (s *Store) makeFuzzyCand(e int, score int32) cand {
 	}
 }
 
-// fuzzyAnchor picks the pattern byte with the fewest occurrences in
-// the name blob (both case variants counted, exact per-store counts
-// from the byte histogram) and returns it as a one-byte pattern for
-// ciScan. The histogram counts the whole blob, tombstoned names
-// included -- correct, because the sweep scans the whole blob too.
-func (s *Store) fuzzyAnchor(pat string) string {
-	best := 0
-	bestN := s.blobByteCount(pat[0])
+// fuzzyAnchorByte picks the pattern byte with the fewest occurrences
+// in the name blob (both case variants counted, exact per-store
+// counts from the byte histogram). The histogram counts the whole
+// blob, tombstoned names included -- correct, because the sweep scans
+// the whole blob too.
+func (s *Store) fuzzyAnchorByte(pat string) byte {
+	best := pat[0]
+	bestN := s.blobByteCount(best)
 	for i := 1; i < len(pat); i++ {
 		if n := s.blobByteCount(pat[i]); n < bestN {
-			best, bestN = i, n
+			best, bestN = pat[i], n
 		}
 	}
-	return pat[best : best+1]
+	return best
 }
 
 // blobByteCount returns how often the folded byte c occurs in the name
