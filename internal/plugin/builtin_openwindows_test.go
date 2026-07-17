@@ -132,7 +132,7 @@ func TestWindowsProviderEmptyAndDegenerateInputs(t *testing.T) {
 	require.Empty(t, results, "untitled windows never become results")
 }
 
-func TestWordStart(t *testing.T) {
+func TestWordStartWindowTitleCases(t *testing.T) {
 	cases := []struct {
 		haystack, needle string
 		want             bool
