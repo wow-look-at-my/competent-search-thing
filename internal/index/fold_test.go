@@ -140,6 +140,44 @@ func TestCiIndexASCIIMatchesReference(t *testing.T) {
 	}
 }
 
+// TestCiScanResume drives the resumable scanner the way scanRange does
+// (monotonically increasing skip-ahead offsets) and cross-checks every
+// reported position against a fresh one-shot scan. The first alphabet
+// has NO uppercase at all -- the case that made a restart-per-hit
+// design quadratic (each restart re-scanned the whole remainder for
+// the absent upper variant) and must stay cheap for the cached scan.
+func TestCiScanResume(t *testing.T) {
+	rng := rand.New(rand.NewSource(43))
+	alphabets := [][]byte{
+		[]byte("ab z01._\x00"),
+		[]byte("aAbBzZ01._\x00\x00\xc3"),
+	}
+	pats := []string{"a", "az", "z1", "ab", "b"}
+	for _, alphabet := range alphabets {
+		for iter := 0; iter < 500; iter++ {
+			blob := make([]byte, rng.Intn(400))
+			for i := range blob {
+				blob[i] = alphabet[rng.Intn(len(alphabet))]
+			}
+			pat := pats[rng.Intn(len(pats))]
+			sc := newCiScan(blob, pat)
+			off := 0
+			for off <= len(blob) {
+				want := ciIndexASCII(blob[off:], pat)
+				got := sc.next(off)
+				if want < 0 {
+					require.Equal(t, -1, got, "blob %q pat %q off %d", blob, pat, off)
+					break
+				}
+				require.Equal(t, off+want, got, "blob %q pat %q off %d", blob, pat, off)
+				// Resume anywhere past the match start, like scanRange
+				// skipping to the end of the matched entry.
+				off = got + 1 + rng.Intn(4)
+			}
+		}
+	}
+}
+
 func TestCiPrefixSuffixContains(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
 	alphabet := []byte("aAbBzZ01._\xc3\xb1")

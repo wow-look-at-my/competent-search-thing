@@ -104,14 +104,15 @@ func (s *Store) scanNames(pat string, ascii bool, lo, hi int, h *topK) {
 func (s *Store) scanRange(pat string, lo, hi int, h *topK) {
 	base := s.nameOff[lo]
 	blob := s.names[base:s.nameOff[hi]]
+	sc := newCiScan(blob, pat)
 	off := 0
 	cur := lo
 	for {
-		rel := ciIndexASCII(blob[off:], pat)
+		rel := sc.next(off)
 		if rel < 0 {
 			return
 		}
-		pos := base + uint32(off+rel)
+		pos := base + uint32(rel)
 		// Map the hit position to its entry: the unique e in [cur, hi)
 		// with nameOff[e] <= pos < nameOff[e+1].
 		e := cur + sort.Search(hi-cur, func(k int) bool { return s.nameOff[cur+k+1] > pos })
