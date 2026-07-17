@@ -262,8 +262,8 @@ func TestPathQueryMixedCaseAndUnicode(t *testing.T) {
 	addBoth(t, s, &ref, "/", "Users", true)
 	addBoth(t, s, &ref, "/Users", "Alice", true)
 	addBoth(t, s, &ref, "/Users/Alice", "Notes.txt", false)
-	addBoth(t, s, &ref, "/", "Müsic", true)
-	addBoth(t, s, &ref, "/Müsic", "Söng.mp3", false)
+	addBoth(t, s, &ref, "/", "M\u00fcsic", true)
+	addBoth(t, s, &ref, "/M\u00fcsic", "S\u00f6ng.mp3", false)
 
 	// Mixed-case directories match case-insensitively; results carry
 	// the original casing.
@@ -274,11 +274,19 @@ func TestPathQueryMixedCaseAndUnicode(t *testing.T) {
 
 	// Unicode folding parity: the engine's per-component lowering must
 	// agree with strings.ToLower over the whole path.
-	for _, q := range []string{"müsic/sö", "/müsic", "MÜSIC/SÖNG.MP3", "müsic/x", "üsic/s"} {
+	unicodeQueries := []string{
+		"m\u00fcsic/s\u00f6",
+		"/m\u00fcsic",
+		"M\u00dcSIC/S\u00d6NG.MP3",
+		"m\u00fcsic/x",
+		"\u00fcsic/s",
+	}
+	for _, q := range unicodeQueries {
 		require.Equal(t, naivePathQuery(ref, q, len(ref)), s.Query(q, len(ref)),
 			"unicode query %q", q)
 	}
-	require.Equal(t, []string{"/Müsic/Söng.mp3"}, pathsOf(s.Query("müsic/sö", 10)))
+	require.Equal(t, []string{"/M\u00fcsic/S\u00f6ng.mp3"},
+		pathsOf(s.Query("m\u00fcsic/s\u00f6", 10)))
 }
 
 // refFromStore snapshots every live entry as a refEntry.
