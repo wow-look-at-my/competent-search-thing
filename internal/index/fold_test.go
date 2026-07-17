@@ -80,6 +80,8 @@ func TestAnchorOffset(t *testing.T) {
 		{"zz", 0},     // ties keep the earliest
 		{"zzqx", 0},   // all rare: earliest wins
 		{"images", 3}, // 'g' is the rarest here
+		{"1/data", 2}, // never the separator: 'd' anchors
+		{"a/b", 2},
 	}
 	for _, tc := range cases {
 		require.Equal(t, tc.want, anchorOffset(tc.pat), "pattern %q", tc.pat)

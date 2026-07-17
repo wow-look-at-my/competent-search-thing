@@ -82,6 +82,9 @@ func buildNameByteFreq() (t [256]uint8) {
 	grade("0123456789", 190) // generated names are digit-heavy
 	grade("aeit", 210)       // the most common letters
 	grade("._-", 230)        // near-universal name separators
+	// Path separators saturate dir strings, and every path-mode
+	// pattern contains one: never anchor on them.
+	grade("/\\", 250)
 	// Patterns are pre-folded so only lowercase indices are consulted;
 	// mirror the letters anyway so the table is safe for any caller.
 	for c := byte('A'); c <= 'Z'; c++ {
