@@ -1162,6 +1162,14 @@ These are Wayland design constraints, not bugs:
   `sudo sysctl fs.inotify.max_user_watches=524288`) and/or set
   `rescanIntervalMinutes` as a periodic safety net.
 - **Reveal on Linux**: prefers the freedesktop `FileManager1` D-Bus
-  interface and falls back to opening the parent directory with
-  xdg-open when `dbus-send` is missing; a dbus-send that starts but
-  finds no file manager is not detected (launches are fire-and-forget).
+  interface (the call waits for the reply) and falls back to opening
+  the parent directory with xdg-open when `dbus-send` is missing,
+  cannot reach the session bus, or no file manager answers.
+- **Open / Reveal diagnostics**: every open/reveal logs the exact
+  command it runs (e.g. `open: exec ["xdg-open" "/path/MyFile.cpp"]`)
+  and every failure -- including the handler's stderr -- to the app's
+  standard error. A handler that fails within ~1.5 seconds (say,
+  xdg-open with no application registered for the file type) is also
+  shown as an error flash in the bar's status line instead of
+  silently doing nothing. If Enter on a result appears to do nothing,
+  run the app from a terminal and read the `open:`/`reveal:` lines.
