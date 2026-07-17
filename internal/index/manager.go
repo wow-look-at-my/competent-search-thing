@@ -2,6 +2,8 @@ package index
 
 import (
 	"context"
+	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -45,10 +47,23 @@ func NewManager(roots, excludes []string, maxResults int) *Manager {
 // the previous store for the whole duration of the walk. On error
 // (cancellation, bad exclude pattern) the old store is kept. Returns
 // the number of entries indexed and the wall time spent.
+//
+// Every rebuild recomputes the mount-derived skip list (mounts change
+// between rebuilds; see mounts.go) and appends it to the configured
+// excludes as full-path patterns, so network and virtual filesystem
+// mountpoints under the roots are pruned exactly like excludes. The
+// skipped mountpoints never enter the index, so the watch layer never
+// watches them either.
 func (m *Manager) BuildFromDisk(ctx context.Context, progress ProgressFunc) (int, time.Duration, error) {
 	start := time.Now()
 	fresh := NewStore()
-	stats, err := Walk(ctx, fresh, m.roots, m.excludes, progress)
+	excludes := m.excludes
+	if skips := mountSkips(m.roots); len(skips) > 0 {
+		log.Printf("index: skipping %d mounted filesystems (network/virtual): %s",
+			len(skips), strings.Join(skips, ", "))
+		excludes = append(copyStrings(m.excludes), skips...)
+	}
+	stats, err := Walk(ctx, fresh, m.roots, excludes, progress)
 	if err != nil {
 		return 0, time.Since(start), err
 	}
