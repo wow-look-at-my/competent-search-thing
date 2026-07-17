@@ -47,11 +47,11 @@ func TestWindowsProviderMatchMinLength(t *testing.T) {
 
 func TestWindowsProviderRanking(t *testing.T) {
 	wins := []WindowInfo{
-		{ID: "1", Title: "main.go - Code", App: "code", PID: 10},        // "main": title word start
-		{ID: "2", Title: "domain-list.txt", App: "mainapp", PID: 20},    // "main": app prefix (title hit is mid-word)
+		{ID: "1", Title: "main.go - Code", App: "code", PID: 10},         // "main": title word start
+		{ID: "2", Title: "domain-list.txt", App: "mainapp", PID: 20},     // "main": app prefix (title hit is mid-word)
 		{ID: "3", Title: "the domain overview", App: "firefox", PID: 30}, // "main": title substring only
-		{ID: "4", Title: "notes", App: "xmainx", PID: 40},               // "main": app substring only
-		{ID: "5", Title: "unrelated", App: "kitty", PID: 50},            // no match
+		{ID: "4", Title: "notes", App: "xmainx", PID: 40},                // "main": app substring only
+		{ID: "5", Title: "unrelated", App: "kitty", PID: 50},             // no match
 	}
 	p := newWindowsProvider(func() []WindowInfo { return wins })
 
@@ -137,13 +137,13 @@ func TestWordStart(t *testing.T) {
 		haystack, needle string
 		want             bool
 	}{
-		{"main.go - code", "main", true},   // start of string
-		{"app - main.go", "main", true},    // after a space
-		{"foo-main", "main", true},         // after punctuation
-		{"[main] scratch", "main", true},   // after a bracket
-		{"domain", "main", false},          // mid-word only
-		{"domain main", "main", true},      // later word-start occurrence wins
-		{"xx2main", "main", false},         // digits end a word too
+		{"main.go - code", "main", true}, // start of string
+		{"app - main.go", "main", true},  // after a space
+		{"foo-main", "main", true},       // after punctuation
+		{"[main] scratch", "main", true}, // after a bracket
+		{"domain", "main", false},        // mid-word only
+		{"domain main", "main", true},    // later word-start occurrence wins
+		{"xx2main", "main", false},       // digits end a word too
 		{"", "main", false},
 		{"main", "nomatch", false},
 	}
