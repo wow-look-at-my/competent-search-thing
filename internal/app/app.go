@@ -120,11 +120,14 @@ type App struct {
 	pendingShow bool
 
 	// sessionOnce caches desktop session detection (hotkey backend
-	// selection and the Wayland show path both consume it);
-	// waylandPlaceOnce guards the one-time compositor-placement log.
-	sessionOnce      sync.Once
-	sessionVal       platform.Session
-	waylandPlaceOnce sync.Once
+	// selection, the Wayland show path, and the open-windows provider
+	// gate all consume it); waylandPlaceOnce guards the one-time
+	// compositor-placement log and openWindowsLogOnce the one-time
+	// "no open-window search on wayland" log.
+	sessionOnce        sync.Once
+	sessionVal         platform.Session
+	waylandPlaceOnce   sync.Once
+	openWindowsLogOnce sync.Once
 
 	themeOnce    sync.Once
 	watchMu      sync.Mutex

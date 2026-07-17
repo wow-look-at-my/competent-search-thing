@@ -21,9 +21,11 @@ type Cache struct {
 	focused           *AppInfo
 	running           []AppInfo
 	installed         []InstalledApp
+	windows           []WindowInfo
 	installedAt       time.Time // last SUCCESSFUL installed refresh
 	runningInFlight   bool
 	installedInFlight bool
+	windowsInFlight   bool
 }
 
 // NewCache wraps src (which may be nil for a degraded no-op cache).
@@ -81,6 +83,34 @@ func (c *Cache) RefreshRunningAsync() {
 		c.runningInFlight = false
 		if ok {
 			c.running = apps
+		}
+	}()
+}
+
+// RefreshWindowsAsync refreshes the open-windows list on a background
+// goroutine, with the same single-flight and keep-old-data-on-failure
+// behavior as RefreshRunningAsync. The app kicks it at summon time so
+// the window titles are fresh per summon without the query path ever
+// blocking on window-system round-trips.
+func (c *Cache) RefreshWindowsAsync() {
+	if c == nil || c.src == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.windowsInFlight {
+		c.mu.Unlock()
+		return
+	}
+	c.windowsInFlight = true
+	c.mu.Unlock()
+
+	go func() {
+		wins, ok := c.src.OpenWindows()
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.windowsInFlight = false
+		if ok {
+			c.windows = wins
 		}
 	}()
 }
@@ -150,6 +180,9 @@ func (c *Cache) Snapshot() Snapshot {
 	}
 	if len(c.installed) > 0 {
 		s.Installed = append([]InstalledApp(nil), c.installed...)
+	}
+	if len(c.windows) > 0 {
+		s.Windows = append([]WindowInfo(nil), c.windows...)
 	}
 	return s
 }
