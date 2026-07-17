@@ -205,7 +205,10 @@ function activate(index: number, reveal: boolean): void {
       : app.Open(item.file.path);
     action.catch((err: unknown) => {
       state.visible = true;
-      setStatus((reveal ? "reveal" : "open") + " failed: " + String(err));
+      flashStatus(
+        (reveal ? "reveal" : "open") + " failed: " + String(err),
+        FLASH_ERROR_MS,
+      );
     });
     return;
   }

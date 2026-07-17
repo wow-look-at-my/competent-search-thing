@@ -567,10 +567,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   `DisplayForWindow` by window center; `WailsPosition` translating
   absolute coords to Wails' current-monitor-relative
   WindowSetPosition); open/reveal argv construction (`OpenCommands` /
-  `RevealCommands`: linux xdg-open / dbus-send FileManager1.ShowItems
-  with xdg-open-parent fallback, darwin open / open -R, windows
-  rundll32 FileProtocolHandler / explorer /select,) and `Launcher`
-  (injectable `Run` seam; default starts detached and reaps); session
+  `RevealCommands`: linux xdg-open / dbus-send --print-reply
+  FileManager1.ShowItems with xdg-open-parent fallback, darwin open /
+  open -R, windows rundll32 FileProtocolHandler / explorer /select,)
+  and `Launcher` (injectable `Run`/`Start` seams + `Logf`; every
+  spawn logs its exact argv; Open/Reveal observe the child for a 1.5s
+  grace window -- a non-zero exit inside it returns an error with
+  captured stderr (unlinked-temp-file capture, never a pipe a
+  grandchild could block or SIGPIPE on), logs, and falls through to
+  the next candidate; a child still running at expiry is success,
+  reaper-logged if it fails later; `Run` stays fire-and-forget for
+  plugin run_command but logs spawns and reaper-logs failures); session
   detection (session.go: `DetectSession(getenv)` -- XDG_SESSION_TYPE
   "wayland"/"x11" wins, else WAYLAND_DISPLAY, else DISPLAY, else
   unknown; Desktop = raw XDG_CURRENT_DESKTOP;
@@ -647,7 +654,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   frontend-local (replace input, caret to end, re-run the pipeline),
   everything else goes to RunPluginAction -- Go owns bar-hide per
   action type; copy_text and run_builtin "version" stay open and flash
-  "Copied" ~1.2s in the status bar, action errors flash ~2s; #empty
+  "Copied" ~1.2s in the status bar, action errors -- plugin actions
+  AND file-row open/reveal failures -- flash ~2s; #empty
   shows only when a non-blank query has neither files nor sections;
   Esc + window blur -> Hide; runtime events: "app:shown" ->
   focus+select+refresh (plugins re-query through the same path),
