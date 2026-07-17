@@ -112,6 +112,9 @@ buildhost (see [Install](#install)):
 - [x] Window shell (frameless, always-on-top, hidden until summoned) + CI
 - [x] Index engine: compact in-memory store, parallel walker, parallel
       ranked substring search, JSON config
+- [x] Path-aware search: a separator in the query switches to
+      full-path matching (`/etc/hosts`, `etc/ho`; see
+      [Search by path](#search-by-path))
 - [x] Live index updates: per-directory fsnotify watchers, event
       debouncing, graceful watch-limit/overflow degradation, optional
       periodic rescans
@@ -159,6 +162,23 @@ buildhost (see [Install](#install)):
 - [x] Theming: design tokens as CSS custom properties, builtin dark +
       light themes, validated user JSON themes with live reload, and a
       custom.css escape hatch (see [Theming](#theming))
+
+## Search by path
+
+A query without a path separator searches names, as always. The moment
+the query contains a separator it matches case-insensitively against
+the full path instead (Everything-style):
+
+- `/etc/hosts` finds the file at exactly that path first, then paths
+  ending in `/etc/hosts` (say `/backup/etc/hosts`), then paths
+  starting with it (`/etc/hosts.d/...`), then any path containing it.
+- Partial components work anywhere in the query: `etc/ho` or `tc/hos`
+  find `/etc/hosts` and friends.
+- A trailing separator scopes to directory contents: `etc/` matches
+  everything under any `etc` directory at any depth, but not the
+  `etc` directories themselves.
+- Within a rank class the usual tie-breaks apply: directories first,
+  then shorter paths, then alphabetical.
 
 ## Building
 

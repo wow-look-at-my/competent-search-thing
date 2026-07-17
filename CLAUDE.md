@@ -254,7 +254,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   tombstone removals). `Store.Query`: case-insensitive substring
   search, sharded across NumCPU goroutines with per-shard bounded
   top-K heaps; ranking exact > prefix > substring, dirs before files,
-  shorter then lexicographic paths. `Walk`: parallel walker (worker
+  shorter then lexicographic paths. A query containing a path
+  separator (on windows '/' too, normalized) dispatches to path mode
+  (path.go): matched against the FULL path via a per-query dir-table
+  prematch (dirs whose lowered path+sep contains the query -- every
+  child matches) plus boundary splits q = S + R at the query's
+  separators (S a sep-terminated dir suffix, R a name prefix checked
+  against the name blob); ranking exact-path > path-suffix >
+  path-prefix > substring with the same tie-breaks; `dirsLower` (the
+  lowercased twin of the dir table, ~one string header per dir) is
+  the only layout addition, and the name-only scan is untouched
+  beyond one IndexByte per query. `Walk`: parallel walker (worker
   pool + LIFO queue) with exclude patterns (`Excluder`: bare pattern
   = base name, pattern with separator = full path), symlinks indexed
   but never descended, permission errors counted not fatal, throttled
