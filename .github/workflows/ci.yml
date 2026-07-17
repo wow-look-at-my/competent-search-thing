@@ -11,7 +11,7 @@ permissions:
   actions: read
 
 jobs:
-  build:
+  linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -122,3 +122,62 @@ jobs:
           name: screenshots-${{ github.sha }}
           path: screenshots/
           if-no-files-found: warn
+
+  darwin:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - name: Keep the version stamp clean for published binaries
+        # Same guard as the linux job: go-toolchain injects a transient
+        # gomemlimit_gen.go during the build; as an untracked file it would
+        # make Go's VCS stamping mark every binary vcs.modified (+dirty).
+        run: echo gomemlimit_gen.go >> .git/info/exclude
+
+      - uses: wow-look-at-my/go-toolchain@v1
+        env:
+          # desktop,production are Wails v2's manual-build tags, required for
+          # a runnable binary. webkit2_41 is linux-only and inert on darwin,
+          # so it is deliberately absent here.
+          GOFLAGS: "-tags=desktop,production"
+        with:
+          # darwin needs cgo against the Apple SDK, so it can only build on a
+          # mac runner -- this job is the only place a darwin binary exists.
+          targets: darwin/arm64
+          cgo: 'true'
+          # Publishing darwin binaries to buildhost is a follow-up; this job
+          # only proves the cgo build + full unit-test suite on macOS.
+          autorelease: 'false'
+          timeout: '30'
+
+      - name: Upload darwin build
+        uses: actions/upload-artifact@v4
+        with:
+          name: darwin-build-${{ github.sha }}
+          path: build/
+
+  all-builds:
+    # The org ruleset requires a green `all-builds` context on the head SHA
+    # before a PR can merge to master; a matrix/renamed job cannot be it, so
+    # this zero-work aggregator carries the name. It fails on ANY needs
+    # result that is not success/skipped -- a lost runner reports the
+    # undocumented result "abandoned", which a failure/cancelled filter
+    # would wave through as green.
+    needs: [linux, darwin]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: wow-look-at-my/actions@typescript#latest
+        with:
+          needs: ${{ toJSON(needs) }}
+          script: |
+            const bad = Object.entries(needs as Record<string, {result: string}>)
+              .filter(([, v]) => v.result !== 'success' && v.result !== 'skipped')
+              .map(([k, v]) => `${k}=${v.result}`);
+            if (bad.length) core.setFailed(`jobs not green: ${bad.join(', ')}`);
+            else core.info('all builds green (skipped counts as pass)');
