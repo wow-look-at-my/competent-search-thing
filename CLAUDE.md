@@ -84,8 +84,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   layer up once (plugins.go: an appctx.Cache over the plat.appSource
   seam + RefreshInstalledAsync, then the registry via the
   `newRegistry` builder seam, whose production value `buildRegistry`
-  re-reads config.json, LoadDirs <configDir>/plugins, passes Version
-  and the installedApps getter, and logs every registry Errors()
+  re-reads config.json, LoadDirs <configDir>/plugins, passes Version,
+  the installedApps getter and openWindowsGetter() -- the
+  session-gated OpenWindows seam: x11 = the openWindows adapter
+  (uint32 ids -> decimal strings), wayland = nil + ONE
+  openWindowsLogOnce log line (NEVER probe X there: an XWayland
+  client list is misleadingly partial), unknown = the adapter only if
+  a synchronous source probe can actually list (headless CI/windows/
+  darwin cannot) -- and logs every registry Errors()
   entry once with a "plugin:" prefix -- missing plugins dir =
   builtins only, no noise), starts theme hot reload (theme.go: a
   dedicated fsnotify watcher on the config dir + its themes/ subdir,
@@ -120,7 +126,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   hotkey callback `toggle` (rate-limited 250ms against key
   autorepeat) hides the bar when visible; when hidden it FIRST
   captures app context (`captureAppContext`: CaptureFocused +
-  RefreshRunningAsync + EnsureFreshInstalled(5m) -- the bar window
+  RefreshRunningAsync + RefreshWindowsAsync +
+  EnsureFreshInstalled(5m) -- the bar window
   steals focus, so this precedes showing), then
   `showOnCursorDisplay`: platform.CursorDisplays -> PickDisplay ->
   BarPosition (absolute coords), then darwin = native.MoveWindow,
@@ -156,7 +163,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   friendly error while the index is still building) / reload
   (newRegistry, swap under mutex, Close the old) / config (open
   config.json) / version (copy `Version`, stays open) / quit
-  (runtime Quit); everything else hides the bar on success. Events
+  (runtime Quit); activate_window (parseWindowID: non-empty base-10
+  uint32) -> the activateWindow seam (production
+  native.ActivateWindow); everything else hides the bar on success. Events
   emitted (all guarded so a nil ctx no-ops): "index:progress"
   {indexed,done,seconds}, "watch:degraded"
   {watched,dropped,overflows}, "app:shown", "theme:changed" (no
@@ -165,7 +174,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   {plugin,name,gen,results}). ALL Wails
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
-  incl. run/appSource plus getenv/executable/args0/detectSession/
+  incl. run/activateWindow/appSource plus getenv/executable/args0/detectSession/
   startPortal/ensureGnomeBinding, in window.go; defaults in New, plus
   the `newRegistry` and `newTray` seams); unit tests MUST replace
   them (see
@@ -280,7 +289,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   action validation (open_path abs path, open_url http(s)+host,
   copy_text <=8 KiB, run_command 1..16 argv <=1024 B each and the
   whole RESULT is dropped unless the manifest sets allow_run_command;
-  internal-only set_query/run_builtin always stripped; anything
+  internal-only set_query/run_builtin/activate_window always stripped
+  and a stray Action.Window on external types cleared; anything
   removed gets a human-readable reason for logging). trigger.go:
   `Trigger` Compile/Match/Boost -- prefix (case-insensitive,
   rune-folded) / regex (ci RE2 on the RAW query) / all_queries paths
@@ -341,17 +351,29 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   "apps"/Launch -- !app/!launch over the Options.InstalledApps
   snapshot (empty query = first 15 alphabetical, prefix 100 /
   substring 80, cap 15, run_command argv via `parseDesktopExec`:
-  quotes, backslash escapes, %-field codes stripped). Exhaustively
+  quotes, backslash escapes, %-field codes stripped);
+  builtin_openwindows.go "windows"/Open Windows -- the ONE builtin in
+  the normal fan-out (no bangs; own all-queries match, min 2 runes of
+  the trimmed query) over the Options.OpenWindows snapshot
+  (plugin-local WindowInfo, ID as STRING to survive JSON), registered
+  ONLY when that seam is non-nil (the app layer's session gate);
+  ranking title word-start 85 > app prefix 80 > title substring 65 >
+  app substring 60, ties alphabetical, cap 8, rows carry the
+  internal-only activate_window action (icon "app", subtitle = app
+  name). Exhaustively
   unit-tested, table-driven, plus an end-to-end manifest ->
   registry -> /bin/sh transport dispatch test.
 - `internal/appctx` -- app-context collection for the plugin system,
   pure and headless-tested: the data types (AppInfo / InstalledApp /
+  WindowInfo (ID uint32/Title/App/PID) /
   Snapshot -- deliberately NOT internal/plugin's wire types, the app
-  layer converts), the `Source` seam implemented by
+  layer converts), the `Source` seam (FocusedApp/RunningApps/
+  InstalledApps/OpenWindows) implemented by
   internal/platform/native, and `Cache` (mutex-guarded, injectable
   clock): `CaptureFocused` = synchronous focused-app read at
   hotkey-press BEFORE the window steals focus;
-  `RefreshRunningAsync` / `RefreshInstalledAsync` = single-flight
+  `RefreshRunningAsync` / `RefreshInstalledAsync` /
+  `RefreshWindowsAsync` = single-flight
   background refreshes that never block callers and keep old data on
   failure; `EnsureFreshInstalled(ttl)` re-kicks only when the last
   SUCCESSFUL installed refresh is older than ttl; `Snapshot()` =
@@ -608,7 +630,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Title, exe/comm via appctx.ProcInfo("/proc", pid); RunningApps
   dedupes by pid keeping the first window's title, skips pid==0, caps
   64, sorts by Name; InstalledApps = appctx.ScanDesktopDirs; no X ->
-  ok=false); windows = GetForegroundWindow / EnumWindows (package-
+  ok=false; OpenWindows (winlist_linux.go) = the same client-list
+  walk kept per-WINDOW: skips untitled windows + os.Getpid()'s own,
+  caps 100, no pid dedup -- and winlist_linux.go's ActivateWindow(id)
+  = EWMH _NET_ACTIVE_WINDOW ClientMessage to the root window (format
+  32, source indication 2 = pager, SubstructureRedirect|Notify mask);
+  winlist_other.go (!linux) = OpenWindows not-ok + ActivateWindow
+  error, so the open-windows feature does not exist on
+  windows/darwin yet); windows = GetForegroundWindow / EnumWindows (package-
   level callback) + IsWindowVisible + GetWindowTextW +
   GetWindowThreadProcessId + OpenProcess/QueryFullProcessImageNameW
   (Name = exe base sans extension), InstalledApps = HKLM+HKCU
@@ -684,7 +713,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   otherwise, merge order irrelevant) + `src/wails.d.ts` (ambient
   types for the Wails-injected `window.go` / `window.runtime` incl.
   EventsOn, the event payload shapes, and the plugin wire contract
-  TargetInfo/PluginAction/PluginResult/PluginEmission -- keep in sync
+  TargetInfo/PluginAction (incl. activate_window + its window
+  field)/PluginResult/PluginEmission -- keep in sync
   with internal/app + internal/plugin payload structs).
 - `examples/plugins/` -- three shipped example plugins, INERT until a
   user copies one into `<configDir>/plugins/` (each has a README with
