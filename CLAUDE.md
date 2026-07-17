@@ -9,7 +9,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   cli.Execute(app.Version, runGUI); runGUI configures the window
   (frameless, always-on-top, start-hidden, hide-on-close, fixed
   680x460), binds the App object and wires OnStartup / OnDomReady /
-  OnShutdown. Zero-arg invocation boots the GUI exactly as before the
+  OnShutdown. When app.WindowTranslucent() (internal/app
+  translucent.go: fresh config.Load, window.translucent, any error =
+  false) reports true, runGUI adds BackgroundColour = zero RGBA
+  (alpha 0) + Linux{WindowIsTranslucent: true, WebviewGpuPolicy:
+  Never} for the per-pixel-alpha window; the GPU policy MUST stay
+  pinned to Never -- wails' nil-Linux default (#2977 workaround)
+  lives only in the nil branch, so an unpinned non-nil Linux block
+  silently flips it to OnDemand -- and with the flag off both fields
+  stay nil, byte-identical to the pre-flag call (CI screenshots run
+  flag-off). Zero-arg invocation boots the GUI exactly as before the
   CLI existed (CI screenshots rely on that). Deliberately has NO test
   file and stays minimal (see coverage note below).
 - `internal/app` -- the Wails-bound App object and its methods
@@ -267,7 +276,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/config` -- config.json load/save (roots, excludes, hotkey,
   rescanIntervalMinutes, maxResults, theme, plugins {disabled, entries
   {<id>: {disabled, settings}}}, bangs {sigils, aliases}, tray
-  {disabled}, history {persistDisabled}, firefox {frequentSites
+  {disabled}, history {persistDisabled}, window {translucent -- the
+  per-pixel-alpha window flag main.go reads via
+  app.WindowTranslucent(); zero value = opaque = the safe default,
+  needs a compositor, README "Translucent window" holds the measured
+  evidence}, firefox {frequentSites
   {minVisitsMonth 11, minVisitsWeek 1, refreshMinutes 10, maxResults
   6, profileDir ""}, openTabs {maxResults 6, profileDir ""}} -- the
   frequentSites defaults encode ">10 visits in 30 days AND >=1 in 7";
@@ -283,10 +296,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   written, corrupt file -> defaults + error returned for logging.
   `Normalize` repairs zero values (empty theme -> dark, nil plugin
   entries/bang aliases -> empty maps, empty sigils -> the ! / @
-  defaults, non-positive firefox.frequentSites and firefox.openTabs
-  numbers -> their defaults; history needs nothing -- its zero value
-  means persistence ON, the tray.disabled convention); entry settings
-  are opaque json.RawMessage forwarded verbatim to that plugin.
+  defaults; history needs nothing -- its zero value means persistence
+  ON, the tray.disabled convention; non-positive firefox.frequentSites
+  and firefox.openTabs numbers -> their defaults); entry settings are
+  opaque json.RawMessage forwarded verbatim to that plugin.
 - `internal/history` -- the query-history store behind the frontend's
   Up/Down recall, pure and exhaustively unit-tested. `New(path,
   persist)`; `Load()` (missing file or memory-only store = empty +
