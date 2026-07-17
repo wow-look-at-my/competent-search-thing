@@ -42,6 +42,10 @@ const (
 	DefaultFirefoxMaxResults     = 6
 )
 
+// DefaultFirefoxTabsMaxResults caps one Open Tabs section (see
+// OpenTabsConfig).
+const DefaultFirefoxTabsMaxResults = 6
+
 // Config is the on-disk configuration.
 type Config struct {
 	// Roots are the directories to index.
@@ -108,12 +112,16 @@ type TrayConfig struct {
 	Disabled bool `json:"disabled"`
 }
 
-// FirefoxConfig configures the Firefox history integration.
+// FirefoxConfig configures the Firefox integrations.
 type FirefoxConfig struct {
 	// FrequentSites configures the frequently-visited-sites result
 	// section (the builtin firefox-frequent provider; disable it via
 	// plugins.entries["firefox-frequent"].disabled).
 	FrequentSites FrequentSitesConfig `json:"frequentSites"`
+	// OpenTabs configures the open-tabs result section (the builtin
+	// firefox-tabs provider; disable it via
+	// plugins.entries["firefox-tabs"].disabled).
+	OpenTabs OpenTabsConfig `json:"openTabs"`
 }
 
 // FrequentSitesConfig tunes which history entries count as "frequent"
@@ -136,14 +144,34 @@ type FrequentSitesConfig struct {
 	ProfileDir string `json:"profileDir"`
 }
 
+// OpenTabsConfig tunes the open-Firefox-tabs result section. Zero or
+// negative numeric values are repaired to the defaults by Normalize.
+// The freshness cadence is fixed: the section re-reads the session
+// snapshot when its mtime changes or after ~15s, matching how often
+// Firefox rewrites it.
+type OpenTabsConfig struct {
+	// MaxResults caps one Open Tabs response (default 6).
+	MaxResults int `json:"maxResults"`
+	// ProfileDir, when non-empty, bypasses profile discovery and reads
+	// this Firefox profile directory's session snapshot directly (same
+	// semantics as frequentSites.profileDir; empty = the shared
+	// discovery).
+	ProfileDir string `json:"profileDir"`
+}
+
 // DefaultFirefox returns the default Firefox integration config.
 func DefaultFirefox() FirefoxConfig {
-	return FirefoxConfig{FrequentSites: FrequentSitesConfig{
-		MinVisitsMonth: DefaultFirefoxMinVisitsMonth,
-		MinVisitsWeek:  DefaultFirefoxMinVisitsWeek,
-		RefreshMinutes: DefaultFirefoxRefreshMinutes,
-		MaxResults:     DefaultFirefoxMaxResults,
-	}}
+	return FirefoxConfig{
+		FrequentSites: FrequentSitesConfig{
+			MinVisitsMonth: DefaultFirefoxMinVisitsMonth,
+			MinVisitsWeek:  DefaultFirefoxMinVisitsWeek,
+			RefreshMinutes: DefaultFirefoxRefreshMinutes,
+			MaxResults:     DefaultFirefoxMaxResults,
+		},
+		OpenTabs: OpenTabsConfig{
+			MaxResults: DefaultFirefoxTabsMaxResults,
+		},
+	}
 }
 
 // DefaultBangSigils returns the default bang sigil set. It returns a
@@ -250,7 +278,8 @@ func Save(c Config) error {
 // Normalize repairs missing or nonsensical fields in place: empty roots
 // fall back to the default root, relative roots are absolutized,
 // zero/negative knobs get their defaults (the firefox.frequentSites
-// numbers included), an empty theme name gets the default theme, nil
+// and firefox.openTabs numbers included), an empty theme name gets the
+// default theme, nil
 // plugin entries and bang aliases become empty maps, and an empty
 // sigil list gets the default sigils. Excludes are left as the user
 // wrote them (an explicitly empty list means "exclude nothing").
@@ -305,5 +334,8 @@ func (c *Config) Normalize() {
 	}
 	if fs.MaxResults <= 0 {
 		fs.MaxResults = DefaultFirefoxMaxResults
+	}
+	if c.Firefox.OpenTabs.MaxResults <= 0 {
+		c.Firefox.OpenTabs.MaxResults = DefaultFirefoxTabsMaxResults
 	}
 }

@@ -164,6 +164,13 @@ type Options struct {
 	// FrequentSitesMax caps one firefox-frequent response (config
 	// firefox.frequentSites.maxResults; non-positive = the default 6).
 	FrequentSitesMax int
+	// OpenTabs supplies the open-Firefox-tabs snapshot for the builtin
+	// firefox-tabs provider; nil (no Firefox profile) means the
+	// provider is not registered at all.
+	OpenTabs func() []TabInfo
+	// OpenTabsMax caps one firefox-tabs response (config
+	// firefox.openTabs.maxResults; non-positive = the default 6).
+	OpenTabsMax int
 	// Logf receives all registry logging (default log.Printf).
 	Logf func(format string, args ...any)
 }
@@ -257,7 +264,7 @@ func (b *builtinBase) match(string, *AppInfo) (string, int, bool) { return "", 0
 
 // addBuiltins registers the builtin providers (bang suggestions, app
 // commands, installed-app launcher, untargeted app search, frequent
-// sites) unless
+// sites, open tabs) unless
 // individually disabled. Builtins register BEFORE external plugins so
 // a manifest can never shadow an app bang or claim a builtin id.
 func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
@@ -277,10 +284,13 @@ func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
 	if !disabled(builtinAppsSearchID) {
 		r.register(newAppsSearchProvider(opts.InstalledApps))
 	}
-	// The frequent-sites provider exists only when the app layer found
-	// a Firefox profile and supplied a source (see Options).
+	// The Firefox-backed providers exist only when the app layer found
+	// a Firefox profile and supplied their sources (see Options).
 	if opts.FrequentSites != nil && !disabled(builtinFirefoxID) {
 		r.register(newFirefoxProvider(opts.FrequentSites, opts.FrequentSitesMax))
+	}
+	if opts.OpenTabs != nil && !disabled(builtinTabsID) {
+		r.register(newTabsProvider(opts.OpenTabs, opts.OpenTabsMax))
 	}
 }
 

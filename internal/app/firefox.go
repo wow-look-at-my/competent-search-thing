@@ -11,11 +11,12 @@ import (
 )
 
 // firefoxContext returns the app-lifetime context bounding every
-// Firefox history refresh goroutine, created on first use and
-// cancelled in Shutdown. Registry reloads build fresh caches (so
-// config changes apply) but every cache shares THIS context, never a
-// per-registry one -- a reload can therefore never leak an unbounded
-// refresh, and quit aborts an in-flight history copy promptly.
+// Firefox data refresh goroutine (history and session snapshot),
+// created on first use and cancelled in Shutdown. Registry reloads
+// build fresh caches (so config changes apply) but every cache shares
+// THIS context, never a per-registry one -- a reload can therefore
+// never leak an unbounded refresh, and quit aborts an in-flight
+// history copy promptly.
 func (a *App) firefoxContext() context.Context {
 	a.pluginMu.Lock()
 	defer a.pluginMu.Unlock()
@@ -25,24 +26,46 @@ func (a *App) firefoxContext() context.Context {
 	return a.firefoxCtx
 }
 
-// frequentSites assembles the frequent-sites source consumed by the
-// plugin registry: the config profileDir override or profile
-// discovery over the platform base dirs, then a snapshot cache bound
-// to the firefox context. When no profile exists anywhere it returns
-// nil -- the builtin provider is then never registered -- and the one
-// quiet log line is the only trace. The returned getter is cheap and
+// firefoxSources assembles the Firefox-backed plugin sources --
+// frequent sites and open tabs -- around ONE shared profile
+// discovery: each section's config profileDir override wins for that
+// section, and the override-less sections share a single FindProfile
+// pass over the platform base dirs. When discovery comes up empty
+// every override-less source is nil -- the builtin providers are then
+// never registered -- and the one quiet log line is the only trace.
+func (a *App) firefoxSources(cfg config.FirefoxConfig) (sites func() []plugin.SiteInfo, tabs func() []plugin.TabInfo) {
+	discovered := ""
+	failed := false
+	resolve := func(override string) string {
+		if override != "" {
+			return override
+		}
+		if discovered == "" && !failed {
+			prof, ok := firefox.FindProfile(a.plat.firefoxBases())
+			if !ok {
+				failed = true
+				log.Printf("firefox: no profile found; the Firefox result sections are disabled")
+				return ""
+			}
+			discovered = prof.Dir
+		}
+		return discovered
+	}
+	if dir := resolve(cfg.FrequentSites.ProfileDir); dir != "" {
+		sites = a.frequentSites(cfg.FrequentSites, dir)
+	}
+	if dir := resolve(cfg.OpenTabs.ProfileDir); dir != "" {
+		tabs = a.openTabs(dir)
+	}
+	return sites, tabs
+}
+
+// frequentSites builds the frequent-sites source over the resolved
+// profile directory: a snapshot cache bound to the firefox context,
+// adapted to the plugin wire type. The returned getter is cheap and
 // non-blocking: it reads the cache's current snapshot and converts;
 // the cache refreshes itself in the background.
-func (a *App) frequentSites(fs config.FrequentSitesConfig) func() []plugin.SiteInfo {
-	dir := fs.ProfileDir
-	if dir == "" {
-		prof, ok := firefox.FindProfile(a.plat.firefoxBases())
-		if !ok {
-			log.Printf("firefox: no profile found; frequent-sites disabled")
-			return nil
-		}
-		dir = prof.Dir
-	}
+func (a *App) frequentSites(fs config.FrequentSitesConfig, dir string) func() []plugin.SiteInfo {
 	cache := firefox.NewCache(a.firefoxContext(), firefox.CacheOptions{
 		ProfileDir: dir,
 		MinMonth:   fs.MinVisitsMonth,
@@ -58,6 +81,35 @@ func (a *App) frequentSites(fs config.FrequentSitesConfig) func() []plugin.SiteI
 		out := make([]plugin.SiteInfo, len(sites))
 		for i, s := range sites {
 			out[i] = plugin.SiteInfo{URL: s.URL, Title: s.Title, Host: s.Host, Visits: s.Visits}
+		}
+		return out
+	}
+}
+
+// openTabs builds the open-tabs source over the resolved profile
+// directory: a session-snapshot cache bound to the same firefox
+// context (freshness is mtime- and TTL-gated inside the cache; there
+// is no config cadence knob), adapted to the plugin wire type like
+// frequentSites.
+func (a *App) openTabs(dir string) func() []plugin.TabInfo {
+	cache := firefox.NewTabCache(a.firefoxContext(), firefox.TabCacheOptions{
+		ProfileDir: dir,
+		Logf:       log.Printf,
+	})
+	return func() []plugin.TabInfo {
+		tabs := cache.Tabs()
+		if len(tabs) == 0 {
+			return nil
+		}
+		out := make([]plugin.TabInfo, len(tabs))
+		for i, tb := range tabs {
+			out[i] = plugin.TabInfo{
+				URL:          tb.URL,
+				Title:        tb.Title,
+				Host:         tb.Host,
+				Pinned:       tb.Pinned,
+				LastAccessed: tb.LastAccessed,
+			}
 		}
 		return out
 	}

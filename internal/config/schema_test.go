@@ -71,13 +71,19 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 			Aliases: map[string]string{"math": "calc"},
 		},
 		Tray: TrayConfig{Disabled: true},
-		Firefox: FirefoxConfig{FrequentSites: FrequentSitesConfig{
-			MinVisitsMonth: 20,
-			MinVisitsWeek:  2,
-			RefreshMinutes: 30,
-			MaxResults:     10,
-			ProfileDir:     "/home/me/.mozilla/firefox/abc.default",
-		}},
+		Firefox: FirefoxConfig{
+			FrequentSites: FrequentSitesConfig{
+				MinVisitsMonth: 20,
+				MinVisitsWeek:  2,
+				RefreshMinutes: 30,
+				MaxResults:     10,
+				ProfileDir:     "/home/me/.mozilla/firefox/abc.default",
+			},
+			OpenTabs: OpenTabsConfig{
+				MaxResults: 8,
+				ProfileDir: "/home/me/.mozilla/firefox/abc.default",
+			},
+		},
 	}
 	data, err = json.Marshal(full)
 	require.NoError(t, err)
@@ -109,6 +115,10 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"firefox key typo":       `{"firefox":{"frequentSites":{"profileDirr":"/x"}}}`,
 		"non-string profileDir":  `{"firefox":{"frequentSites":{"profileDir":7}}}`,
 		"unknown firefox block":  `{"firefox":{"telemetry":{}}}`,
+		"zero openTabs max":      `{"firefox":{"openTabs":{"maxResults":0}}}`,
+		"negative openTabs max":  `{"firefox":{"openTabs":{"maxResults":-2}}}`,
+		"openTabs key typo":      `{"firefox":{"openTabs":{"maxResluts":6}}}`,
+		"non-string tabs dir":    `{"firefox":{"openTabs":{"profileDir":7}}}`,
 	}
 	for name, doc := range cases {
 		require.Error(t, validateConfigJSON(sch, []byte(doc)), "case %q must fail validation", name)
@@ -184,4 +194,6 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json $defs/firefoxConfig out of sync with FirefoxConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(FrequentSitesConfig{})), configSchemaProperties(t, "frequentSitesConfig"),
 		"config.schema.json $defs/frequentSitesConfig out of sync with FrequentSitesConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(OpenTabsConfig{})), configSchemaProperties(t, "openTabsConfig"),
+		"config.schema.json $defs/openTabsConfig out of sync with OpenTabsConfig")
 }

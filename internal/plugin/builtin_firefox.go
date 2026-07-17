@@ -59,15 +59,11 @@ func newFirefoxProvider(sites func() []SiteInfo, max int) *firefoxProvider {
 	}
 }
 
-// match implements the all_queries trigger contract with the default
-// min_query_len of 2: every query of at least two runes (trimmed)
-// reaches the provider, with no boost.
+// match is the shared all_queries contract (min_query_len 2): every
+// query of at least two runes (trimmed) reaches the provider, with no
+// boost.
 func (p *firefoxProvider) match(query string, _ *AppInfo) (string, int, bool) {
-	stripped := strings.TrimSpace(query)
-	if utf8.RuneCountInString(stripped) < firefoxMinQueryLen {
-		return "", 0, false
-	}
-	return stripped, 0, true
+	return allQueriesMatch(query)
 }
 
 func (p *firefoxProvider) query(_ context.Context, req Request) ([]Result, []string, error) {
