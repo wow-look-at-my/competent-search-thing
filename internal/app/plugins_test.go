@@ -36,6 +36,7 @@ type fakeDispatcher struct {
 	mu     sync.Mutex
 	calls  []dispatchRecord
 	target plugin.TargetInfo
+	cheat  plugin.Emission
 	errs   []error
 	closed int
 }
@@ -45,6 +46,12 @@ func (f *fakeDispatcher) Dispatch(ctx context.Context, query string, gen int64, 
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, dispatchRecord{ctx: ctx, query: query, gen: gen, appCtx: appCtx, emit: emit})
 	return f.target
+}
+
+func (f *fakeDispatcher) CheatSheet() plugin.Emission {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cheat
 }
 
 func (f *fakeDispatcher) Errors() []error { return f.errs }
@@ -179,6 +186,49 @@ func TestQueryPluginsWithoutRegistry(t *testing.T) {
 	require.Equal(t, plugin.TargetInfo{}, a.QueryPlugins("x", 1), "safe before Startup")
 	a.Startup(context.Background()) // the test builder seam yields a nil registry
 	require.Equal(t, plugin.TargetInfo{}, a.QueryPlugins("x", 2), "safe with a nil registry")
+}
+
+func TestCheatSheetWithoutRegistry(t *testing.T) {
+	a, _ := newTestApp(t, nil, Options{})
+	e := a.CheatSheet() // safe before Startup
+	require.NotNil(t, e.Results, "JS must see results: [], never null")
+	require.Empty(t, e.Results)
+	require.Empty(t, e.Plugin)
+
+	a.Startup(context.Background()) // the test builder seam yields a nil registry
+	e = a.CheatSheet()
+	require.NotNil(t, e.Results)
+	require.Empty(t, e.Results)
+}
+
+func TestCheatSheetFillsNilResults(t *testing.T) {
+	a, _, f := newPluginTestApp(t)
+	f.cheat = plugin.Emission{Plugin: "bangs", Name: "Commands"} // nil Results
+	e := a.CheatSheet()
+	require.Equal(t, "bangs", e.Plugin)
+	require.Equal(t, "Commands", e.Name)
+	require.NotNil(t, e.Results, "nil registry results are normalized for JSON")
+	require.Empty(t, e.Results)
+}
+
+func TestCheatSheetFromRealRegistry(t *testing.T) {
+	a, _ := newTestApp(t, nil, Options{})
+	a.newRegistry = func() dispatcher {
+		return plugin.New(plugin.Options{Version: Version, Logf: func(string, ...any) {}})
+	}
+	a.Startup(context.Background())
+
+	e := a.CheatSheet()
+	require.Equal(t, "bangs", e.Plugin)
+	require.Equal(t, "Commands", e.Name)
+	require.EqualValues(t, 0, e.Gen)
+	var titles []string
+	for _, res := range e.Results {
+		titles = append(titles, res.Title)
+	}
+	require.Equal(t,
+		[]string{"!app", "!config", "!launch", "!quit", "!reload", "!rescan", "!version"},
+		titles, "the builtin bang list, sorted, titled with the primary sigil")
 }
 
 func TestToggleCapturesFocusBeforeShow(t *testing.T) {
