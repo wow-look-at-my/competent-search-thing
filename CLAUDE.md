@@ -270,22 +270,42 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   "nothing to talk to" vs a broken exchange. Handlers run on conn
   goroutines and must be goroutine-safe.
 - `internal/index` -- the index engine. `Store`: compact
-  column-oriented data (interned parent-dir table; lowercased +
-  original-case name blobs with 0x00 separators and offset tables;
-  tombstone removals). `Store.Query`: case-insensitive substring
+  column-oriented data (interned parent-dir table; ONE original-case
+  name blob with 0x00 separators and one offset table -- deliberately
+  no lowercased twin of the names or the dir table, case-insensitivity
+  is folded in at scan time; tombstone removals). fold.go is the
+  folding machinery: foldPattern picks the regime per query --
+  all-ASCII queries fold byte-wise (foldTable, 'A'-'Z' only) and scan
+  the blob with ciIndexASCII (rarest-byte anchor via a static
+  name-frequency table, bytes.IndexByte over both case variants,
+  fold-verify around each candidate); queries with non-ASCII runes
+  fold per rune with unicode.ToLower (decodeRuneAt, foldPrefixLen,
+  foldContains, foldHasSuffix -- generic over []byte|string) on a
+  per-entry slow path, O(hay*pat), correct but linear (hundreds of ms
+  at tens of millions). SEMANTICS (pinned in fold_test.go): ASCII
+  queries against ASCII data are byte-identical to the old
+  strings.ToLower behavior; the two runes whose simple lowercase IS
+  ASCII (U+0130 dotted I -> i, U+212A Kelvin -> k) are NO LONGER
+  matched by plain-ASCII queries (the fast path never decodes stored
+  UTF-8), while queries containing them still match both forms;
+  invalid UTF-8 still compares as U+FFFD per byte. The naive test
+  reference models share the fold definition (foldPattern + the
+  testFold helper) but keep independent stdlib-strings matching.
+  `Store.Query`: case-insensitive substring
   search, sharded across NumCPU goroutines with per-shard bounded
   top-K heaps; ranking exact > prefix > substring, dirs before files,
   shorter then lexicographic paths. A query containing a path
   separator (on windows '/' too, normalized) dispatches to path mode
   (path.go): matched against the FULL path via a per-query dir-table
-  prematch (dirs whose lowered path+sep contains the query -- every
-  child matches) plus boundary splits q = S + R at the query's
-  separators (S a sep-terminated dir suffix, R a name prefix checked
-  against the name blob); ranking exact-path > path-suffix >
-  path-prefix > substring with the same tie-breaks; `dirsLower` (the
-  lowercased twin of the dir table, ~one string header per dir) is
-  the only layout addition, and the name-only scan is untouched
-  beyond one IndexByte per query. `Walk`: parallel walker (worker
+  prematch (dirs whose folded path+sep contains the query -- every
+  child matches; matchDirASCII keeps byte-length arithmetic, its
+  matchDirFold twin decides "covers all of V" by fold-equality
+  because rune folds shift byte lengths) plus boundary splits
+  q = S + R at the query's
+  separators (S a sep-terminated dir suffix, R a name prefix
+  fold-checked against the name blob); ranking exact-path >
+  path-suffix >
+  path-prefix > substring with the same tie-breaks. `Walk`: parallel walker (worker
   pool + LIFO queue) with exclude patterns (`Excluder`: bare pattern
   = base name, pattern with separator = full path), symlinks indexed
   but never descended, permission errors counted not fatal, throttled
@@ -304,8 +324,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   package var is the test seam. `Add`/`Remove`
   are the watcher-phase entry points. `Store.Footprint()` /
   `Manager.Footprint()` (footprint.go): exact byte accounting of every
-  column/blob (len-based; 16B string headers; lowered-dir bytes
-  counted only where lowering changed content) plus documented
+  column/blob (len-based; 16B string headers) plus documented
   approximations for the dirIndex and children maps, and
   BytesPerEntry -- diagnostics for the whole-filesystem sizing work.
   A bare `Store` is NOT

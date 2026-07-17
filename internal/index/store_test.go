@@ -1,7 +1,6 @@
 package index
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -169,11 +168,13 @@ func TestOriginalCasePreserved(t *testing.T) {
 }
 
 func TestUnicodeNames(t *testing.T) {
-	// U+0130 (capital I with dot above, 2 bytes) lowercases to plain
-	// "i" (1 byte): original and lowered blobs then have different
-	// lengths, exercising the separate offset tables. U+1E9E (capital
-	// sharp s, 3 bytes) lowercases to U+00DF (2 bytes). All non-ASCII
-	// text stays escaped in this source file by convention.
+	// The store keeps names in original case only; queries carrying
+	// non-ASCII runes fold per rune at scan time (fold.go). U+1E9E
+	// (capital sharp s) folds to U+00DF, U+0130 (capital dotted I) to
+	// plain "i" -- the byte-length-shifting folds. The ASCII-query
+	// side of the U+0130/U+212A semantics is pinned in
+	// TestFoldSemanticsPins. All non-ASCII text stays escaped in this
+	// source file by convention.
 	s := NewStore()
 	ist := mustAdd(t, s, "/u", "\u0130stanbul.txt", false)
 	street := mustAdd(t, s, "/u", "Stra\u1e9eE", false)
@@ -184,7 +185,7 @@ func TestUnicodeNames(t *testing.T) {
 		query string
 		want  int32
 	}{
-		{"istanbul", ist},
+		{"\u0130stanbul", ist},
 		{"\u0130STANBUL", ist},
 		{"stra\u00dfe", street},
 		{"Stra\u1e9eE", street},
@@ -198,9 +199,15 @@ func TestUnicodeNames(t *testing.T) {
 		require.Equal(t, s.Name(tc.want), res[0].Name, "query %q", tc.query)
 	}
 
-	// Original casing round-trips even when byte lengths shifted.
+	// Original casing round-trips.
 	require.Equal(t, "/u/\u0130stanbul.txt", s.EntryPath(ist))
 	require.Equal(t, "Stra\u1e9eE", s.Name(street))
+
+	// ASCII queries still fold-match mixed-case ASCII names that sit
+	// next to unicode ones in the blob.
+	res := s.Query("plain", 10)
+	require.Len(t, res, 1)
+	require.Equal(t, "plain.txt", res[0].Name)
 }
 
 func TestBlobInvariants(t *testing.T) {
@@ -209,18 +216,15 @@ func TestBlobInvariants(t *testing.T) {
 	mustAdd(t, s, "/u", "\u0130stanbul.txt", false)
 
 	n := s.Len()
-	require.Len(t, s.lowOff, n+1)
-	require.Len(t, s.origOff, n+1)
-	require.Equal(t, uint32(0), s.lowOff[0])
-	require.Equal(t, uint32(len(s.nameLower)), s.lowOff[n])
-	require.Equal(t, uint32(len(s.nameOrig)), s.origOff[n])
+	require.Len(t, s.nameOff, n+1)
+	require.Equal(t, uint32(0), s.nameOff[0])
+	require.Equal(t, uint32(len(s.names)), s.nameOff[n])
 
 	for i := 0; i < n; i++ {
 		id := int32(i)
-		require.Equal(t, nameSep, s.nameLower[s.lowOff[id+1]-1], "entry %d lower separator", i)
-		require.Equal(t, nameSep, s.nameOrig[s.origOff[id+1]-1], "entry %d orig separator", i)
-		require.NotContains(t, string(s.lowerNameBytes(id)), string(nameSep))
-		require.Equal(t, strings.ToLower(s.Name(id)), string(s.lowerNameBytes(id)))
+		require.Equal(t, nameSep, s.names[s.nameOff[id+1]-1], "entry %d separator", i)
+		require.NotContains(t, string(s.nameBytes(id)), string(nameSep))
+		require.Equal(t, s.Name(id), string(s.nameBytes(id)))
 		require.NotEmpty(t, s.Name(id))
 	}
 }

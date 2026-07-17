@@ -1,7 +1,6 @@
 package index
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"github.com/stretchr/testify/require"
@@ -50,12 +49,13 @@ var benchQueries = []struct{ name, q string }{
 }
 
 // countMatches is a plain linear reference count of live entries whose
-// lowered name contains q (used for the hits metric, outside timing).
+// folded name contains q (used for the hits metric, outside timing).
 func countMatches(st *Store, q string) int {
-	pat := []byte(strings.ToLower(q))
+	pat, ascii := foldPattern(q)
+	qs := string(pat)
 	n := 0
 	st.ForEachLive(func(id int32) bool {
-		if bytes.Contains(st.lowerNameBytes(id), pat) {
+		if strings.Contains(testFold(st.Name(id), ascii), qs) {
 			n++
 		}
 		return true
@@ -101,12 +101,13 @@ var benchPathQueries = []struct{ name, q string }{
 }
 
 // countPathMatches is the naive reference count of live entries whose
-// lowered full path contains q (the hits metric, outside timing).
+// folded full path contains q (the hits metric, outside timing).
 func countPathMatches(st *Store, q string) int {
-	ql := strings.ToLower(q)
+	pat, ascii := foldPattern(q)
+	qs := string(pat)
 	n := 0
 	st.ForEachLive(func(id int32) bool {
-		if strings.Contains(strings.ToLower(st.EntryPath(id)), ql) {
+		if strings.Contains(testFold(st.EntryPath(id), ascii), qs) {
 			n++
 		}
 		return true

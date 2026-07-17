@@ -19,18 +19,20 @@ func pathsOf(results []Result) []string {
 }
 
 // naivePathQuery is the independent, obviously-correct reference for
-// path-mode queries: lower the full path, classify with plain strings
+// path-mode queries: fold the full path (via testFold, sharing the
+// fold definition with the engine), classify with plain strings
 // operations (exact, then suffix, then prefix, then substring), sort
 // with the documented total order, truncate.
 func naivePathQuery(entries []refEntry, q string, limit int) []Result {
-	ql := strings.ToLower(q)
+	pat, ascii := foldPattern(q)
+	ql := string(pat)
 	type scored struct {
 		refEntry
 		class uint8
 	}
 	var matches []scored
 	for _, e := range entries {
-		lower := strings.ToLower(e.path)
+		lower := testFold(e.path, ascii)
 		if !strings.Contains(lower, ql) {
 			continue
 		}
@@ -272,8 +274,9 @@ func TestPathQueryMixedCaseAndUnicode(t *testing.T) {
 	require.Equal(t, []string{"/Users/Alice", "/Users/Alice/Notes.txt"},
 		pathsOf(s.Query("/USERS/ALICE", 10)))
 
-	// Unicode folding parity: the engine's per-component lowering must
-	// agree with strings.ToLower over the whole path.
+	// Unicode folding parity: the engine's per-component scan-time
+	// folding (fold.go rune path) must agree with the naive model's
+	// whole-path fold.
 	unicodeQueries := []string{
 		"m\u00fcsic/s\u00f6",
 		"/m\u00fcsic",
@@ -287,6 +290,31 @@ func TestPathQueryMixedCaseAndUnicode(t *testing.T) {
 	}
 	require.Equal(t, []string{"/M\u00fcsic/S\u00f6ng.mp3"},
 		pathsOf(s.Query("m\u00fcsic/s\u00f6", 10)))
+}
+
+// TestPathQueryFoldSemantics pins the path-mode side of the fold.go
+// semantics note: ASCII queries never decode stored UTF-8, so a dir
+// containing U+0130 is only reachable through a query that itself
+// takes the rune path.
+func TestPathQueryFoldSemantics(t *testing.T) {
+	s := NewStore()
+	var ref []refEntry
+	addBoth(t, s, &ref, "/", "\u0130stanbul", true)
+	addBoth(t, s, &ref, "/\u0130stanbul", "gezi.txt", false)
+
+	require.Nil(t, s.Query("/istanbul", 10),
+		"ASCII fast path must not fold the dir's U+0130 to 'i'")
+	require.Nil(t, s.Query("istanbul/ge", 10))
+
+	require.Equal(t, []string{"/\u0130stanbul", "/\u0130stanbul/gezi.txt"},
+		pathsOf(s.Query("/\u0130stanbul", 10)))
+	require.Equal(t, []string{"/\u0130stanbul/gezi.txt"},
+		pathsOf(s.Query("\u0130stanbul/ge", 10)))
+
+	// The naive reference agrees on all four.
+	for _, q := range []string{"/istanbul", "istanbul/ge", "/\u0130stanbul", "\u0130stanbul/ge"} {
+		require.Equal(t, naivePathQuery(ref, q, len(ref)), s.Query(q, len(ref)), "query %q", q)
+	}
 }
 
 // refFromStore snapshots every live entry as a refEntry.
@@ -345,24 +373,12 @@ func TestPathQueryParallelShardsMatchNaive(t *testing.T) {
 	}
 }
 
-// requireDirsLowerSynced asserts the dirs/dirsLower parallel tables
-// never drift.
-func requireDirsLowerSynced(t *testing.T, s *Store) {
-	t.Helper()
-	require.Equal(t, len(s.dirs), len(s.dirsLower))
-	for i, d := range s.dirs {
-		require.Equal(t, strings.ToLower(d), s.dirsLower[i], "dir id %d", i)
-	}
-}
-
 func TestPathQueryAddRemove(t *testing.T) {
 	s := NewStore()
 	mustAdd(t, s, "/data", "keep.txt", false)
-	requireDirsLowerSynced(t, s)
 
 	// A dir interned after the initial adds stays queryable in path mode.
 	mustAdd(t, s, "/data/New Folder", "hit.txt", false)
-	requireDirsLowerSynced(t, s)
 	require.Equal(t, []string{"/data/New Folder/hit.txt"},
 		pathsOf(s.Query("new folder/hi", 10)))
 
@@ -372,7 +388,6 @@ func TestPathQueryAddRemove(t *testing.T) {
 
 	// Resurrection makes the entry match again.
 	mustAdd(t, s, "/data/New Folder", "hit.txt", false)
-	requireDirsLowerSynced(t, s)
 	require.Equal(t, []string{"/data/New Folder/hit.txt"},
 		pathsOf(s.Query("new folder/hi", 10)))
 

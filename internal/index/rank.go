@@ -33,8 +33,8 @@ func (s *Store) candCompare(a, b cand) int {
 		return cmp.Compare(a.pathLen, b.pathLen)
 	}
 	return compareJoined(
-		s.dirs[s.parent[a.id]], s.origNameBytes(a.id),
-		s.dirs[s.parent[b.id]], s.origNameBytes(b.id),
+		s.dirs[s.parent[a.id]], s.nameBytes(a.id),
+		s.dirs[s.parent[b.id]], s.nameBytes(b.id),
 	)
 }
 

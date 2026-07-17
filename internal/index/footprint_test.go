@@ -12,8 +12,8 @@ func TestFootprintEmptyStore(t *testing.T) {
 	require.Zero(t, f.Entries)
 	require.Zero(t, f.LiveEntries)
 	require.Zero(t, f.Dirs)
-	require.Equal(t, int64(8), f.OffsetBytes, "the two offset tables hold their leading 0 each")
-	require.Equal(t, int64(8), f.TotalBytes)
+	require.Equal(t, int64(4), f.OffsetBytes, "the offset table holds its leading 0")
+	require.Equal(t, int64(4), f.TotalBytes)
 	require.Zero(t, f.BytesPerEntry(), "no division by zero on an empty store")
 }
 
@@ -33,21 +33,18 @@ func TestFootprintKnownTree(t *testing.T) {
 	require.Equal(t, 2, f.LiveEntries)
 	require.Equal(t, 2, f.Dirs, `"/Data" and "/Data/sub"`)
 
-	// Exact columns: names "foo"+"sub"+"bar.txt" plus one separator
-	// each = 16 bytes per blob; offsets are 2 tables of 4 uint32s;
-	// parent 3 uint32s; flags 3 bytes.
-	require.Equal(t, int64(16), f.NameLowerBytes)
-	require.Equal(t, int64(16), f.NameOrigBytes)
-	require.Equal(t, int64(32), f.OffsetBytes)
+	// Exact columns: the single original-case blob holds "Foo"+"sub"+
+	// "Bar.txt" plus one separator each = 16 bytes; offsets are one
+	// table of 4 uint32s; parent 3 uint32s; flags 3 bytes.
+	require.Equal(t, int64(16), f.NameBytes)
+	require.Equal(t, int64(16), f.OffsetBytes)
 	require.Equal(t, int64(12), f.ParentBytes)
 	require.Equal(t, int64(3), f.FlagBytes)
 
-	// Dir columns: "/Data" (5) + "/Data/sub" (9) = 14 bytes; both
-	// lowered forms differ from the originals, so the lowered copies
-	// are separate allocations counted in full; 4 string headers.
+	// Dir column: "/Data" (5) + "/Data/sub" (9) = 14 bytes and 2
+	// string headers; no lowered twin exists anymore.
 	require.Equal(t, int64(14), f.DirStringBytes)
-	require.Equal(t, int64(14), f.DirLowerExtraBytes)
-	require.Equal(t, int64(64), f.DirHeaderBytes)
+	require.Equal(t, int64(32), f.DirHeaderBytes)
 
 	// The dirIndex approximation is a deterministic formula over
 	// len(key): (16+4+48)*2 entries + 14 key bytes.
@@ -60,22 +57,12 @@ func TestFootprintKnownTree(t *testing.T) {
 	require.GreaterOrEqual(t, f.ChildrenApproxBytes, floor)
 	require.LessOrEqual(t, f.ChildrenApproxBytes, floor+4*3)
 
-	sum := f.NameLowerBytes + f.NameOrigBytes + f.OffsetBytes +
+	sum := f.NameBytes + f.OffsetBytes +
 		f.ParentBytes + f.FlagBytes + f.DirStringBytes +
-		f.DirLowerExtraBytes + f.DirHeaderBytes +
+		f.DirHeaderBytes +
 		f.DirIndexApproxBytes + f.ChildrenApproxBytes
 	require.Equal(t, sum, f.TotalBytes)
 	require.InDelta(t, float64(sum)/3, f.BytesPerEntry(), 0.001)
-}
-
-func TestFootprintLowercaseDirsShareBytes(t *testing.T) {
-	st := NewStore()
-	_, err := st.AddEntry("/all/lower", "file.txt", false)
-	require.NoError(t, err)
-	f := st.Footprint()
-	require.Equal(t, int64(10), f.DirStringBytes)
-	require.Zero(t, f.DirLowerExtraBytes,
-		"an already-lowercase dir path shares its bytes with the lowered column")
 }
 
 func TestManagerFootprintPassthrough(t *testing.T) {

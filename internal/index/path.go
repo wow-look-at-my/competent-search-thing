@@ -16,9 +16,10 @@ import (
 // implementation exploits the interned parent-dir table: because entry
 // names can never contain a separator (validateName) while a path-mode
 // query always does, every occurrence of the query in a full path
-// V + name (V = lowered parent dir + trailing separator) either lies
-// entirely within V or straddles the dir/name join as q = S + R with S
-// a separator-terminated suffix of V and R a prefix of the name. A
+// V + name (V = parent dir + trailing separator, compared with the
+// scan-time case folding of fold.go) either lies entirely within V or
+// straddles the dir/name join as q = S + R with S a
+// separator-terminated suffix of V and R a prefix of the name. A
 // per-query plan therefore precomputes, per interned dir, whether q
 // occurs in V (every child matches) plus the boundary remainders R to
 // test against the name blob; the entry scan then costs one dir-table
@@ -78,7 +79,8 @@ type dirPathInfo struct {
 // pathPlan is the pooled per-query precomputation: one dirPathInfo per
 // interned dir plus a shared arena of boundary remainders.
 type pathPlan struct {
-	q     string // normalized lowered query
+	q     string // normalized pre-folded query (see foldPattern)
+	ascii bool   // folding regime the query was prepared for
 	seps  []int  // separator positions i in q with i < len(q)-1
 	infos []dirPathInfo
 	rems  []pathRem
@@ -88,19 +90,23 @@ var pathPlanPool = sync.Pool{New: func() any { return new(pathPlan) }}
 
 // queryPath is the path-mode counterpart of Query, reached when the
 // pattern contains a separator. It shares the shard/heap/selectTop
-// machinery and the candCompare tie-breaks with the name scan.
-func (s *Store) queryPath(pat []byte, limit int) []Result {
+// machinery and the candCompare tie-breaks with the name scan. The dir
+// table holds original-case paths only, so every plan compare folds
+// case at match time in the pattern's regime (fold.go).
+func (s *Store) queryPath(pat []byte, ascii bool, limit int) []Result {
 	if len(pat) > maxPathQueryLen {
 		return nil
 	}
 	if sepByte != '/' {
+		// '/' is ASCII, so the byte rewrite is safe in both folding
+		// regimes (it can never sit inside a multi-byte rune).
 		for i, b := range pat {
 			if b == '/' {
 				pat[i] = sepByte
 			}
 		}
 	}
-	plan := s.buildPathPlan(string(pat))
+	plan := s.buildPathPlan(string(pat), ascii)
 	defer pathPlanPool.Put(plan)
 	if planDead(plan) {
 		return nil
@@ -138,13 +144,14 @@ func (s *Store) queryPath(pat []byte, limit int) []Result {
 	return s.selectTop(heaps, limit)
 }
 
-// buildPathPlan precomputes the per-dir match state for the lowered,
+// buildPathPlan precomputes the per-dir match state for the pre-folded,
 // normalized query qs. The dir loop is sharded across NumCPU disjoint
 // ranges of s.dirs with per-shard remainder arenas, stitched serially
 // into the plan arena afterwards.
-func (s *Store) buildPathPlan(qs string) *pathPlan {
+func (s *Store) buildPathPlan(qs string, ascii bool) *pathPlan {
 	plan := pathPlanPool.Get().(*pathPlan)
 	plan.q = qs
+	plan.ascii = ascii
 	plan.rems = plan.rems[:0]
 	plan.seps = plan.seps[:0]
 	for i := 0; i < len(qs)-1; i++ {
@@ -165,7 +172,7 @@ func (s *Store) buildPathPlan(qs string) *pathPlan {
 	}
 	if workers <= 1 {
 		for d := 0; d < nd; d++ {
-			plan.infos[d], plan.rems = matchDir(qs, plan.seps, s.dirsLower[d], plan.rems)
+			plan.infos[d], plan.rems = matchDir(ascii, qs, plan.seps, s.dirs[d], plan.rems)
 		}
 		return plan
 	}
@@ -183,7 +190,7 @@ func (s *Store) buildPathPlan(qs string) *pathPlan {
 			defer wg.Done()
 			var rems []pathRem
 			for d := lo; d < hi; d++ {
-				plan.infos[d], rems = matchDir(qs, plan.seps, s.dirsLower[d], rems)
+				plan.infos[d], rems = matchDir(ascii, qs, plan.seps, s.dirs[d], rems)
 			}
 			arenas[w] = rems
 		}(w, lo, hi)
@@ -220,11 +227,23 @@ func planDead(plan *pathPlan) bool {
 	return true
 }
 
-// matchDir computes one dir's dirPathInfo for query qs (seps = its
-// separator split positions), appending boundary remainders to rems.
-// dl is the lowered dir path; its virtual form V is dl plus a trailing
-// separator unless dl is a filesystem root already ending in one.
-func matchDir(qs string, seps []int, dl string, rems []pathRem) (dirPathInfo, []pathRem) {
+// matchDir computes one dir's dirPathInfo for the pre-folded query qs
+// (seps = its separator split positions), appending boundary remainders
+// to rems. dl is the ORIGINAL-case dir path; its virtual form V is dl
+// plus a trailing separator unless dl is a filesystem root already
+// ending in one. The two implementations share one structure and
+// differ only in the folding regime of every compare.
+func matchDir(ascii bool, qs string, seps []int, dl string, rems []pathRem) (dirPathInfo, []pathRem) {
+	if ascii {
+		return matchDirASCII(qs, seps, dl, rems)
+	}
+	return matchDirFold(qs, seps, dl, rems)
+}
+
+// matchDirASCII is matchDir for all-ASCII queries: byte-wise foldTable
+// compares. ASCII folding preserves byte counts, so the byte-length
+// arithmetic (lenV, offsets) is exact.
+func matchDirASCII(qs string, seps []int, dl string, rems []pathRem) (dirPathInfo, []pathRem) {
 	rootForm := strings.HasSuffix(dl, sepStr)
 	lenV := len(dl)
 	if !rootForm {
@@ -235,11 +254,11 @@ func matchDir(qs string, seps []int, dl string, rems []pathRem) (dirPathInfo, []
 	// q occurs within V: entirely inside dl, or ending exactly at V's
 	// final separator. rootForm is excluded from the second clause so a
 	// doubled-separator query never false-matches the root dir.
-	info.full = strings.Contains(dl, qs) ||
-		(!rootForm && qs[last] == sepByte && strings.HasSuffix(dl, qs[:last]))
+	info.full = ciContainsASCII(dl, qs) ||
+		(!rootForm && qs[last] == sepByte && ciHasSuffixASCII(dl, qs[:last]))
 	// V starts with q: within dl's start, or q == dl + separator.
-	info.qPrefix = strings.HasPrefix(dl, qs) ||
-		(!rootForm && len(qs) == len(dl)+1 && qs[last] == sepByte && qs[:len(dl)] == dl)
+	info.qPrefix = ciHasPrefixASCII(dl, qs) ||
+		(!rootForm && len(qs) == len(dl)+1 && qs[last] == sepByte && ciHasPrefixASCII(dl, qs[:last]))
 	info.remLo = uint32(len(rems))
 	for _, i := range seps {
 		k := i + 1
@@ -248,9 +267,9 @@ func matchDir(qs string, seps []int, dl string, rems []pathRem) (dirPathInfo, []
 		// separator is the shared final one, so S is tested verbatim).
 		var ok bool
 		if rootForm {
-			ok = strings.HasSuffix(dl, qs[:k])
+			ok = ciHasSuffixASCII(dl, qs[:k])
 		} else {
-			ok = strings.HasSuffix(dl, qs[:i])
+			ok = ciHasSuffixASCII(dl, qs[:i])
 		}
 		if ok {
 			rems = append(rems, pathRem{k: uint16(k), fullDir: k == lenV})
@@ -260,9 +279,41 @@ func matchDir(qs string, seps []int, dl string, rems []pathRem) (dirPathInfo, []
 	return info, rems
 }
 
+// matchDirFold is matchDir for queries carrying non-ASCII runes:
+// rune-folding compares. Folding can change byte lengths (U+0130 folds
+// 2 bytes -> 1), so "S covers all of V" is decided by fold-equality
+// instead of byte-length arithmetic.
+func matchDirFold(qs string, seps []int, dl string, rems []pathRem) (dirPathInfo, []pathRem) {
+	rootForm := strings.HasSuffix(dl, sepStr)
+	last := len(qs) - 1
+	var info dirPathInfo
+	info.full = foldContains(dl, qs) ||
+		(!rootForm && qs[last] == sepByte && foldHasSuffix(dl, qs[:last]))
+	info.qPrefix = foldPrefixLen(dl, qs) >= 0 ||
+		(!rootForm && qs[last] == sepByte && foldEquals(dl, qs[:last]))
+	info.remLo = uint32(len(rems))
+	for _, i := range seps {
+		k := i + 1
+		var ok, fullDir bool
+		if rootForm {
+			ok = foldHasSuffix(dl, qs[:k])
+			fullDir = ok && foldEquals(dl, qs[:k])
+		} else {
+			ok = foldHasSuffix(dl, qs[:i])
+			fullDir = ok && foldEquals(dl, qs[:i])
+		}
+		if ok {
+			rems = append(rems, pathRem{k: uint16(k), fullDir: fullDir})
+		}
+	}
+	info.remHi = uint32(len(rems))
+	return info, rems
+}
+
 // scanRangePath classifies entries [lo, hi) against the plan and feeds
 // live matches into h. Per entry it is one dir-table lookup plus, for
-// dirs with boundary splits, an alloc-free prefix compare per split.
+// dirs with boundary splits, an alloc-free fold-compare per split
+// against the original-case name bytes.
 func (s *Store) scanRangePath(plan *pathPlan, lo, hi int, h *topK) {
 	const noMatch = ^uint8(0)
 	for e := lo; e < hi; e++ {
@@ -280,14 +331,23 @@ func (s *Store) scanRangePath(plan *pathPlan, lo, hi int, h *topK) {
 				class = classPathPrefix
 			}
 		}
-		nb := s.lowerNameBytes(int32(e))
+		nb := s.nameBytes(int32(e))
 		for _, r := range plan.rems[info.remLo:info.remHi] {
 			rem := plan.q[r.k:]
-			if len(nb) < len(rem) || string(nb[:len(rem)]) != rem {
-				continue
+			var whole bool
+			if plan.ascii {
+				if !ciHasPrefixASCII(nb, rem) {
+					continue
+				}
+				whole = len(rem) == len(nb)
+			} else {
+				pl := foldPrefixLen(nb, rem)
+				if pl < 0 {
+					continue
+				}
+				whole = pl == len(nb)
 			}
 			c := classPathSub
-			whole := len(rem) == len(nb)
 			switch {
 			case r.fullDir && whole:
 				c = classPathExact
@@ -306,7 +366,7 @@ func (s *Store) scanRangePath(plan *pathPlan, lo, hi int, h *topK) {
 		if class == noMatch {
 			continue
 		}
-		nameLen := int(s.origOff[e+1] - 1 - s.origOff[e])
+		nameLen := int(s.nameOff[e+1] - 1 - s.nameOff[e])
 		pathLen := joinedLen(s.dirs[s.parent[e]], nameLen)
 		h.add(cand{id: int32(e), pathLen: int32(pathLen), class: class, isDir: s.flags[e]&flagDir != 0})
 	}

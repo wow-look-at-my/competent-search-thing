@@ -1,7 +1,6 @@
 package index
 
 import (
-	"bytes"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -21,16 +20,20 @@ type refEntry struct {
 // naiveQuery is an independent, obviously-correct implementation of the
 // documented ranking, used to cross-check Store.Query. It fully sorts
 // every match with the same total order (class, dir-first, path length,
-// lexicographic path).
+// lexicographic path). Folding goes through foldPattern + testFold so
+// engine and reference share one fold definition (fold.go's foldTable
+// and foldRune) while the matching itself stays independent stdlib
+// strings operations over folded copies.
 func naiveQuery(entries []refEntry, q string, limit int) []Result {
-	ql := strings.ToLower(q)
+	pat, ascii := foldPattern(q)
+	ql := string(pat)
 	type scored struct {
 		refEntry
 		class uint8
 	}
 	var matches []scored
 	for _, e := range entries {
-		lower := strings.ToLower(e.name)
+		lower := testFold(e.name, ascii)
 		if !strings.Contains(lower, ql) {
 			continue
 		}
@@ -183,6 +186,38 @@ func TestQueryMatchesNaiveReference(t *testing.T) {
 	}
 }
 
+// TestQueryNonASCIISlowPath drives the rune slow path in name mode:
+// non-ASCII queries against mixed ASCII/unicode names, cross-checked
+// against the naive reference (which shares the fold definition).
+func TestQueryNonASCIISlowPath(t *testing.T) {
+	s := NewStore()
+	var ref []refEntry
+	addBoth(t, s, &ref, "/u", "\u00c4hnlich.txt", false)
+	addBoth(t, s, &ref, "/u", "\u00e4hnlich.txt", false)
+	addBoth(t, s, &ref, "/u", "plain.txt", false)
+	addBoth(t, s, &ref, "/u", "M\u00fcsic", true)
+	addBoth(t, s, &ref, "/u/M\u00fcsic", "S\u00f6ng.mp3", false)
+	addBoth(t, s, &ref, "/u", "Stra\u1e9eE", false)
+
+	// Prefix match on a folded first rune, original casing returned.
+	res := s.Query("\u00e4hnl", 10)
+	require.Equal(t, []string{"/u/\u00c4hnlich.txt", "/u/\u00e4hnlich.txt"}, pathsOf(res))
+
+	for _, q := range []string{
+		"\u00e4hnl", "\u00c4HNLICH.TXT", "m\u00fcsic", "s\u00f6ng",
+		"stra\u00dfe", "Stra\u1e9eE", "\u00f6", "\u00e4hnlich.txt", "nix\u00e4",
+	} {
+		require.Equal(t, naiveQuery(ref, q, len(ref)), s.Query(q, len(ref)),
+			"non-ASCII query %q", q)
+	}
+
+	// The slow path shares the sharding machinery: push past one shard.
+	big := buildSynthStore(13, minShardEntries*2+7)
+	mustAdd(t, big, "/bench", "\u00c4hnlich_deep.txt", false)
+	res = big.Query("\u00e4hnlich_de", 10)
+	require.Equal(t, []string{"/bench/\u00c4hnlich_deep.txt"}, pathsOf(res))
+}
+
 func TestQueryTombstonesSkipped(t *testing.T) {
 	s := NewStore()
 	buildSampleTree(t, s)
@@ -200,14 +235,15 @@ func TestQueryTombstonesSkipped(t *testing.T) {
 
 // TestQueryParallelShardsMatchLinearScan pushes the store well past the
 // single-shard threshold and cross-checks the parallel result set
-// against a trivial linear scan over the blob accessors.
+// against a trivial linear scan over the fold reference.
 func TestQueryParallelShardsMatchLinearScan(t *testing.T) {
 	st := buildSynthStore(7, 3*minShardEntries+123)
 	for _, q := range []string{"data", "zzqx", "a", "_1", "qqnomatch"} {
-		pat := []byte(strings.ToLower(q))
+		pat, ascii := foldPattern(q)
+		qs := string(pat)
 		want := make(map[string]bool)
 		st.ForEachLive(func(id int32) bool {
-			if bytes.Contains(st.lowerNameBytes(id), pat) {
+			if strings.Contains(testFold(st.Name(id), ascii), qs) {
 				want[st.EntryPath(id)] = true
 			}
 			return true

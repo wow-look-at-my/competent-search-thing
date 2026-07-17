@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"runtime"
 	"sort"
-	"strings"
 	"sync"
 )
 
@@ -30,24 +29,28 @@ const minShardEntries = 4096
 // matched against the full path instead of the name (see path.go); the
 // name-only scan below is untouched by that dispatch.
 //
-// The scan is sharded across NumCPU contiguous entry ranges; each
-// worker scans its slice of the lowercased name blob with bytes.Index
-// and keeps its own bounded top-limit heap, so a keystroke over a
-// million entries never sorts a full match list.
+// The scan is sharded across NumCPU contiguous entry ranges. The store
+// keeps names in original case only, so matching folds case at scan
+// time (fold.go): an all-ASCII query scans the contiguous name blob
+// with the ciIndexASCII anchor search and a per-worker bounded
+// top-limit heap, so a keystroke over a million entries never sorts a
+// full match list; a query with non-ASCII runes takes the per-entry
+// rune-folding slow path with the same sharding and ranking.
 func (s *Store) Query(q string, limit int) []Result {
 	n := s.Len()
 	if q == "" || limit <= 0 || n == 0 {
 		return nil
 	}
-	pat := []byte(strings.ToLower(q))
+	pat, ascii := foldPattern(q)
 	if bytes.IndexByte(pat, nameSep) >= 0 {
 		// No name can contain NUL; a NUL in the pattern could only
 		// false-match across the blob separator.
 		return nil
 	}
 	if hasPathSep(pat) {
-		return s.queryPath(pat, limit)
+		return s.queryPath(pat, ascii, limit)
 	}
+	qs := string(pat)
 
 	workers := runtime.NumCPU()
 	if max := (n + minShardEntries - 1) / minShardEntries; workers > max {
@@ -56,7 +59,7 @@ func (s *Store) Query(q string, limit int) []Result {
 	heaps := make([]*topK, workers)
 	if workers == 1 {
 		heaps[0] = newTopK(s, limit)
-		s.scanRange(pat, 0, n, heaps[0])
+		s.scanNames(qs, ascii, 0, n, heaps[0])
 	} else {
 		per := (n + workers - 1) / workers
 		var wg sync.WaitGroup
@@ -71,7 +74,7 @@ func (s *Store) Query(q string, limit int) []Result {
 			go func(w, lo, hi int) {
 				defer wg.Done()
 				h := newTopK(s, limit)
-				s.scanRange(pat, lo, hi, h)
+				s.scanNames(qs, ascii, lo, hi, h)
 				heaps[w] = h
 			}(w, lo, hi)
 		}
@@ -81,26 +84,37 @@ func (s *Store) Query(q string, limit int) []Result {
 	return s.selectTop(heaps, limit)
 }
 
-// scanRange scans entries [lo, hi) for pat and feeds live matches into
-// h. The shard boundaries fall on name boundaries by construction, and
-// because neither names nor pat contain the 0x00 separator, a match
-// can never span two names. After a hit the scan skips to the end of
-// the matched name, so each entry is reported at most once, at the
-// first occurrence of pat inside its name.
-func (s *Store) scanRange(pat []byte, lo, hi int, h *topK) {
-	base := s.lowOff[lo]
-	blob := s.nameLower[base:s.lowOff[hi]]
+// scanNames scans one shard with the folding regime the pattern was
+// prepared for.
+func (s *Store) scanNames(pat string, ascii bool, lo, hi int, h *topK) {
+	if ascii {
+		s.scanRange(pat, lo, hi, h)
+		return
+	}
+	s.scanRangeFold(pat, lo, hi, h)
+}
+
+// scanRange scans entries [lo, hi) for the pre-folded ASCII pattern and
+// feeds live matches into h. The shard boundaries fall on name
+// boundaries by construction, and because neither names nor pat contain
+// the 0x00 separator (the separator never fold-equals a pattern byte),
+// a match can never span two names. After a hit the scan skips to the
+// end of the matched name, so each entry is reported at most once, at
+// the first occurrence of pat inside its name.
+func (s *Store) scanRange(pat string, lo, hi int, h *topK) {
+	base := s.nameOff[lo]
+	blob := s.names[base:s.nameOff[hi]]
 	off := 0
 	cur := lo
 	for {
-		rel := bytes.Index(blob[off:], pat)
+		rel := ciIndexASCII(blob[off:], pat)
 		if rel < 0 {
 			return
 		}
 		pos := base + uint32(off+rel)
 		// Map the hit position to its entry: the unique e in [cur, hi)
-		// with lowOff[e] <= pos < lowOff[e+1].
-		e := cur + sort.Search(hi-cur, func(k int) bool { return s.lowOff[cur+k+1] > pos })
+		// with nameOff[e] <= pos < nameOff[e+1].
+		e := cur + sort.Search(hi-cur, func(k int) bool { return s.nameOff[cur+k+1] > pos })
 		if s.flags[e]&flagTombstone == 0 {
 			h.add(s.makeCand(int32(e), pos, len(pat)))
 		}
@@ -108,26 +122,52 @@ func (s *Store) scanRange(pat []byte, lo, hi int, h *topK) {
 		if next >= hi {
 			return
 		}
-		off = int(s.lowOff[next] - base)
+		off = int(s.nameOff[next] - base)
 		cur = next
 	}
 }
 
+// scanRangeFold is the non-ASCII counterpart of scanRange: a per-entry
+// rune-folding classification (see fold.go). O(entries * name * pat) --
+// the documented slow path for queries carrying non-ASCII runes.
+func (s *Store) scanRangeFold(pat string, lo, hi int, h *topK) {
+	for e := lo; e < hi; e++ {
+		if s.flags[e]&flagTombstone != 0 {
+			continue
+		}
+		nb := s.nameBytes(int32(e))
+		var class uint8
+		if pl := foldPrefixLen(nb, pat); pl >= 0 {
+			class = classPrefix
+			if pl == len(nb) {
+				class = classExact
+			}
+		} else if foldContains(nb, pat) {
+			class = classSub
+		} else {
+			continue
+		}
+		pathLen := joinedLen(s.dirs[s.parent[e]], len(nb))
+		h.add(cand{id: int32(e), pathLen: int32(pathLen), class: class, isDir: s.flags[e]&flagDir != 0})
+	}
+}
+
 // makeCand builds the ranking candidate for entry e whose first match
-// (of a patLen-byte lowercased pattern) starts at absolute blob
+// (of a patLen-byte pre-folded ASCII pattern) starts at absolute blob
 // position pos. It allocates nothing: the path length is derived from
-// the offset tables.
+// the offset table. ASCII folding preserves byte counts, so the length
+// compare against patLen is exact.
 func (s *Store) makeCand(e int32, pos uint32, patLen int) cand {
-	start := s.lowOff[e]
+	start := s.nameOff[e]
 	class := classSub
 	if pos == start {
 		class = classPrefix
-		if int(s.lowOff[e+1]-1-start) == patLen {
+		if int(s.nameOff[e+1]-1-start) == patLen {
 			class = classExact
 		}
 	}
 	dir := s.dirs[s.parent[e]]
-	pathLen := joinedLen(dir, int(s.origOff[e+1]-1-s.origOff[e]))
+	pathLen := joinedLen(dir, int(s.nameOff[e+1]-1-s.nameOff[e]))
 	return cand{id: e, pathLen: int32(pathLen), class: class, isDir: s.flags[e]&flagDir != 0}
 }
 
