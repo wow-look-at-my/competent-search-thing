@@ -62,7 +62,7 @@
         },
         "entries": {
           "type": "object",
-          "description": "Per-plugin overrides keyed by provider id (the built-in ids 'bangs', 'app', 'apps', 'firefox-frequent' and 'firefox-tabs' work here too).",
+          "description": "Per-plugin overrides keyed by provider id (the built-in ids 'bangs', 'app', 'apps', 'apps-search', 'firefox-frequent' and 'firefox-tabs' work here too).",
           "patternProperties": {
             "^[a-z0-9][a-z0-9_-]{0,31}$": { "$ref": "#/$defs/pluginEntry" }
           },

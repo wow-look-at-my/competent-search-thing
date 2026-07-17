@@ -170,7 +170,7 @@ func TestNewRegistersTabsProviderOnlyWithSource(t *testing.T) {
 	})
 	defer r.Close()
 	require.Contains(t, r.byID, builtinTabsID)
-	require.Len(t, r.providers, 4, "app + apps + firefox-frequent + firefox-tabs")
+	require.Len(t, r.providers, 5, "app + apps + apps-search + firefox-frequent + firefox-tabs")
 	require.Empty(t, r.byID[builtinTabsID].(*tabsProvider).bangNames())
 	require.Empty(t, r.Errors())
 }
