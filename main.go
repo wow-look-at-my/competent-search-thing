@@ -56,6 +56,7 @@ func runGUI(opts cli.RunOptions) error {
 		Hotkey:        cfg.Hotkey,
 		IPC:           opts.Server,
 		ShowOnStartup: opts.ShowOnStartup,
+		TrayDisabled:  cfg.Tray.Disabled,
 	})
 
 	return wails.Run(&options.App{

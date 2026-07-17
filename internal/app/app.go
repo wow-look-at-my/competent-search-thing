@@ -73,6 +73,9 @@ type Options struct {
 	// ShowOnStartup asks for the bar to be shown as soon as the
 	// frontend is ready (set when a CLI toggle/show started the app).
 	ShowOnStartup bool
+	// TrayDisabled turns the tray icon off (wire config's
+	// tray.disabled here); the default zero value keeps it on.
+	TrayDisabled bool
 }
 
 // App is the Wails-bound application object. It carries the Wails
@@ -85,7 +88,7 @@ type App struct {
 	buildOnce sync.Once
 	hkOnce    sync.Once
 
-	mu         sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, lastThemeErr, domReady, pendingShow
+	mu         sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, lastThemeErr, domReady, pendingShow
 	ctx        context.Context
 	visible    bool
 	lastToggle time.Time
@@ -97,6 +100,12 @@ type App struct {
 	hotkeyCancel context.CancelFunc
 	portalHK     portalHandle
 	hotkeyDesc   string
+	// Tray icon (see tray.go in this package): the running handle and
+	// the cancel func aborting a Start still waiting on the bus.
+	// newTray is a seam over buildTray so unit tests never dial a
+	// session bus.
+	trayH        trayHandle
+	trayCancel   context.CancelFunc
 	lastThemeErr string
 	// domReady flips when the Wails OnDomReady hook fires; before
 	// that the frontend cannot render, so summons (ShowOnStartup, an
@@ -132,6 +141,9 @@ type App struct {
 	appCache     *appctx.Cache
 	newRegistry  func() dispatcher
 
+	trayOnce sync.Once
+	newTray  func() trayHandle
+
 	// rt and plat are seams over the Wails runtime and the platform
 	// layer. Production fills them in New; unit tests MUST replace
 	// every rt member before driving code that reaches it (the real
@@ -151,12 +163,14 @@ func New(m *index.Manager, opt Options) *App {
 		plat:    defaultPlatformSeams(),
 	}
 	a.newRegistry = a.buildRegistry
+	a.newTray = a.buildTray
 	return a
 }
 
 // Startup is wired to the Wails OnStartup hook: it saves the runtime
 // context, brings up the global hotkey through the session's backend
-// plan (best effort; see hotkey.go), wires the
+// plan (best effort; see hotkey.go), starts the tray icon (linux
+// only, async, best effort; see tray.go), wires the
 // single-instance IPC handlers (when Options.IPC is set), brings the
 // plugin layer up (app-context cache + registry; cheap file IO),
 // starts theme hot reload (best effort, see theme.go), and kicks off
@@ -172,6 +186,7 @@ func (a *App) Startup(ctx context.Context) {
 	}
 	a.mu.Unlock()
 	a.hkOnce.Do(a.registerHotkey)
+	a.trayOnce.Do(a.startTray)
 	if a.opt.IPC != nil {
 		a.opt.IPC.SetHandlers(ipc.Handlers{
 			Toggle: a.toggle,
@@ -290,7 +305,9 @@ func (a *App) emitDegraded(s watch.Stats) {
 // closing also unlinks the socket), releases the global hotkey
 // (stopping the native listener, aborting a still-running
 // portal/gsettings backend chain, and closing an active portal
-// shortcut), cancels the in-flight plugin generation and closes the
+// shortcut), closes the tray icon (aborting a Start still waiting on
+// the bus; closing the tray's connection unregisters the icon),
+// cancels the in-flight plugin generation and closes the
 // registry, cancels a still-running initial build (its walk aborts
 // and logs "index: initial build cancelled"), and stops the rescanner
 // first (it may be mid-rescan and calls back into the watcher to
@@ -314,6 +331,10 @@ func (a *App) Shutdown(_ context.Context) {
 	a.hotkeyCancel = nil
 	ph := a.portalHK
 	a.portalHK = nil
+	th := a.trayH
+	a.trayH = nil
+	trayCancel := a.trayCancel
+	a.trayCancel = nil
 	a.mu.Unlock()
 	if hkCancel != nil {
 		hkCancel()
@@ -324,6 +345,14 @@ func (a *App) Shutdown(_ context.Context) {
 	if ph != nil {
 		if err := ph.Close(); err != nil {
 			log.Printf("hotkey: closing the portal shortcut: %v", err)
+		}
+	}
+	if trayCancel != nil {
+		trayCancel()
+	}
+	if th != nil {
+		if err := th.Close(); err != nil {
+			log.Printf("tray: close: %v", err)
 		}
 	}
 

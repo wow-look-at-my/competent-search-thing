@@ -53,8 +53,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   bind-a-key-to-'competent-search-thing toggle' instructions. The
   effective summon description (hk.String(), the portal's
   bound-trigger description, or the verified installed accelerator)
-  is stored on the App (a.hotkeyDesc, read via hotkeyDescription())
-  for future UI use), wires the
+  is stored on the App (a.hotkeyDesc, read via hotkeyDescription() --
+  EMPTY unless a summon path actually registered, and consumed by the
+  tray tooltip), starts the tray icon once (tray.go in this package:
+  linux-only goos gate -- windows/darwin get nothing for now --
+  Options.TrayDisabled = config tray.disabled logs "tray: disabled in
+  config" and skips; otherwise the `newTray` builder seam (production
+  buildTray = tray.New over trayOptions()) yields the handle and ONE
+  goroutine runs Start under a ctx cancelled in Shutdown -- the tray
+  package degrades quietly by itself, nothing on the startup path
+  waits for the bus, and the menu REUSES app behavior: Show/Hide +
+  icon activation -> the same toggle path the hotkey uses (pending-
+  show deferral included), Rescan now -> requestRescan (the !rescan
+  behavior minus the bar-hide; still-building = friendly logged
+  error), Open config -> openConfigFile (the !config behavior minus
+  the bar-hide), Quit -> runBuiltin("quit"); the tooltip getter wraps
+  hotkeyDescription(), so no shortcut is promised until one is
+  proven), wires the
   single-instance IPC handlers when Options.IPC is set (Toggle =
   toggle, Show = showIfHidden, Hide = Hide; Options.ShowOnStartup
   latches a pending show), brings the plugin
@@ -74,7 +89,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (when present), releases the hotkey (native stop func, cancel of
   the async portal/gsettings chain, idempotent+nil-safe close of the
   active portal handle -- a handle the chain stores after Shutdown
-  ran is closed by the chain itself), cancels the in-flight plugin
+  ran is closed by the chain itself), closes the tray (cancels a
+  Start still waiting on the bus, then the nil-safe idempotent
+  Close), cancels the in-flight plugin
   generation + Close()s the registry, cancels a still-running
   initial build (its walk aborts promptly, logs "index: initial
   build cancelled", discards the partial store, and never starts the
@@ -138,9 +155,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
   incl. run/appSource plus getenv/executable/detectSession/
   startPortal/ensureGnomeBinding, in window.go; defaults in New, plus
-  the `newRegistry` seam); unit tests MUST replace them (see
-  newTestApp, which also nils appSource, stubs newRegistry so no
-  config or X11 IO happens, pins getenv to "" and detectSession to
+  the `newRegistry` and `newTray` seams); unit tests MUST replace
+  them (see
+  newTestApp, which also nils appSource, stubs newRegistry AND
+  newTray so no config, X11 or session-bus IO happens, pins getenv to
+  "" and detectSession to
   the unknown session -- keeping every test on the native
   hotkey/positioning path unless it overrides detectSession -- and
   makes startPortal/ensureGnomeBinding recording fakes) -- real
@@ -201,7 +220,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   memory (see bench_test.go) and a ~50k-entry disk tree.
 - `internal/config` -- config.json load/save (roots, excludes, hotkey,
   rescanIntervalMinutes, maxResults, theme, plugins {disabled, entries
-  {<id>: {disabled, settings}}}, bangs {sigils, aliases}). Lives under
+  {<id>: {disabled, settings}}}, bangs {sigils, aliases}, tray
+  {disabled}). Lives under
   os.UserConfigDir(); the `COMPETENT_SEARCH_CONFIG_DIR` env var
   overrides the directory (tests rely on this); `Dir()` exposes that
   directory (the plugins/ and themes/ dirs live inside it, next to
@@ -405,6 +425,57 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   hotkey.go (startPortalShortcut: Dial -> Available -> TriggerString
   -> Register with ShortcutID "toggle", which must stay stable across
   runs -- the portal keys remembered approvals on it).
+- `internal/tray` -- the tray icon: org.kde.StatusNotifierItem +
+  com.canonical.dbusmenu implemented DIRECTLY over godbus (no cgo, no
+  GTK/libappindicator -- nothing fights Wails for a main loop), pure
+  and headless-tested like internal/portal. `New(Options{ID, Title,
+  Tooltip getter, Menu []MenuItem{Label,Separator,OnClick},
+  OnActivate, Logf})` + `Start(ctx)`: Dial opens a PRIVATE session-bus
+  conn via dbus.SessionBusPrivateNoAutoStartup (NEVER autolaunches a
+  dbus-daemon; no bus = one quiet log line, Start returns nil,
+  degraded); export of /StatusNotifierItem (methods
+  Activate/SecondaryActivate/XAyatanaSecondaryActivate -> OnActivate,
+  ContextMenu/Scroll no-ops) + /MenuBar + org.freedesktop.DBus
+  .Properties on both (the GNOME extension reads EVERYTHING via
+  GetAll and needs Id+Menu before it shows anything) + Introspectable
+  on /, /StatusNotifierItem and /MenuBar (the extension's brute-force
+  item scan walks the introspection tree from "/"); RequestName
+  org.kde.StatusNotifierItem-<pid>-1 (KDE convention, best-effort);
+  registration calls StatusNotifierWatcher.RegisterStatusNotifierItem
+  with the OBJECT PATH "/StatusNotifierItem" -- the v42 extension
+  (Ubuntu 22.04) resolves a leading "/" against the sender directly,
+  while a bus-name argument takes an async name resolution that can
+  fail; a NameOwnerChanged watch (buffered chan, portal precedent)
+  re-registers whenever org.kde.StatusNotifierWatcher gains an owner
+  (GNOME Shell restart, extension reload, host appearing after a
+  degraded start -- "no StatusNotifierItem host" is one log line, not
+  an error). SNI props: Category ApplicationStatus, Status Active,
+  ItemIsMenu false, Menu /MenuBar, IconPixmap ONLY (no IconName: the
+  extension prefers a set name, mangles it with a "-panel" suffix and
+  warns per failed theme lookup -- the pixmap renders
+  deterministically); the icon is a magnifier DRAWN IN CODE (icon.go,
+  analytic coverage rasterizer, stdlib math only, no assets) at
+  22/24/48 px in ARGB32 network byte order (bytes A,R,G,B, straight
+  alpha -- v42 argbToRgba parses exactly that); ToolTip
+  (sa(iiay)ss) carries Title + the summon-shortcut text, re-read from
+  the Tooltip getter at every (re-)registration and announced via
+  NewToolTip on change (GNOME's extension ignores tooltips; KDE
+  shows them). dbusmenu: static tree, root 0 children ids 1..n,
+  revision pinned 1, Version 3 (libdbusmenu's value), GetLayout
+  honoring recursionDepth + propertyNames filter (the extension calls
+  GetLayout(0,-1,["type","children-display"]) then
+  GetGroupProperties(ids,[]) for the rest), GetProperty, Event
+  ("clicked" -> OnClick; opened/closed/hovered ignored; unknown id =
+  dbus error), EventGroup (unknown ids reported back), AboutToShow
+  false, AboutToShowGroup. Close() cancels the watch goroutine,
+  closes the conn (which unregisters the item), idempotent + nil-safe
+  + bounded. Tested against a fake org.kde.StatusNotifierWatcher on a
+  throwaway dbus-daemon (spawn/kill by captured PID, t.Skip without
+  the binary): registration argument, GetAll host-side reads, full
+  dbusmenu surface, watcher-restart + late-host re-registration,
+  tooltip refresh, close/cancel goroutine hygiene. Test gotcha:
+  dbus.Store REUSES a non-nil dest slice's backing array and MERGES
+  into existing maps -- always decode into fresh variables.
 - `internal/gsettings` -- the GNOME custom-keybinding fallback for
   Wayland GNOME sessions whose portal lacks GlobalShortcuts (GNOME <
   48, e.g. Ubuntu 24.04/GNOME 46): pure logic over an injectable
@@ -624,6 +695,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   one for the screenshot step).
 - Linux build deps:
   `apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev`.
+  The internal/portal and internal/tray bus tests also want `dbus`
+  (dbus-daemon; they t.Skip without it, but skipped is not tested --
+  CI has it).
 - go-toolchain AUTO-REWRITES files (gofmt, go.mod/go.sum tidy, lint
   fixes). Always `git add` and commit whatever it changes; never revert
   its edits. On CI the same checks run read-only and a non-canonical

@@ -165,6 +165,9 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// No config.json or plugins-dir IO in unit tests; tests that
 	// exercise the real builder restore a.buildRegistry explicitly.
 	a.newRegistry = func() dispatcher { return nil }
+	// No session-bus IO either: the tray seam yields nothing, so
+	// startTray is a no-op. Tray tests inject a recording fake.
+	a.newTray = func() trayHandle { return nil }
 	return a, r
 }
 
