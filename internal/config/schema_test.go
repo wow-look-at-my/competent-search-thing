@@ -60,6 +60,7 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 		Hotkey:                "ctrl+shift+k",
 		RescanIntervalMinutes: 30,
 		MaxResults:            100,
+		Search:                SearchConfig{FuzzyDisabled: true},
 		Theme:                 "light",
 		Plugins: PluginsConfig{
 			Disabled: false,
@@ -107,6 +108,8 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"negative rootsVersion":            `{"rootsVersion":-1}`,
 		"non-integer rootsVersion":         `{"rootsVersion":"2"}`,
 		"zero maxResults":                  `{"maxResults":0}`,
+		"search fuzzy typo":                `{"search":{"fuzzyDisabld":true}}`,
+		"non-bool search fuzzyDisabled":    `{"search":{"fuzzyDisabled":"yes"}}`,
 		"bad theme name":                   `{"theme":"../evil"}`,
 		"bad plugin entry id":              `{"plugins":{"entries":{"Bad ID":{}}}}`,
 		"non-object settings":              `{"plugins":{"entries":{"calc":{"settings":"loud"}}}}`,
@@ -191,6 +194,8 @@ func configSchemaProperties(t *testing.T, defName string) []string {
 func TestConfigSchemaKeyCompleteness(t *testing.T) {
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(Config{})), configSchemaProperties(t, ""),
 		"config.schema.json top level out of sync with Config")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(SearchConfig{})), configSchemaProperties(t, "searchConfig"),
+		"config.schema.json $defs/searchConfig out of sync with SearchConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PluginsConfig{})), configSchemaProperties(t, "pluginsConfig"),
 		"config.schema.json $defs/pluginsConfig out of sync with PluginsConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PluginEntry{})), configSchemaProperties(t, "pluginEntry"),

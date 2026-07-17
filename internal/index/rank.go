@@ -8,20 +8,32 @@ import (
 
 // cand is a ranking candidate: one matched entry plus the precomputed
 // cheap ranking keys. The expensive lexicographic path tiebreak is
-// evaluated lazily in candCompare only on full key ties.
+// evaluated lazily in candCompare only on full key ties. score is the
+// fuzzy alignment score (fuzzy.go) and stays 0 for every non-fuzzy
+// class, so the score comparison below is a no-op outside the fuzzy
+// tier and every non-fuzzy ordering is byte-identical to before.
 type cand struct {
 	id      int32
 	pathLen int32
+	score   int32
 	class   uint8
 	isDir   bool
 }
 
-// candCompare orders candidates best-first: match class, then
-// directories before files, then shorter full path, then lexicographic
-// full path. Paths are unique per store, so this is a total order.
+// candCompare orders candidates best-first: match class, then (within
+// the fuzzy class only) higher alignment score, then directories before
+// files, then shorter full path, then lexicographic full path. Paths
+// are unique per store, so this is a total order.
+//
+// classFuzzy shares ordinal 3 with path-mode classPathSub, but a query
+// is exactly one mode and path-mode candidates always carry score 0, so
+// the score comparison never fires for them.
 func (s *Store) candCompare(a, b cand) int {
 	if a.class != b.class {
 		return cmp.Compare(a.class, b.class)
+	}
+	if a.class == classFuzzy && a.score != b.score {
+		return cmp.Compare(b.score, a.score) // higher score ranks first
 	}
 	if a.isDir != b.isDir {
 		if a.isDir {

@@ -56,6 +56,13 @@ type Store struct {
 	children map[uint32][]int32 // dir id -> entry ids (live and tombstoned)
 
 	live int // number of non-tombstoned entries
+
+	// byteFreq counts every byte in the names blob (updated on append,
+	// never decremented -- tombstoned names stay in the blob). The
+	// fuzzy phase-2 sweep uses it to anchor on the pattern byte with
+	// the fewest actual blob occurrences (fuzzy.go). A fixed 2 KiB,
+	// deliberately not part of Footprint.
+	byteFreq [256]uint64
 }
 
 // NewStore returns an empty store.
@@ -133,6 +140,9 @@ func (s *Store) AddEntry(parentDir, name string, isDir bool) (int32, error) {
 func (s *Store) appendEntry(pid uint32, parentDir, name string, isDir bool) int32 {
 	id := int32(len(s.parent))
 	s.names, s.nameOff = appendName(s.names, s.nameOff, name)
+	for i := 0; i < len(name); i++ {
+		s.byteFreq[name[i]]++
+	}
 	s.parent = append(s.parent, pid)
 	var f byte
 	if isDir {
