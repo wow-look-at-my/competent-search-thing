@@ -16,25 +16,20 @@ type Footprint struct {
 	LiveEntries int
 	Dirs        int
 
-	// NameLowerBytes / NameOrigBytes are the two name blobs
-	// (0x00-separated); OffsetBytes covers both uint32 offset tables;
+	// NameBytes is the single original-case name blob
+	// (0x00-separated); OffsetBytes its uint32 offset table;
 	// ParentBytes the entry->dir column; FlagBytes the per-entry flag
-	// column.
-	NameLowerBytes int64
-	NameOrigBytes  int64
-	OffsetBytes    int64
-	ParentBytes    int64
-	FlagBytes      int64
+	// column. Case-insensitivity is folded in at scan time (fold.go),
+	// so there are no lowercased twin columns to account for.
+	NameBytes   int64
+	OffsetBytes int64
+	ParentBytes int64
+	FlagBytes   int64
 
 	// DirStringBytes is the byte data of the interned dir paths;
-	// DirLowerExtraBytes counts the lowered copies ONLY where
-	// lowercasing changed the path (strings.ToLower returns the
-	// original string unchanged when nothing lowers, so equal content
-	// means shared bytes); DirHeaderBytes is the 16-byte string
-	// headers of both dir columns.
-	DirStringBytes     int64
-	DirLowerExtraBytes int64
-	DirHeaderBytes     int64
+	// DirHeaderBytes the 16-byte string headers of the dir column.
+	DirStringBytes int64
+	DirHeaderBytes int64
 
 	// DirIndexApproxBytes estimates the path->id map at 16 (string
 	// header) + len(key) + 4 (value) + 48 (bucket overhead) per entry;
@@ -75,26 +70,22 @@ func (s *Store) Footprint() Footprint {
 		Entries:        len(s.parent),
 		LiveEntries:    s.live,
 		Dirs:           len(s.dirs),
-		NameLowerBytes: int64(len(s.nameLower)),
-		NameOrigBytes:  int64(len(s.nameOrig)),
-		OffsetBytes:    4 * int64(len(s.lowOff)+len(s.origOff)),
+		NameBytes:      int64(len(s.names)),
+		OffsetBytes:    4 * int64(len(s.nameOff)),
 		ParentBytes:    4 * int64(len(s.parent)),
 		FlagBytes:      int64(len(s.flags)),
-		DirHeaderBytes: stringHeaderBytes * int64(len(s.dirs)+len(s.dirsLower)),
+		DirHeaderBytes: stringHeaderBytes * int64(len(s.dirs)),
 	}
-	for i, d := range s.dirs {
+	for _, d := range s.dirs {
 		f.DirStringBytes += int64(len(d))
-		if s.dirsLower[i] != d {
-			f.DirLowerExtraBytes += int64(len(s.dirsLower[i]))
-		}
 	}
 	f.DirIndexApproxBytes = int64(len(s.dirIndex))*(stringHeaderBytes+4+mapEntryOverheadBytes) + f.DirStringBytes
 	for _, ids := range s.children {
 		f.ChildrenApproxBytes += sliceHeaderBytes + 4*int64(cap(ids)) + mapEntryOverheadBytes
 	}
-	f.TotalBytes = f.NameLowerBytes + f.NameOrigBytes + f.OffsetBytes +
+	f.TotalBytes = f.NameBytes + f.OffsetBytes +
 		f.ParentBytes + f.FlagBytes + f.DirStringBytes +
-		f.DirLowerExtraBytes + f.DirHeaderBytes +
+		f.DirHeaderBytes +
 		f.DirIndexApproxBytes + f.ChildrenApproxBytes
 	return f
 }

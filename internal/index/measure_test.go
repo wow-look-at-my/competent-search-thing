@@ -123,13 +123,11 @@ func (r measureReport) text() string {
 	row := func(name string, v int64) {
 		fmt.Fprintf(&b, "  %-22s %10.1f MB  %6.2f B/e\n", name, mb(uint64(v)), per(v))
 	}
-	row("name blob (lower):", f.NameLowerBytes)
-	row("name blob (orig):", f.NameOrigBytes)
-	row("offset tables:", f.OffsetBytes)
+	row("name blob:", f.NameBytes)
+	row("offset table:", f.OffsetBytes)
 	row("parent column:", f.ParentBytes)
 	row("flag column:", f.FlagBytes)
 	row("dir strings:", f.DirStringBytes)
-	row("dir lower extra:", f.DirLowerExtraBytes)
 	row("dir headers:", f.DirHeaderBytes)
 	row("dirIndex (approx):", f.DirIndexApproxBytes)
 	row("children (approx):", f.ChildrenApproxBytes)

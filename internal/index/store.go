@@ -23,9 +23,8 @@ const (
 	flagTombstone byte = 1 << 1 // entry has been removed
 )
 
-// nameSep separates entry names inside the nameLower/nameOrig blobs.
-// File names can never contain a NUL byte, so a match can never span
-// two names.
+// nameSep separates entry names inside the names blob. File names can
+// never contain a NUL byte, so a match can never span two names.
 const nameSep byte = 0x00
 
 // Store is the compact in-memory index. Entry data is laid out in flat
@@ -33,11 +32,12 @@ const nameSep byte = 0x00
 // can scan one contiguous byte blob:
 //
 //   - dirs/dirIndex intern every parent-directory path once.
-//   - nameLower holds all entry names lowercased (unicode-aware),
-//     concatenated with a 0x00 separator after each name; lowOff (len
-//     n+1) gives each name's start, and lowOff[i+1]-1 is its end.
-//   - nameOrig/origOff hold the original-case names with their own
-//     offsets (unicode lowercasing can change byte length).
+//   - names holds all entry names in their ORIGINAL case, concatenated
+//     with a 0x00 separator after each name; nameOff (len n+1) gives
+//     each name's start, and nameOff[i+1]-1 is its end. There is
+//     deliberately no lowercased twin of this blob (or of the dir
+//     table): case-insensitivity is folded in at scan time (fold.go),
+//     halving the name storage.
 //   - parent maps entry -> dir id; flags holds per-entry bits.
 //   - children maps dir id -> entry ids, supporting point deletes and
 //     dedup by (parent, name).
@@ -45,14 +45,11 @@ const nameSep byte = 0x00
 // Removals only set tombstone bits; space is reclaimed by rebuilding
 // into a fresh Store (Manager.BuildFromDisk).
 type Store struct {
-	dirs      []string          // dir id -> absolute, clean path
-	dirsLower []string          // dir id -> dirs[i] lowercased (path-mode search)
-	dirIndex  map[string]uint32 // absolute path -> dir id
+	dirs     []string          // dir id -> absolute, clean path (original case)
+	dirIndex map[string]uint32 // absolute path -> dir id
 
-	nameLower []byte   // lowercased names, 0x00-separated
-	lowOff    []uint32 // len n+1; name i is nameLower[lowOff[i]:lowOff[i+1]-1]
-	nameOrig  []byte   // original-case names, 0x00-separated
-	origOff   []uint32 // len n+1, same shape as lowOff
+	names   []byte   // original-case names, 0x00-separated
+	nameOff []uint32 // len n+1; name i is names[nameOff[i]:nameOff[i+1]-1]
 
 	parent   []uint32           // entry -> dir id
 	flags    []byte             // entry -> flag bits
@@ -65,8 +62,7 @@ type Store struct {
 func NewStore() *Store {
 	return &Store{
 		dirIndex: make(map[string]uint32),
-		lowOff:   []uint32{0},
-		origOff:  []uint32{0},
+		nameOff:  []uint32{0},
 		children: make(map[uint32][]int32),
 	}
 }
@@ -79,7 +75,6 @@ func (s *Store) internDir(path string) uint32 {
 	}
 	id := uint32(len(s.dirs))
 	s.dirs = append(s.dirs, path)
-	s.dirsLower = append(s.dirsLower, strings.ToLower(path))
 	s.dirIndex[path] = id
 	return id
 }
@@ -137,8 +132,7 @@ func (s *Store) AddEntry(parentDir, name string, isDir bool) (int32, error) {
 // directory; everyone else goes through AddEntry.
 func (s *Store) appendEntry(pid uint32, parentDir, name string, isDir bool) int32 {
 	id := int32(len(s.parent))
-	s.nameLower, s.lowOff = appendName(s.nameLower, s.lowOff, strings.ToLower(name))
-	s.nameOrig, s.origOff = appendName(s.nameOrig, s.origOff, name)
+	s.names, s.nameOff = appendName(s.names, s.nameOff, name)
 	s.parent = append(s.parent, pid)
 	var f byte
 	if isDir {
@@ -163,7 +157,7 @@ func appendName(blob []byte, offs []uint32, name string) ([]byte, []uint32) {
 // dir id pid, or -1. Matching is on the original name, byte-exact.
 func (s *Store) findChild(pid uint32, name string) int32 {
 	for _, id := range s.children[pid] {
-		if string(s.origNameBytes(id)) == name {
+		if string(s.nameBytes(id)) == name {
 			return id
 		}
 	}
@@ -219,21 +213,15 @@ func (s *Store) LiveCount() int { return s.live }
 func (s *Store) IsDir(id int32) bool { return s.flags[id]&flagDir != 0 }
 
 // Name returns entry id's original-case name.
-func (s *Store) Name(id int32) string { return string(s.origNameBytes(id)) }
+func (s *Store) Name(id int32) string { return string(s.nameBytes(id)) }
 
 // ParentDir returns the absolute path of entry id's parent directory.
 func (s *Store) ParentDir(id int32) string { return s.dirs[s.parent[id]] }
 
-// origNameBytes returns entry id's original name as a subslice of the
+// nameBytes returns entry id's original-case name as a subslice of the
 // blob (no copy; callers must not modify it).
-func (s *Store) origNameBytes(id int32) []byte {
-	return s.nameOrig[s.origOff[id] : s.origOff[id+1]-1]
-}
-
-// lowerNameBytes returns entry id's lowercased name as a subslice of
-// the blob (no copy).
-func (s *Store) lowerNameBytes(id int32) []byte {
-	return s.nameLower[s.lowOff[id] : s.lowOff[id+1]-1]
+func (s *Store) nameBytes(id int32) []byte {
+	return s.names[s.nameOff[id] : s.nameOff[id+1]-1]
 }
 
 // EntryPath reconstructs entry id's full absolute path.
