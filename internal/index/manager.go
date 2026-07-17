@@ -143,6 +143,14 @@ func (m *Manager) ForEachLiveDir(fn func(path string) bool) {
 	})
 }
 
+// Footprint returns the live store's memory accounting under the read
+// lock (diagnostics; see Store.Footprint).
+func (m *Manager) Footprint() Footprint {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.store.Footprint()
+}
+
 // Roots returns a copy of the configured walk roots.
 func (m *Manager) Roots() []string { return copyStrings(m.roots) }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -161,6 +162,10 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 		defer r.mu.Unlock()
 		return r.moveOK
 	}
+	// The hint probe answers "nothing exists" so Search never touches
+	// the real disk; hint tests override it (some with the real
+	// os.Lstat over temp trees).
+	a.plat.lstat = func(string) (os.FileInfo, error) { return nil, fs.ErrNotExist }
 	a.plat.open = func(path string) error { r.call("open:" + path); return nil }
 	a.plat.reveal = func(path string) error { r.call("reveal:" + path); return nil }
 	a.plat.run = func(argv []string) error { r.call("run:" + strings.Join(argv, " ")); return nil }

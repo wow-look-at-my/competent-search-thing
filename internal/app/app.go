@@ -430,14 +430,19 @@ func (a *App) Shutdown(_ context.Context) {
 // Search returns index entries whose name contains query,
 // case-insensitively, best matches first (limit: the configured
 // MaxResults). It always returns a non-nil slice so the frontend can
-// iterate without null checks.
+// iterate without null checks. An absolute-path query with zero index
+// results may yield one synthetic outside-indexed-roots hint result
+// instead of nothing (see hint.go).
 func (a *App) Search(query string) []Result {
 	q := strings.TrimSpace(query)
 	if q == "" || a.manager == nil {
 		return []Result{}
 	}
 	res := a.manager.Query(q, 0)
-	if res == nil {
+	if len(res) == 0 {
+		if r, ok := a.outsideRootsHint(q); ok {
+			return []Result{r}
+		}
 		return []Result{}
 	}
 	return res

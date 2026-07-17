@@ -8,6 +8,9 @@ interface WailsSearchResult {
   path: string;
   name: string;
   isDir: boolean;
+  // Optional note rendered in place of the parent-dir line (the
+  // outside-indexed-roots hint; internal/index Result.Hint).
+  hint?: string;
 }
 
 // Bang-target info returned by QueryPlugins (internal/plugin
