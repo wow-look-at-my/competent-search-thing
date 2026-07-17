@@ -124,8 +124,8 @@ func TestTabCacheTTLForcesReRead(t *testing.T) {
 	clock := newFakeClock()
 	var calls atomic.Int32
 	c := NewTabCache(context.Background(), TabCacheOptions{
-		TTL: 15 * time.Second,
-		now: clock.now,
+		TTL:   15 * time.Second,
+		now:   clock.now,
 		mtime: (&fakeMTime{t: fixedNow}).get, // never changes
 		fetch: func(context.Context) ([]Tab, error) {
 			calls.Add(1)
@@ -207,8 +207,8 @@ func TestTabCacheContextCancelStopsRefreshes(t *testing.T) {
 	var calls atomic.Int32
 	started := make(chan struct{}, 1)
 	c := NewTabCache(ctx, TabCacheOptions{
-		Logf: lg.logf,
-		now:  newFakeClock().now,
+		Logf:  lg.logf,
+		now:   newFakeClock().now,
 		mtime: (&fakeMTime{t: fixedNow}).get,
 		fetch: func(fctx context.Context) ([]Tab, error) {
 			calls.Add(1)
