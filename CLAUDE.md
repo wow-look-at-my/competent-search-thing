@@ -634,7 +634,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   you type -- with NO auto-selected row: both auto-select-first
   fallbacks are gated on a non-blank query so Enter on an empty bar
   stays a no-op, and moveSelection enters the unselected list
-  explicitly (Down -> first row, Up -> last);
+  explicitly (Down -> first row, Up -> last); wire() kicks the
+  pipeline once at startup so the sheet is already rendered before
+  the first summon (an app:shown emitted while EventsOn registration
+  is still in flight is missed -- observed on cold WebKit starts);
   "plugin:results" emissions are dropped unless gen === seq, else
   upsert that plugin's section (keyed by id) and re-render the plugin
   area BELOW the file rows, never displacing them; selection is one

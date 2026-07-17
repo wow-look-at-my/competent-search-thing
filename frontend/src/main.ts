@@ -478,6 +478,11 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   wireEvents(app, rt);
   state.indexMsg = "ready";
   refreshIdleStatus();
+  // Run the pipeline once at wire-up so the empty-query cheat sheet
+  // is rendered before the first summon -- an app:shown emitted while
+  // EventsOn registration was still in flight would otherwise be
+  // missed and leave the bar blank until the first keystroke.
+  scheduleSearch(app);
 }
 
 // window.go and window.runtime are injected by the Wails runtime
