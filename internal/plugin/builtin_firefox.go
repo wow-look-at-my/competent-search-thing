@@ -4,8 +4,6 @@ import (
 	"context"
 	"sort"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 )
 
 // builtinFirefoxID is the provider id of the frequent-sites provider.
@@ -139,28 +137,4 @@ func scoreSite(s SiteInfo, needle string) (float64, bool) {
 		return siteScoreAnySubstr, true
 	}
 	return 0, false
-}
-
-// wordStart reports whether needle occurs in s starting a word: at
-// index 0 or right after a rune that is not a letter or digit. Both
-// strings are expected lowercased.
-func wordStart(s, needle string) bool {
-	if needle == "" {
-		return false
-	}
-	for from := 0; ; {
-		i := strings.Index(s[from:], needle)
-		if i < 0 {
-			return false
-		}
-		at := from + i
-		if at == 0 {
-			return true
-		}
-		r, _ := utf8.DecodeLastRuneInString(s[:at])
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
-			return true
-		}
-		from = at + 1
-	}
 }

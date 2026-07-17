@@ -6,8 +6,9 @@ on:
 permissions:
   id-token: write
   contents: read
-  # actions: read lets go-toolchain's autorelease step download the go-build
-  # run artifact it publishes to buildhost.
+  # actions: read is only consumed by go-toolchain's autorelease, which the
+  # 2026-07-17 cleanup removed; kept so restoring autorelease stays a
+  # one-line change.
   actions: read
 
 jobs:
@@ -22,6 +23,13 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: npm ci && npm run build
+
+      - name: Keep the version stamp clean for the deb-shipped binary
+        # go-toolchain injects a transient gomemlimit_gen.go during the
+        # build; untracked, it flips Go's VCS stamp to vcs.modified, and the
+        # deb built below would ship a +dirty binary. .git/info/exclude is
+        # local to the checkout and never committed.
+        run: echo gomemlimit_gen.go >> .git/info/exclude
 
       - uses: wow-look-at-my/go-toolchain@v1
         env:

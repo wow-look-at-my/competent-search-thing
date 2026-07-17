@@ -4,7 +4,6 @@ import (
 	"context"
 	"sort"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -134,27 +133,4 @@ func (p *windowsProvider) query(_ context.Context, req Request) ([]Result, []str
 		})
 	}
 	return results, nil, nil
-}
-
-// wordStart reports whether needle occurs in haystack at a word start:
-// at the very beginning, or right after a rune that is neither a
-// letter nor a digit (so "main" starts a word in "app - main.go" and
-// "foo-main" but not in "domain"). Both strings are expected
-// pre-lowercased.
-func wordStart(haystack, needle string) bool {
-	for from := 0; ; {
-		i := strings.Index(haystack[from:], needle)
-		if i < 0 {
-			return false
-		}
-		i += from
-		if i == 0 {
-			return true
-		}
-		r, _ := utf8.DecodeLastRuneInString(haystack[:i])
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
-			return true
-		}
-		from = i + 1
-	}
 }

@@ -87,7 +87,7 @@ type platformSeams struct {
 	// window-system id (the activate_window plugin action); production
 	// is the native EWMH client message.
 	activateWindow func(id uint32) error
-	appSource       appctx.Source
+	appSource      appctx.Source
 	// firefoxBases lists the Firefox profiles.ini base directories the
 	// frequent-sites discovery probes; production is
 	// firefox.DefaultBaseDirs (the real home), tests pin it.

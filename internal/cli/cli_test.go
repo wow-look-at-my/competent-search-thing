@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -56,10 +57,15 @@ func (g *guiRecorder) closeServers() {
 }
 
 // testSocketEnv points the CLI at a private socket path and returns
-// it.
+// it. The path deliberately avoids t.TempDir: unix socket paths cap at
+// ~104 bytes on darwin, and TMPDIR (/var/folders/...) plus a long test
+// name overflows sun_path there, making bind fail with EINVAL.
 func testSocketEnv(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "s.sock")
+	dir, err := os.MkdirTemp("", "cli")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "s.sock")
 	t.Setenv(ipc.EnvSocket, path)
 	return path
 }
