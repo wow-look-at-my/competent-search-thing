@@ -33,9 +33,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   ErrNoPortal/ErrNoGlobalShortcuts logs one line and falls through,
   ErrDenied STOPS the chain (never write a keybinding after the user
   said no), the gsettings backend refuses an empty executable-seam
-  path and filepath.Abs-resolves a relative one (gsd runs the command
-  with its own cwd/PATH), calls gsettings.EnsureBinding(hotkeyCtx,
-  run, hk, gsettings.ToggleCommand(exe)), then logs one evidence line
+  path, filepath.Abs-resolves a relative one (gsd runs the command
+  with its own cwd/PATH), then prefers the STABLE spelling of that
+  path via platform.StableExecutable(exe, args0-seam) -- resolved
+  os.Executable dies with versioned symlinked installs (Homebrew
+  Cellar/Nix/stow) on every upgrade, so the PATH-shim or argv[0]
+  symlink wins whenever it is proven (os.SameFile) to be the running
+  binary, logged once when it differs -- calls
+  gsettings.EnsureBinding(hotkeyCtx, run, hk,
+  gsettings.ToggleCommand(exe)), logs ONE loud repair line ("hotkey:
+  repaired the GNOME keybinding command: <old> -> <new> ...") when
+  Applied.Repaired reports the self-heal, then logs one evidence line
   quoting the read-back disk state ("hotkey: GNOME keybinding entry
   <path>: binding <b>, command <c>, in custom-keybindings list: <v>")
   followed by EXACTLY ONE loud summary that is HONEST: the "hotkey:
@@ -153,7 +161,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   {plugin,name,gen,results}). ALL Wails
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
-  incl. run/appSource plus getenv/executable/detectSession/
+  incl. run/appSource plus getenv/executable/args0/detectSession/
   startPortal/ensureGnomeBinding, in window.go; defaults in New, plus
   the `newRegistry` and `newTray` seams); unit tests MUST replace
   them (see
@@ -492,8 +500,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   custom-keybindings list; if the app's entry (fixed path ...
   /custom-keybindings/competent-search-thing/) exists it is STICKY --
   the binding is never rewritten (user edits in GNOME Settings
-  survive; Existing=true, zero writes) and only a stale command
-  (moved binary) is refreshed; a fresh entry gets the first free
+  survive; Existing=true) and the stored command SELF-HEALS: it is
+  rewritten (command key only; Repaired=true + PreviousCommand for
+  the app's loud old->new repair log) exactly when it can no longer
+  launch the running binary -- empty/unparseable (commandExecutable,
+  the GLib-shell inverse of ToggleCommand), a non-absolute
+  executable, a dead path, or a live path that is a different file
+  (os.Stat + os.SameFile vs the new command's exe; the
+  brew-upgrade-broke-the-shortcut field fix) -- while a textually
+  different but still-working spelling is kept verbatim (zero writes,
+  read-back verifies the on-disk command); a fresh entry gets the first free
   candidate of [configured, <Control><Alt>space, <Super>space]
   (normalization-deduped) checked against every accelerator in the
   wm/mutter/mutter.wayland/shell/media-keys schemas
@@ -531,6 +547,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   modifiers ctrl/control, shift, alt/option, super/win/cmd/meta; keys
   space/tab/enter/return/esc/escape/a-z/0-9/f1-f12/arrows; unknown
   token -> error naming it) into an OS-neutral `Hotkey{Mods,Key}`;
+  `StableExecutable(exe, args0)` (stablepath.go: the stable spelling
+  of the running binary's path for anything that outlives the process
+  -- exec.LookPath(base) hit kept UNRESOLVED, else abs/Abs-resolved
+  args0, else exe, every candidate same-binary-guarded via
+  os.Stat+os.SameFile so a foreign same-named binary never wins;
+  tested with real tempdir trees, symlinks and t.Setenv(PATH), no
+  seams);
   geometry (`Rect`, `Display{Rect,Work,Primary}`, `PickDisplay`,
   `BarPosition` = centered, top at H/3 - winH/3, clamped;
   `DisplayForWindow` by window center; `WailsPosition` translating

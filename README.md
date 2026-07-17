@@ -1025,10 +1025,26 @@ is running -- otherwise the app logs a WARNING naming exactly what is
 missing, because a keybinding GNOME never grabbed summons nothing.
 
 The binding appears in GNOME Settings > Keyboard > Custom Shortcuts
-as "Competent Search (summon)", and from then on it is yours: edit
-the key there and the app respects the edit on every restart (it logs
-`hotkey: using existing GNOME keybinding ...` and never rewrites it;
-only the stored command is refreshed when the binary moves). To
+as "Competent Search (summon)", and from then on the key is yours:
+edit it there and the app respects the edit on every restart (it logs
+`hotkey: using existing GNOME keybinding ...` and never rewrites it).
+The stored command, though, is app-owned and self-heals: when it no
+longer launches the running binary -- its executable is gone, or the
+path now points at a different file -- the next launch rewrites just
+the command (never the key) and logs the repair:
+
+    hotkey: repaired the GNOME keybinding command: "/home/you/.linuxbrew/Cellar/competent-search-thing/1.0.0/bin/competent-search-thing toggle" -> "/home/you/.linuxbrew/bin/competent-search-thing toggle" (the stored command no longer launched this binary)
+
+Symlinked install layouts (Homebrew's versioned Cellar, Nix, stow)
+are why both rules exist: the app registers the stable path -- the
+PATH shim, e.g. `~/.linuxbrew/bin/competent-search-thing` -- rather
+than the resolved version-pinned path, so upgrading no longer breaks
+the shortcut, and an entry written by an older version heals to the
+stable path on the first launch after an upgrade. (The flip side: a
+command you pointed at some other program yourself is healed back to
+the app on the next launch -- the repair line above is the paper
+trail. A textually different command that still launches this binary
+is left alone.) To
 remove it, delete the shortcut in GNOME Settings, or -- if it is your
 only custom shortcut -- reset the whole custom-keybindings list:
 
@@ -1069,10 +1085,14 @@ nothing? Work through these, in order:
    toggle. If it does, the command is fine and the problem is the
    grab (step 2).
 
-4. **Moved or deleted the binary?** The keybinding stores an absolute
-   path, so moving the binary breaks it until the app is started once
-   from the new location (it refreshes the stored command
-   automatically and logs the refresh).
+4. **Moved, upgraded or deleted the binary?** The keybinding stores
+   an absolute path (preferring the stable PATH shim of a
+   Homebrew/Nix-style install over the resolved versioned path), and
+   a stored command whose executable is gone or no longer this binary
+   self-heals -- but only at app startup. Start the app once from the
+   new location and look for the `hotkey: repaired the GNOME
+   keybinding command: "..." -> "..."` line; the shortcut works again
+   from then on.
 
 5. **Force a backend** for debugging with
    `COMPETENT_SEARCH_HOTKEY_BACKEND` (see
