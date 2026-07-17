@@ -763,6 +763,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (platform_darwin.h/.m: cursor via CGEventCreate, screens via
   NSScreen with bottom-left->top-left conversion, MoveWindow via
   setFrameOrigin on the first NSWindow, all on the main thread).
+  display_darwin.go also carries `#cgo LDFLAGS: -framework
+  UniformTypeIdentifiers` on Wails' behalf: the v2 darwin frontend
+  references UTType without linking that framework, and newer Xcode
+  SDKs fail the production-tag link with _OBJC_CLASS_$_UTType
+  undefined (first hit: the macos-latest runner's Xcode 26.5) -- do
+  not remove it just because no code in the package uses it.
   Also per OS: `AppSource() appctx.Source` (appsource_*.go), the
   app-context glue -- linux = EWMH over conn-per-call xgb
   (_NET_ACTIVE_WINDOW / _NET_CLIENT_LIST -> per-window _NET_WM_PID,
