@@ -93,8 +93,8 @@ body {
 }
 
 #query::selection {
-  background: var(--sb-selection-bg);
-  color: var(--sb-selection-fg);
+  background: var(--sb-accent);
+  color: var(--sb-accent-fg);
 }
 
 /* --- results ------------------------------------------------------ */
