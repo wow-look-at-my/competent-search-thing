@@ -48,8 +48,13 @@ const DefaultFirefoxTabsMaxResults = 6
 
 // Config is the on-disk configuration.
 type Config struct {
-	// Roots are the directories to index.
+	// Roots are the directories to index. The default is the whole
+	// filesystem ("/" on Linux/macOS, the system drive on Windows).
 	Roots []string `json:"roots"`
+	// RootsVersion stamps which roots-defaults generation wrote this
+	// config; 0 (or absent) marks a legacy home-directory-default
+	// config, which Load migrates (see migrateRoots) and rewrites.
+	RootsVersion int `json:"rootsVersion"`
 	// Excludes are walk exclude patterns: a bare pattern matches base
 	// names ("node_modules", "*.tmp"); a pattern with a separator
 	// matches full paths. See internal/index.Excluder.
@@ -79,6 +84,11 @@ type Config struct {
 	// Firefox configures the Firefox history integration (see
 	// internal/firefox).
 	Firefox FirefoxConfig `json:"firefox"`
+
+	// MigrationNotes describes, in human-readable lines, what the
+	// roots migration changed on this Load (empty when nothing did).
+	// Never serialized; the app logs each line loudly at startup.
+	MigrationNotes []string `json:"-"`
 }
 
 // PluginsConfig configures the plugin system. The zero value means
@@ -204,20 +214,15 @@ func DefaultFirefox() FirefoxConfig {
 // fresh slice on every call so callers may modify it safely.
 func DefaultBangSigils() []string { return []string{"!", "/", "@"} }
 
-// Default returns the default configuration: index the user's home
-// directory (falling back to the current directory if the home cannot
-// be determined), skip the usual noise, no periodic rescan.
+// Default returns the default configuration: index the whole
+// filesystem, Everything-style ("/" on Linux/macOS, the system drive
+// on Windows), skip the virtual/volatile system trees plus the usual
+// noise (see migrate.go), no periodic rescan.
 func Default() Config {
-	root, err := os.UserHomeDir()
-	if err != nil || root == "" {
-		root = "."
-	}
-	if abs, err := filepath.Abs(root); err == nil {
-		root = abs
-	}
 	return Config{
-		Roots:                 []string{root},
-		Excludes:              []string{".git", "node_modules", ".cache"},
+		Roots:                 defaultRoots(),
+		RootsVersion:          currentRootsVersion,
+		Excludes:              defaultExcludes(),
 		Hotkey:                DefaultHotkey,
 		RescanIntervalMinutes: 0,
 		MaxResults:            DefaultMaxResults,
@@ -253,10 +258,12 @@ func Path() (string, error) {
 }
 
 // Load reads the config file. A missing file is created with defaults
-// (mkdir -p included). On any error -- unresolvable path, unreadable or
-// corrupt file, failed default write -- Load still returns a usable
-// default config alongside the error; callers log the error and keep
-// going, they never crash.
+// (mkdir -p included). A pre-v2 file is migrated to the current roots
+// defaults (see migrateRoots) and rewritten once, with the changes
+// reported in the returned Config's MigrationNotes. On any error --
+// unresolvable path, unreadable or corrupt file, failed default write
+// or migration rewrite -- Load still returns a usable config alongside
+// the error; callers log the error and keep going, they never crash.
 func Load() (Config, error) {
 	p, err := Path()
 	if err != nil {
@@ -277,7 +284,13 @@ func Load() (Config, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Default(), fmt.Errorf("config: parsing %s: %w", p, err)
 	}
+	migrated := c.migrateRoots()
 	c.Normalize()
+	if migrated {
+		if werr := Save(c); werr != nil {
+			return c, fmt.Errorf("config: persisting the roots migration: %w", werr)
+		}
+	}
 	return c, nil
 }
 

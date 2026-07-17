@@ -81,6 +81,10 @@ type Options struct {
 	// (wire config's history.persistDisabled here); the default zero
 	// value persists it to <configDir>/history.json. See history.go.
 	HistoryPersistDisabled bool
+	// ConfigNotes are the human-readable migration notes config.Load
+	// produced (wire cfg.MigrationNotes here); Startup logs each one
+	// loudly, exactly once, so a changed index scope is never silent.
+	ConfigNotes []string
 }
 
 // App is the Wails-bound application object. It carries the Wails
@@ -92,6 +96,7 @@ type App struct {
 	opt       Options
 	buildOnce sync.Once
 	hkOnce    sync.Once
+	notesOnce sync.Once
 
 	mu         sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, lastThemeErr, domReady, pendingShow, history
 	ctx        context.Context
@@ -205,6 +210,11 @@ func (a *App) Startup(ctx context.Context) {
 		a.pendingShow = true
 	}
 	a.mu.Unlock()
+	a.notesOnce.Do(func() {
+		for _, n := range a.opt.ConfigNotes {
+			log.Printf("config: %s", n)
+		}
+	})
 	a.hkOnce.Do(a.registerHotkey)
 	a.trayOnce.Do(a.startTray)
 	if a.opt.IPC != nil {

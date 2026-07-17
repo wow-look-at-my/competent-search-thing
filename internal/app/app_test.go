@@ -195,6 +195,24 @@ func TestStartupSavesContext(t *testing.T) {
 	require.Equal(t, ctx, a.runtimeCtx())
 }
 
+func TestStartupLogsConfigNotesOnce(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	a, _ := newTestApp(t, nil, Options{ConfigNotes: []string{
+		"index roots upgraded to the whole-filesystem default (/)",
+		"system exclude patterns added for whole-filesystem indexing: /proc",
+	}})
+	a.Startup(context.Background())
+	a.Startup(context.Background()) // a second Startup must not repeat them
+
+	out := buf.String()
+	require.Equal(t, 1, strings.Count(out, "config: index roots upgraded to the whole-filesystem default (/)"),
+		"each migration note is logged exactly once, config-prefixed")
+	require.Equal(t, 1, strings.Count(out, "config: system exclude patterns added"))
+}
+
 func TestSearchBlankQueryReturnsEmpty(t *testing.T) {
 	a, _ := newTestApp(t, index.NewManager(nil, nil, 0), Options{})
 	for _, q := range []string{"", "   ", "\t \n"} {

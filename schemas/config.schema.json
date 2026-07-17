@@ -12,13 +12,20 @@
     "roots": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
-      "description": "Directories to index. Default: your home directory. Relative paths are made absolute on load; an empty or missing list falls back to the default. Symlinks are indexed as entries but never descended."
+      "default": ["/"],
+      "description": "Directories to index. Default: the whole filesystem, Everything-style ('/' on Linux/macOS, the system drive -- usually 'C:\\' -- on Windows). Relative paths are made absolute on load; an empty or missing list falls back to the default. Symlinks are indexed as entries but never descended. Network and virtual filesystem mountpoints under a root are skipped automatically at scan time; add such a mountpoint as an explicit root to index it anyway (see the README's 'Indexing scope')."
+    },
+    "rootsVersion": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 2,
+      "description": "Roots-defaults version stamp, written by the app. 0 (or absent) marks a config from before whole-filesystem indexing: on load the app upgrades roots still set to the old default (the home directory) to the whole-filesystem default, appends the missing system excludes, logs exactly what changed, sets this to 2, and rewrites the file. Customized roots are never touched by the migration. Do not edit by hand unless you want the migration to run again."
     },
     "excludes": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
-      "default": [".git", "node_modules", ".cache"],
-      "description": "Patterns pruned from indexing. A pattern WITHOUT a path separator matches each entry's base name ('node_modules', '*.tmp'): matching directories are pruned, matching files skipped. A pattern WITH a separator matches the full path ('/home/*/secret'). '*' never crosses a separator and there is no '**'. An explicitly empty list means 'exclude nothing'. The same semantics apply to the initial walk, live filesystem events, and rescans."
+      "default": [".git", "node_modules", ".cache", "/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"],
+      "description": "Patterns pruned from indexing. A pattern WITHOUT a path separator matches each entry's base name ('node_modules', '*.tmp'): matching directories are pruned, matching files skipped. A pattern WITH a separator matches the full path ('/home/*/secret'). '*' never crosses a separator and there is no '**'. An explicitly empty list means 'exclude nothing'. The same semantics apply to the initial walk, live filesystem events, and rescans. The default adds the Linux/macOS system entries (/proc, /sys, /dev, /run, /tmp, /var/tmp, lost+found) so a whole-filesystem walk skips virtual and volatile trees; on Windows the default is just the three base-name patterns."
     },
     "hotkey": {
       "type": "string",
@@ -224,8 +231,9 @@
   },
   "examples": [
     {
-      "roots": ["/home/me"],
-      "excludes": [".git", "node_modules", ".cache"],
+      "roots": ["/"],
+      "rootsVersion": 2,
+      "excludes": [".git", "node_modules", ".cache", "/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"],
       "hotkey": "alt+space",
       "rescanIntervalMinutes": 0,
       "maxResults": 50,

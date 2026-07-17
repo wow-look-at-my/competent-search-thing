@@ -174,11 +174,16 @@ func TestNormalize(t *testing.T) {
 	require.Equal(t, Default().Roots, allEmpty.Roots, "only-empty roots fall back to default root")
 }
 
-func TestDefaultFallsBackWithoutHome(t *testing.T) {
+func TestDefaultRootsAreWholeFilesystem(t *testing.T) {
+	// Default() no longer depends on the home directory at all: the
+	// default scope is the whole filesystem (Everything-style).
 	t.Setenv("HOME", "")
 	c := Default()
-	require.Len(t, c.Roots, 1)
-	require.True(t, filepath.IsAbs(c.Roots[0]), "fallback root is absolutized cwd")
+	require.Equal(t, []string{"/"}, c.Roots, "linux/darwin default root is the filesystem root")
+	require.Equal(t, currentRootsVersion, c.RootsVersion)
+	require.Equal(t,
+		[]string{".git", "node_modules", ".cache", "/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"},
+		c.Excludes, "defaults carry the system excludes on unix-likes")
 }
 
 func TestDirUsesEnvOverride(t *testing.T) {
