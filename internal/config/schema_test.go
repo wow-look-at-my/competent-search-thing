@@ -72,6 +72,7 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 		},
 		Tray:    TrayConfig{Disabled: true},
 		History: HistoryConfig{PersistDisabled: true},
+		Window:  WindowConfig{Translucent: true},
 		Firefox: FirefoxConfig{
 			FrequentSites: FrequentSitesConfig{
 				MinVisitsMonth: 20,
@@ -111,6 +112,8 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"non-bool tray disabled":           `{"tray":{"disabled":"yes"}}`,
 		"history persist typo":             `{"history":{"persistDisabld":true}}`,
 		"non-bool history persistDisabled": `{"history":{"persistDisabled":"yes"}}`,
+		"window translucent typo":          `{"window":{"translucnet":true}}`,
+		"non-bool window translucent":      `{"window":{"translucent":"yes"}}`,
 		"zero firefox month":               `{"firefox":{"frequentSites":{"minVisitsMonth":0}}}`,
 		"negative firefox week":            `{"firefox":{"frequentSites":{"minVisitsWeek":-1}}}`,
 		"zero firefox refresh":             `{"firefox":{"frequentSites":{"refreshMinutes":0}}}`,
@@ -195,6 +198,8 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json $defs/trayConfig out of sync with TrayConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(HistoryConfig{})), configSchemaProperties(t, "historyConfig"),
 		"config.schema.json $defs/historyConfig out of sync with HistoryConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(WindowConfig{})), configSchemaProperties(t, "windowConfig"),
+		"config.schema.json $defs/windowConfig out of sync with WindowConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(FirefoxConfig{})), configSchemaProperties(t, "firefoxConfig"),
 		"config.schema.json $defs/firefoxConfig out of sync with FirefoxConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(FrequentSitesConfig{})), configSchemaProperties(t, "frequentSitesConfig"),

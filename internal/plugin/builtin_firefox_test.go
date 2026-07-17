@@ -158,6 +158,14 @@ func TestWordStart(t *testing.T) {
 		{"go", "go", true},
 		{"a b", "", false},
 		{"", "x", false},
+		// Cases folded in from the open-windows provider's copy of
+		// wordStart when the duplicate was removed (both features
+		// share this one helper now).
+		{"foo-main", "main", true},       // after punctuation
+		{"[main] scratch", "main", true}, // after a bracket
+		{"domain", "main", false},        // mid-word only
+		{"domain main", "main", true},    // later word-start occurrence wins
+		{"xx2main", "main", false},       // digits end a word too
 	}
 	for _, tt := range tests {
 		require.Equal(t, tt.want, wordStart(tt.s, tt.needle), "wordStart(%q, %q)", tt.s, tt.needle)

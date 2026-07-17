@@ -48,6 +48,7 @@
     "bangs": { "$ref": "#/$defs/bangsConfig" },
     "tray": { "$ref": "#/$defs/trayConfig" },
     "history": { "$ref": "#/$defs/historyConfig" },
+    "window": { "$ref": "#/$defs/windowConfig" },
     "firefox": { "$ref": "#/$defs/firefoxConfig" }
   },
   "additionalProperties": false,
@@ -207,6 +208,18 @@
         }
       },
       "additionalProperties": false
+    },
+    "windowConfig": {
+      "title": "Native window configuration",
+      "type": "object",
+      "properties": {
+        "translucent": {
+          "type": "boolean",
+          "default": false,
+          "description": "true requests a per-pixel-alpha (RGBA) window so the area outside the bar's rounded corners is truly see-through instead of a squared-off opaque fill. REQUIRES a running compositor: every Wayland session qualifies, but on X11 one must be running when the app starts (a bare window manager like stock openbox shows solid black corners instead). The default keeps the window opaque -- exactly the previous behavior."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "examples": [
@@ -229,6 +242,7 @@
       },
       "tray": { "disabled": false },
       "history": { "persistDisabled": false },
+      "window": { "translucent": false },
       "firefox": {
         "frequentSites": {
           "minVisitsMonth": 11,
