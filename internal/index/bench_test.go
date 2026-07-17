@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -262,4 +263,23 @@ func BenchmarkSearchHuge(b *testing.B) {
 	}
 	run("name", hugeNameQueries, false)
 	run("path", hugePathQueries, true)
+}
+
+// BenchmarkHugeStoreMeasure performs the one-shot huge-store memory
+// measurement (footprint, heap, timed live GCs, then release +
+// baseline GCs -- see hugeMeasureAndReport) and afterwards times
+// forced GCs on the emptied heap as its b.N loop, so ns/op is the
+// post-release GC baseline. Declared AFTER BenchmarkSearchHuge: the
+// measurement releases the shared store when done. Skips unless
+// COMPETENT_SEARCH_MEASURE_HUGE=1.
+func BenchmarkHugeStoreMeasure(b *testing.B) {
+	if os.Getenv(measureHugeEnv) == "" {
+		b.Skip("set COMPETENT_SEARCH_MEASURE_HUGE=1 to run the huge-store measurement")
+	}
+	hugeMeasureAndReport(b)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		runtime.GC()
+	}
+	b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N), "ms/baselineGC")
 }

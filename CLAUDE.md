@@ -318,9 +318,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   and reports Footprint/heap/forced-GC evidence (test phase; timings
   labeled coverage-instrumented) plus an un-instrumented walk bench;
   COMPETENT_SEARCH_MEASURE_HUGE=1 builds a shared 30M-entry synth
-  store for footprint/GC (test) and name+path query latency
-  (BenchmarkSearchHuge); COMPETENT_SEARCH_MEASURE_OUT writes the
-  JSON + .txt report to a file.
+  store ENTIRELY in the benchmark phase (the test phase's 30s
+  per-test budget cannot fit the build) for name+path query latency
+  (BenchmarkSearchHuge) then footprint/heap/forced-GC evidence
+  (BenchmarkHugeStoreMeasure, declared last -- it releases the store);
+  COMPETENT_SEARCH_MEASURE_OUT writes the JSON + .txt report to a
+  file.
 - `internal/config` -- config.json load/save (roots, rootsVersion,
   excludes, hotkey,
   rescanIntervalMinutes, maxResults, theme, plugins {disabled, entries

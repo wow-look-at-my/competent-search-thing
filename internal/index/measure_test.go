@@ -152,23 +152,23 @@ func msList(v []float64) string {
 	return "[" + strings.Join(parts, " ") + "]"
 }
 
-// writeMeasureReport t.Logs the text form and, when
+// writeMeasureReport logs the text form and, when
 // $COMPETENT_SEARCH_MEASURE_OUT is set, writes the JSON there plus the
 // text to the same path with a .txt suffix. Runs that gate more than
-// one measurement test on the same OUT path overwrite it last-wins; the
+// one measurement on the same OUT path overwrite it last-wins; the
 // intended use is one gate env per run.
-func writeMeasureReport(t *testing.T, rep measureReport) {
+func writeMeasureReport(tb testing.TB, rep measureReport) {
 	text := rep.text()
-	t.Log("\n" + text)
+	tb.Log("\n" + text)
 	out := os.Getenv(measureOutEnv)
 	if out == "" {
 		return
 	}
 	data, err := json.MarshalIndent(rep, "", "  ")
-	require.Nil(t, err)
-	require.Nil(t, os.WriteFile(out, data, 0o644))
-	require.Nil(t, os.WriteFile(out+".txt", []byte(text), 0o644))
-	t.Logf("measure: wrote %s and %s.txt", out, out)
+	require.Nil(tb, err)
+	require.Nil(tb, os.WriteFile(out, data, 0o644))
+	require.Nil(tb, os.WriteFile(out+".txt", []byte(text), 0o644))
+	tb.Logf("measure: wrote %s and %s.txt", out, out)
 }
 
 // walkRootMeasured walks "/" (default excludes + mount skips, composed
@@ -242,15 +242,23 @@ func TestMeasureWholeFilesystemIndex(t *testing.T) {
 }
 
 // Huge synthetic store: shared, lazily built, resettable. Guarded by a
-// mutex (not sync.Once) so the footprint test can release it for its
-// baseline GC measurement and a later user in the same process would
-// simply rebuild.
+// mutex (not sync.Once) so the measurement can release it for its
+// baseline GC numbers and a later user in the same process would
+// simply rebuild. Everything huge lives in the BENCHMARK phase:
+// go-toolchain's test phase enforces a 30s per-test budget, and a
+// 30M-entry build (coverage-instrumented there on top) does not fit.
 const hugeStoreEntries = 30_000_000
 
 var (
 	hugeMu       sync.Mutex
 	hugeSt       *Store
 	hugeBuildSec float64
+
+	// Heap evidence captured around the build, for the report.
+	hugeHeapBeforeMB float64
+	hugeHeapAfterMB  float64
+	hugeHeapInuseMB  float64
+	hugeGCsDuring    uint32
 )
 
 // hugeStore returns the shared huge synthetic store, building it on
@@ -259,9 +267,18 @@ func hugeStore(tb testing.TB) *Store {
 	hugeMu.Lock()
 	defer hugeMu.Unlock()
 	if hugeSt == nil {
+		runtime.GC()
+		var before runtime.MemStats
+		runtime.ReadMemStats(&before)
 		start := time.Now()
 		hugeSt = buildSynthStore(303, hugeStoreEntries)
 		hugeBuildSec = time.Since(start).Seconds()
+		var after runtime.MemStats
+		runtime.ReadMemStats(&after)
+		hugeHeapBeforeMB = mb(before.HeapAlloc)
+		hugeHeapAfterMB = mb(after.HeapAlloc)
+		hugeHeapInuseMB = mb(after.HeapInuse)
+		hugeGCsDuring = after.NumGC - before.NumGC
 		tb.Logf("huge synth store: %d entries built in %.1fs", hugeStoreEntries, hugeBuildSec)
 	}
 	return hugeSt
@@ -307,25 +324,41 @@ func hugeHitCount(st *Store, q string, pathMode bool) int {
 	return n
 }
 
-// TestMeasureHugeStoreFootprint builds the huge synthetic store and
-// reports its footprint, heap and forced-GC evidence (query latency
-// lives in BenchmarkSearchHuge, un-instrumented). Skips unless
-// COMPETENT_SEARCH_MEASURE_HUGE=1.
-func TestMeasureHugeStoreFootprint(t *testing.T) {
-	if os.Getenv(measureHugeEnv) == "" {
-		t.Skip("set COMPETENT_SEARCH_MEASURE_HUGE=1 to run the huge-store measurement")
+// hugeMeasured guards the one-shot huge-store measurement against the
+// benchmark framework's b.N re-invocations.
+var hugeMeasured bool
+
+// hugeMeasureAndReport runs the one-shot huge-store measurement from
+// the benchmark phase (see BenchmarkHugeStoreMeasure): the live phase
+// (footprint, heap evidence, 5 timed forced GCs, then release of the
+// shared store) runs inside hugeLivePhase so its frame -- the only
+// remaining store reference -- is gone before the baseline GCs here
+// see the emptied heap. After this returns the shared store is gone; a
+// later hugeStore call would rebuild it, so the calling benchmark is
+// declared after the other huge benches.
+func hugeMeasureAndReport(tb testing.TB) {
+	if hugeMeasured {
+		return
 	}
+	hugeMeasured = true
+	rep := hugeLivePhase(tb)
 	runtime.GC()
-	var before runtime.MemStats
-	runtime.ReadMemStats(&before)
+	runtime.GC()
+	var released runtime.MemStats
+	runtime.ReadMemStats(&released)
+	rep.HeapAllocReleasedMB = mb(released.HeapAlloc)
+	rep.BaselineGCMS = timedGCs(5)
+	writeMeasureReport(tb, rep)
+}
 
-	st := hugeStore(t)
-	var after runtime.MemStats
-	runtime.ReadMemStats(&after)
-
+// hugeLivePhase measures everything that needs the huge store live,
+// then releases it. The returned report holds no reference to the
+// store, so it is collectable the moment this function returns.
+func hugeLivePhase(tb testing.TB) measureReport {
+	st := hugeStore(tb)
 	fp := st.Footprint()
 	rep := measureReport{
-		Label:         fmt.Sprintf("huge synthetic store (%d entries, test phase)", hugeStoreEntries),
+		Label:         fmt.Sprintf("huge synthetic store (%d entries, benchmark phase)", hugeStoreEntries),
 		GoVersion:     runtime.Version(),
 		NumCPU:        runtime.GOMAXPROCS(0),
 		Entries:       fp.Entries,
@@ -336,26 +369,17 @@ func TestMeasureHugeStoreFootprint(t *testing.T) {
 		Footprint:     fp,
 		BytesPerEntry: fp.BytesPerEntry(),
 
-		HeapAllocBeforeMB: mb(before.HeapAlloc),
-		HeapAllocAfterMB:  mb(after.HeapAlloc),
-		HeapInuseAfterMB:  mb(after.HeapInuse),
-		GCDuringBuild:     after.NumGC - before.NumGC,
+		HeapAllocBeforeMB: hugeHeapBeforeMB,
+		HeapAllocAfterMB:  hugeHeapAfterMB,
+		HeapInuseAfterMB:  hugeHeapInuseMB,
+		GCDuringBuild:     hugeGCsDuring,
 		LiveGCMS:          timedGCs(5),
 		Notes: []string{
-			"in-memory synthetic build (no disk IO); build time is COVERAGE-INSTRUMENTED (test phase)",
-			"query latency for this store: BenchmarkSearchHuge (benchmark phase, un-instrumented)",
-			"test and benchmark phases are separate processes; each builds its own copy of this store",
+			"in-memory synthetic build (no disk IO), benchmark phase: un-instrumented wall times",
+			"query latency for this store: BenchmarkSearchHuge (same process, same store)",
+			"measured here rather than the test phase: the 30s per-test budget cannot fit a 30M-entry build",
 		},
 	}
-
-	st = nil
-	_ = st
 	hugeStoreRelease()
-	runtime.GC()
-	runtime.GC()
-	var released runtime.MemStats
-	runtime.ReadMemStats(&released)
-	rep.HeapAllocReleasedMB = mb(released.HeapAlloc)
-	rep.BaselineGCMS = timedGCs(5)
-	writeMeasureReport(t, rep)
+	return rep
 }
