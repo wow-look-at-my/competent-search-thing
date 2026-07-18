@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,18 +17,15 @@ func BenchmarkTextPreview(b *testing.B) {
 	path := filepath.Join(dir, "big.go")
 	line := []byte("func generatedFixtureLine() int { return 42 } // filler\n")
 	content := bytes.Repeat(line, 256*1024/len(line)+1)[:256*1024]
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		b.Fatal(err)
-	}
+	require.NoError(b, os.WriteFile(path, content, 0o644))
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		content, _, _, err := ReadCapped(path, 256)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if len(content) != 256*1024 {
-			b.Fatalf("read %d bytes", len(content))
-		}
+		require.Nil(b, err)
+
+		require.Equal(b, 256*1024, len(content))
+
 	}
 }
 
@@ -41,12 +39,10 @@ func BenchmarkThumbnail(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		ip, err := Thumbnail(ctx, path, 800)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if ip.W != 800 {
-			b.Fatalf("width %d", ip.W)
-		}
+		require.Nil(b, err)
+
+		require.Equal(b, 800, ip.W)
+
 	}
 }
 
@@ -54,19 +50,16 @@ func BenchmarkThumbnail(b *testing.B) {
 func BenchmarkDirListing(b *testing.B) {
 	dir := b.TempDir()
 	for i := 0; i < 500; i++ {
-		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("entry-%03d.txt", i)), nil, 0o644); err != nil {
-			b.Fatal(err)
-		}
+		require.NoError(b, os.WriteFile(filepath.Join(dir, fmt.Sprintf("entry-%03d.txt", i)), nil, 0o644))
+
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dp, err := ListCapped(dir, 200)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if dp.Total != 500 {
-			b.Fatalf("total %d", dp.Total)
-		}
+		require.Nil(b, err)
+
+		require.Equal(b, 500, dp.Total)
+
 	}
 }
 
@@ -75,18 +68,15 @@ func BenchmarkDirListing(b *testing.B) {
 func BenchmarkMetaCard(b *testing.B) {
 	dir := b.TempDir()
 	path := filepath.Join(dir, "notes.md")
-	if err := os.WriteFile(path, make([]byte, 4096), 0o644); err != nil {
-		b.Fatal(err)
-	}
+	require.NoError(b, os.WriteFile(path, make([]byte, 4096), 0o644))
+
 	fi, err := os.Lstat(path)
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.Nil(b, err)
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		rows := MetaFor(path, fi)
-		if len(rows) != 5 {
-			b.Fatalf("rows %d", len(rows))
-		}
+		require.Equal(b, 5, len(rows))
+
 	}
 }
