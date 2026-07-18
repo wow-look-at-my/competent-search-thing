@@ -20,13 +20,6 @@ import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/watch"
 )
 
-// The searchbar window's fixed size; main.go feeds these to Wails and
-// the positioning math uses them.
-const (
-	WindowWidth  = 680
-	WindowHeight = 460
-)
-
 // Names of the events the Go side emits to the frontend.
 const (
 	// eventIndexProgress reports index build progress; payload
@@ -85,6 +78,13 @@ type Options struct {
 	// produced (wire cfg.MigrationNotes here); Startup logs each one
 	// loudly, exactly once, so a changed index scope is never silent.
 	ConfigNotes []string
+	// WindowWidth and WindowHeight are the bar window's size in
+	// pixels; the positioning math uses them, so they must match what
+	// the native window was built with (main.go feeds both from the
+	// one app.WindowSize() read). Zero values fall back to the config
+	// defaults, keeping bare-Options tests working.
+	WindowWidth  int
+	WindowHeight int
 }
 
 // App is the Wails-bound application object. It carries the Wails

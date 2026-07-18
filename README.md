@@ -370,7 +370,7 @@ The file is created with defaults on first run:
   "bangs": { "sigils": ["!", "/", "@"], "aliases": {} },
   "tray": { "disabled": false },
   "history": { "persistDisabled": false },
-  "window": { "translucent": false },
+  "window": { "translucent": false, "width": 780, "height": 550 },
   "firefox": {
     "frequentSites": {
       "minVisitsMonth": 11,
@@ -474,6 +474,14 @@ Field reference:
   has one, but on a compositor-less X11 setup the corners render
   solid black, which is why the flag is opt-in. Evidence and
   per-desktop status: [Translucent window](#translucent-window).
+  `width` and `height` (defaults `780` and `550`) set the bar
+  window's size in pixels; the size is fixed at startup (the bar is
+  not resizable), so changes take effect on the next launch. Zero,
+  negative, or missing values get the defaults, and positive values
+  below the 320x240 floors are raised to them. A taller window shows
+  more result rows before scrolling kicks in -- how many results a
+  query returns is still governed by `maxResults` above (there is
+  deliberately no separate max-rows knob).
 - `firefox` -- the Firefox-backed sections. `frequentSites` configures
   [Frequent sites (Firefox)](#frequent-sites-firefox): the visit
   thresholds (`minVisitsMonth`, `minVisitsWeek`), the cache refresh

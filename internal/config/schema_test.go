@@ -74,7 +74,7 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 		},
 		Tray:    TrayConfig{Disabled: true},
 		History: HistoryConfig{PersistDisabled: true},
-		Window:  WindowConfig{Translucent: true},
+		Window:  WindowConfig{Translucent: true, Width: 900, Height: 640},
 		Firefox: FirefoxConfig{
 			FrequentSites: FrequentSitesConfig{
 				MinVisitsMonth: 20,
@@ -120,6 +120,9 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"non-bool history persistDisabled": `{"history":{"persistDisabled":"yes"}}`,
 		"window translucent typo":          `{"window":{"translucnet":true}}`,
 		"non-bool window translucent":      `{"window":{"translucent":"yes"}}`,
+		"zero window width":                `{"window":{"width":0}}`,
+		"too-small window height":          `{"window":{"height":100}}`,
+		"non-integer window width":         `{"window":{"width":"780"}}`,
 		"zero firefox month":               `{"firefox":{"frequentSites":{"minVisitsMonth":0}}}`,
 		"negative firefox week":            `{"firefox":{"frequentSites":{"minVisitsWeek":-1}}}`,
 		"zero firefox refresh":             `{"firefox":{"frequentSites":{"refreshMinutes":0}}}`,

@@ -225,7 +225,7 @@ const shotRoot = path.join(workspace, "screenshots");
 
 async function findBarWindow(): Promise<string | undefined> {
   const out = await $`xwininfo -root -tree`.silent().nothrow();
-  const m = /^\s*(0x[0-9a-f]+)\s+"competent-search-thing".*\s680x460\+/m.exec(String(out.stdout));
+  const m = /^\s*(0x[0-9a-f]+)\s+"competent-search-thing".*\s780x550\+/m.exec(String(out.stdout));
   return m?.[1];
 }
 

@@ -7,8 +7,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 
 - `main.go` -- glue only: embeds `frontend/dist` (go:embed) and calls
   cli.Execute(app.Version, runGUI); runGUI configures the window
-  (frameless, always-on-top, start-hidden, hide-on-close, fixed
-  680x460), binds the App object and wires OnStartup / OnDomReady /
+  (frameless, always-on-top, start-hidden, hide-on-close,
+  non-resizable, sized by app.WindowSize() (internal/app size.go:
+  fresh config.Load, window.width/height, same standalone-read
+  pattern as translucent.go; Load repairs zero/too-small values to
+  the 780x550 defaults / 320x240 floors even on error) -- the SAME
+  two values are wired into app Options WindowWidth/WindowHeight so
+  the positioning math always matches the native window; zero
+  Options fall back to the defaults via the unexported
+  App.windowSize(), which keeps newTestApp wiring-free), binds the
+  App object and wires OnStartup / OnDomReady /
   OnShutdown. When app.WindowTranslucent() (internal/app
   translucent.go: fresh config.Load, window.translucent, any error =
   false) reports true, runGUI adds BackgroundColour = zero RGBA
@@ -384,7 +392,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   per-pixel-alpha window flag main.go reads via
   app.WindowTranslucent(); zero value = opaque = the safe default,
   needs a compositor, README "Translucent window" holds the measured
-  evidence}, firefox {frequentSites
+  evidence; width/height -- the bar window size main.go reads via
+  app.WindowSize(), defaults 780x550: Normalize repairs <= 0 (and
+  absent) to the defaults and clamps positive values below the
+  320x240 floors up to them, so the app never builds an unusably
+  tiny window}, firefox {frequentSites
   {minVisitsMonth 11, minVisitsWeek 1, refreshMinutes 10, maxResults
   6, profileDir ""}, openTabs {maxResults 6, profileDir ""}} -- the
   frequentSites defaults encode ">10 visits in 30 days AND >=1 in 7";
@@ -1232,9 +1244,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   client menu, which wins the race and makes the app's XGrabKey fail
   with BadAccess -- then the REAL `xdotool key --clearmodifiers
   alt+space` summon, `xdotool type`, arrow keys, `import -window`,
-  Escape-hides assertion. The app window is found by name + 680x460
+  Escape-hides assertion. The app window is found by name + 780x550
   geometry in `xwininfo -root -tree` (xdotool search --onlyvisible
-  --class does not match it). One full retry with
+  --class does not match it; the geometry is the DEFAULT
+  window.width/height -- the script's temp config.json sets no size,
+  so it must track the internal/config defaults). One full retry with
   `WEBKIT_DISABLE_DMABUF_RENDERER=1` (not needed under Xvfb so far).
   The binary is `build/competent-search-thing_linux_amd64` in CI
   (go-toolchain matrix naming) or `build/competent-search-thing`

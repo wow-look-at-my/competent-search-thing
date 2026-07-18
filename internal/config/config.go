@@ -46,6 +46,16 @@ const (
 // OpenTabsConfig).
 const DefaultFirefoxTabsMaxResults = 6
 
+// Window size defaults and floors (see WindowConfig). The defaults are
+// ~15% larger than the original fixed 680x460 bar; the floors keep a
+// hand-edited config from producing an unusably tiny window.
+const (
+	DefaultWindowWidth  = 780
+	DefaultWindowHeight = 550
+	MinWindowWidth      = 320
+	MinWindowHeight     = 240
+)
+
 // Config is the on-disk configuration.
 type Config struct {
 	// Roots are the directories to index. The default is the whole
@@ -150,6 +160,14 @@ type WindowConfig struct {
 	// solid black, which is why the zero value -- the default --
 	// keeps the window opaque (current behavior).
 	Translucent bool `json:"translucent"`
+	// Width is the bar window's width in pixels. Zero or negative
+	// values (including configs predating the knob) get
+	// DefaultWindowWidth; positive values below MinWindowWidth are
+	// raised to that floor. See Normalize.
+	Width int `json:"width"`
+	// Height is the bar window's height in pixels; repaired against
+	// DefaultWindowHeight / MinWindowHeight the same way.
+	Height int `json:"height"`
 }
 
 // HistoryConfig configures the query history (see internal/history).
@@ -242,6 +260,7 @@ func Default() Config {
 		Theme:                 DefaultTheme,
 		Plugins:               PluginsConfig{Entries: map[string]PluginEntry{}},
 		Bangs:                 BangsConfig{Sigils: DefaultBangSigils(), Aliases: map[string]string{}},
+		Window:                WindowConfig{Width: DefaultWindowWidth, Height: DefaultWindowHeight},
 		Firefox:               DefaultFirefox(),
 	}
 }
@@ -330,7 +349,9 @@ func Save(c Config) error {
 // Normalize repairs missing or nonsensical fields in place: empty roots
 // fall back to the default root, relative roots are absolutized,
 // zero/negative knobs get their defaults (the firefox.frequentSites
-// and firefox.openTabs numbers included), an empty theme name gets the
+// and firefox.openTabs numbers included), the window size gets its
+// defaults when unset and is clamped up to the minimum floors when set
+// too small, an empty theme name gets the
 // default theme, nil
 // plugin entries and bang aliases become empty maps, and an empty
 // sigil list gets the default sigils. Excludes are left as the user
@@ -389,5 +410,18 @@ func (c *Config) Normalize() {
 	}
 	if c.Firefox.OpenTabs.MaxResults <= 0 {
 		c.Firefox.OpenTabs.MaxResults = DefaultFirefoxTabsMaxResults
+	}
+	w := &c.Window
+	switch {
+	case w.Width <= 0:
+		w.Width = DefaultWindowWidth
+	case w.Width < MinWindowWidth:
+		w.Width = MinWindowWidth
+	}
+	switch {
+	case w.Height <= 0:
+		w.Height = DefaultWindowHeight
+	case w.Height < MinWindowHeight:
+		w.Height = MinWindowHeight
 	}
 }

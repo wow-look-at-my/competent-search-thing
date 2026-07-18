@@ -338,6 +338,48 @@ func TestWindowConfig(t *testing.T) {
 	require.True(t, got.Window.Translucent)
 }
 
+func TestWindowSizeConfig(t *testing.T) {
+	setConfigDir(t)
+	def := Default()
+	require.Equal(t, DefaultWindowWidth, def.Window.Width, "default width")
+	require.Equal(t, DefaultWindowHeight, def.Window.Height, "default height")
+
+	// A config predating the size knobs (zero values) gets the
+	// defaults...
+	var c Config
+	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
+	c.Normalize()
+	require.Equal(t, DefaultWindowWidth, c.Window.Width)
+	require.Equal(t, DefaultWindowHeight, c.Window.Height)
+
+	// ...negative values are repaired to the defaults too...
+	c.Window.Width, c.Window.Height = -10, -1
+	c.Normalize()
+	require.Equal(t, DefaultWindowWidth, c.Window.Width)
+	require.Equal(t, DefaultWindowHeight, c.Window.Height)
+
+	// ...positive but too-small values clamp up to the floors...
+	c.Window.Width, c.Window.Height = 100, 40
+	c.Normalize()
+	require.Equal(t, MinWindowWidth, c.Window.Width)
+	require.Equal(t, MinWindowHeight, c.Window.Height)
+
+	// ...the floors themselves pass through untouched...
+	c.Window.Width, c.Window.Height = MinWindowWidth, MinWindowHeight
+	c.Normalize()
+	require.Equal(t, MinWindowWidth, c.Window.Width)
+	require.Equal(t, MinWindowHeight, c.Window.Height)
+
+	// ...and custom sane values round-trip through Save/Load.
+	in := Default()
+	in.Window.Width, in.Window.Height = 900, 640
+	require.NoError(t, Save(in))
+	got, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 900, got.Window.Width)
+	require.Equal(t, 640, got.Window.Height)
+}
+
 func TestHistoryConfig(t *testing.T) {
 	setConfigDir(t)
 	require.False(t, Default().History.PersistDisabled, "history persistence is on by default")

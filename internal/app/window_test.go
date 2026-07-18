@@ -119,11 +119,12 @@ func TestShowPositionsOnCursorDisplay(t *testing.T) {
 
 	a.showOnCursorDisplay()
 
-	// BarPosition on the left monitor: x = -2560+(2560-680)/2 = -1620,
-	// y = 0 + 1440/3 - 460/3 = 327. The window sits on the primary
-	// (origin 0,0), so the wails-relative coordinates are identical.
-	require.Equal(t, []int{-1620}, r.setPosX)
-	require.Equal(t, []int{327}, r.setPosY)
+	// BarPosition on the left monitor with the default 780x550 size:
+	// x = -2560+(2560-780)/2 = -1670, y = 0 + 1440/3 - 550/3 = 297.
+	// The window sits on the primary (origin 0,0), so the
+	// wails-relative coordinates are identical.
+	require.Equal(t, []int{-1670}, r.setPosX)
+	require.Equal(t, []int{297}, r.setPosY)
 	require.False(t, r.has("center"), "successful positioning skips centering")
 	require.True(t, r.has("show"))
 	require.Len(t, r.emitted(eventShown), 1)
@@ -140,12 +141,12 @@ func TestShowTranslatesAgainstCurrentMonitor(t *testing.T) {
 
 	a.showOnCursorDisplay()
 
-	// Absolute target on the primary: x = (1920-680)/2 = 620,
-	// y = 1080/3 - 460/3 = 207. WindowSetPosition is relative to the
+	// Absolute target on the primary: x = (1920-780)/2 = 570,
+	// y = 1080/3 - 550/3 = 177. WindowSetPosition is relative to the
 	// window's current monitor (origin -2560,0), so x becomes
-	// 620 - (-2560) = 3180.
-	require.Equal(t, []int{3180}, r.setPosX)
-	require.Equal(t, []int{207}, r.setPosY)
+	// 570 - (-2560) = 3130.
+	require.Equal(t, []int{3130}, r.setPosX)
+	require.Equal(t, []int{177}, r.setPosY)
 }
 
 func TestShowUsesWorkAreaOriginOnWindows(t *testing.T) {
@@ -159,8 +160,26 @@ func TestShowUsesWorkAreaOriginOnWindows(t *testing.T) {
 
 	a.showOnCursorDisplay()
 
-	require.Equal(t, []int{620}, r.setPosX)
-	require.Equal(t, []int{207 - 40}, r.setPosY, "windows translates against rcWork")
+	require.Equal(t, []int{570}, r.setPosX)
+	require.Equal(t, []int{177 - 40}, r.setPosY, "windows translates against rcWork")
+}
+
+func TestShowUsesConfiguredWindowSize(t *testing.T) {
+	a, r := newTestApp(t, nil, Options{WindowWidth: 1000, WindowHeight: 700})
+	a.plat.goos = "linux"
+	r.cursorOK = true
+	r.cursorX, r.cursorY = 960, 540 // cursor on the primary
+	r.displays = testDisplays()
+	r.winX, r.winY = 0, 0 // window already on the primary
+	a.Startup(context.Background())
+
+	a.showOnCursorDisplay()
+
+	// The Options size drives the math: x = (1920-1000)/2 = 460,
+	// y = 1080/3 - 700/3 = 127; the window is on the primary (origin
+	// 0,0), so the relative coordinates are identical.
+	require.Equal(t, []int{460}, r.setPosX)
+	require.Equal(t, []int{127}, r.setPosY)
 }
 
 func TestShowCentersWhenCursorUnknown(t *testing.T) {
