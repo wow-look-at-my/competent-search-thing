@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,12 +46,24 @@ type Options struct {
 	// The key is confined to the provider client -- never logged or
 	// emitted.
 	KagiAPIKey string
+	// KagiBaseURL overrides the web-search API origin; empty = the
+	// official endpoint. Normalized by normalizeBaseURL: one trailing
+	// "/" is trimmed, and an invalid value (not http(s) with a host)
+	// leaves the provider unavailable -- FetchWeb answers with a
+	// terse invalid-baseUrl error, never a broken client. The value
+	// itself is never logged or emitted (it may carry userinfo).
+	KagiBaseURL string
 	// KagiMaxResults caps one web search (non-positive = 8).
 	KagiMaxResults int
 	// OpenAIAPIKey enables the explicit AI answer provider; empty
 	// leaves it unconfigured (FetchAI answers with a no-key error).
 	// Never logged or emitted.
 	OpenAIAPIKey string
+	// OpenAIBaseURL overrides the answer API origin; empty = the
+	// official endpoint. Same normalization and invalid-value
+	// handling as KagiBaseURL (the app layer resolves the config
+	// value / OPENAI_BASE_URL before it lands here).
+	OpenAIBaseURL string
 	// OpenAIModel names the answering model.
 	OpenAIModel string
 	// OpenAIMaxOutputTokens caps one answer.
@@ -78,6 +91,14 @@ type Dispatcher struct {
 	gen    int
 	cancel context.CancelFunc
 
+	// webErr/aiErr say WHY an unavailable provider (nil webFn/aiFn)
+	// is unavailable -- the no-key message or the invalid-baseUrl
+	// message, emitted verbatim by the fetch path. Empty once the
+	// provider is wired. Messages name config keys and env vars only,
+	// never values.
+	webErr string
+	aiErr  string
+
 	// Provider seams; New fills in the real implementations and unit
 	// tests inject slow or failing fakes. webFn/aiFn stay nil while
 	// the matching API key is unconfigured.
@@ -89,6 +110,39 @@ type Dispatcher struct {
 	dirFn    func(ctx context.Context, path string, maxEntries int) (*DirPreview, error)
 	webFn    func(ctx context.Context, query string) (*WebPreview, error)
 	aiFn     func(ctx context.Context, query string) (*AIPreview, error)
+}
+
+// Fetch-path messages for an unavailable provider. They name the
+// config knobs (and environment fallbacks) but never quote values:
+// the keys are secret and a base URL may carry userinfo.
+const (
+	errWebNoKey   = "kagi: no API key (preview.kagi.apiKey or KAGI_API_KEY)"
+	errWebBadBase = "kagi: invalid baseUrl (preview.kagi.baseUrl)"
+	errAINoKey    = "openai: no API key (preview.openai.apiKey or OPENAI_API_KEY)"
+	errAIBadBase  = "openai: invalid baseUrl (preview.openai.baseUrl / OPENAI_BASE_URL)"
+)
+
+// normalizeBaseURL prepares a configured provider base URL: empty
+// stays empty (the client's official default), ONE trailing "/" is
+// trimmed (the clients join "<base><path>", so a trailing slash would
+// double up), and anything that does not parse as http(s) with a host
+// is rejected -- New then leaves the provider unavailable instead of
+// installing a client that can only fail. The returned error is
+// deliberately value-free (url.Parse errors quote their input, which
+// may carry userinfo).
+func normalizeBaseURL(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	base := strings.TrimSuffix(raw, "/")
+	u, err := url.Parse(base)
+	if err != nil {
+		return "", errors.New("unparsable base URL")
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", errors.New("base URL must be http(s) with a host")
+	}
+	return base, nil
 }
 
 // New builds a Dispatcher. parent bounds every request the dispatcher
@@ -122,34 +176,48 @@ func New(parent context.Context, opt Options) *Dispatcher {
 			return ListCapped(path, maxEntries)
 		},
 	}
+	d.webErr = errWebNoKey
 	if opt.KagiAPIKey != "" {
-		kagi := NewKagiClient(opt.KagiAPIKey, opt.KagiMaxResults)
-		d.webFn = func(ctx context.Context, query string) (*WebPreview, error) {
-			results, cached, err := kagi.Search(ctx, query)
-			if err != nil {
-				return nil, err
+		if base, err := normalizeBaseURL(opt.KagiBaseURL); err != nil {
+			d.webErr = errWebBadBase
+		} else {
+			kagi := NewKagiClient(opt.KagiAPIKey, opt.KagiMaxResults)
+			kagi.BaseURL = base
+			d.webErr = ""
+			d.webFn = func(ctx context.Context, query string) (*WebPreview, error) {
+				results, cached, err := kagi.Search(ctx, query)
+				if err != nil {
+					return nil, err
+				}
+				return &WebPreview{Query: query, Results: results, Cached: cached}, nil
 			}
-			return &WebPreview{Query: query, Results: results, Cached: cached}, nil
 		}
 	}
+	d.aiErr = errAINoKey
 	if opt.OpenAIAPIKey != "" {
-		openai := NewOpenAIClient(opt.OpenAIAPIKey, opt.OpenAIModel, opt.OpenAIMaxOutputTokens)
-		cache := NewAICache(opt.AICachePath)
-		cache.Logf = opt.Logf // one-shot corrupt-file note on the lazy load
-		d.aiFn = func(ctx context.Context, query string) (*AIPreview, error) {
-			// Cache lookups key on the CONFIGURED model, so a model
-			// change in config never serves another model's answer.
-			if answer, ok := cache.Get(openai.Model(), query); ok {
-				return &AIPreview{Query: query, Answer: answer, Model: openai.Model(), Cached: true}, nil
+		if base, err := normalizeBaseURL(opt.OpenAIBaseURL); err != nil {
+			d.aiErr = errAIBadBase
+		} else {
+			openai := NewOpenAIClient(opt.OpenAIAPIKey, opt.OpenAIModel, opt.OpenAIMaxOutputTokens)
+			openai.BaseURL = base
+			d.aiErr = ""
+			cache := NewAICache(opt.AICachePath)
+			cache.Logf = opt.Logf // one-shot corrupt-file note on the lazy load
+			d.aiFn = func(ctx context.Context, query string) (*AIPreview, error) {
+				// Cache lookups key on the CONFIGURED model, so a model
+				// change in config never serves another model's answer.
+				if answer, ok := cache.Get(openai.Model(), query); ok {
+					return &AIPreview{Query: query, Answer: answer, Model: openai.Model(), Cached: true}, nil
+				}
+				answer, model, err := openai.Ask(ctx, query)
+				if err != nil {
+					return nil, err
+				}
+				if err := cache.Put(openai.Model(), query, answer); err != nil {
+					d.logf("preview: AI cache: %v (answer not persisted)", err)
+				}
+				return &AIPreview{Query: query, Answer: answer, Model: model, Cached: false}, nil
 			}
-			answer, model, err := openai.Ask(ctx, query)
-			if err != nil {
-				return nil, err
-			}
-			if err := cache.Put(openai.Model(), query, answer); err != nil {
-				d.logf("preview: AI cache: %v (answer not persisted)", err)
-			}
-			return &AIPreview{Query: query, Answer: answer, Model: model, Cached: false}, nil
 		}
 	}
 	return d
@@ -162,10 +230,12 @@ func (d *Dispatcher) logf(format string, v ...any) {
 	}
 }
 
-// WebConfigured reports whether the web-search provider has a key.
+// WebConfigured reports whether the web-search provider is usable (a
+// key and, when overridden, a valid base URL).
 func (d *Dispatcher) WebConfigured() bool { return d.webFn != nil }
 
-// AIConfigured reports whether the AI answer provider has a key.
+// AIConfigured reports whether the AI answer provider is usable (a
+// key and, when overridden, a valid base URL).
 func (d *Dispatcher) AIConfigured() bool { return d.aiFn != nil }
 
 // readHead reads at most n bytes from the start of path.
@@ -449,8 +519,7 @@ func (d *Dispatcher) FetchWeb(query string, gen int) {
 		return
 	}
 	if d.webFn == nil {
-		d.emit(ctx, Payload{Gen: gen, Kind: KindError, Title: query,
-			Err: "kagi: no API key (preview.kagi.apiKey or KAGI_API_KEY)"})
+		d.emit(ctx, Payload{Gen: gen, Kind: KindError, Title: query, Err: d.webErr})
 		return
 	}
 	go d.serveWeb(ctx, query, gen, start)
@@ -484,8 +553,7 @@ func (d *Dispatcher) FetchAI(query string, gen int) {
 		return
 	}
 	if d.aiFn == nil {
-		d.emit(ctx, Payload{Gen: gen, Kind: KindError, Title: query,
-			Err: "openai: no API key (preview.openai.apiKey or OPENAI_API_KEY)"})
+		d.emit(ctx, Payload{Gen: gen, Kind: KindError, Title: query, Err: d.aiErr})
 		return
 	}
 	go d.serveAI(ctx, query, gen, start)
