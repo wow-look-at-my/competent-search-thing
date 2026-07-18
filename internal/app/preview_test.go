@@ -126,9 +126,27 @@ func TestGetPreviewConfigConfiguredDetection(t *testing.T) {
 	require.True(t, info.OpenAIConfigured, "the env fallback counts as configured")
 }
 
-func TestFetchPreviewStubsEmitErrorPayloads(t *testing.T) {
+func TestFetchPreviewDisabledIsNoOp(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
 	a.Startup(context.Background())
+
+	a.FetchWebPreview("some query", 3)
+	a.FetchAIPreview("some query", 4)
+	time.Sleep(50 * time.Millisecond)
+	require.Empty(t, r.emitted(eventPreviewResult), "no dispatcher, no payloads")
+	require.Equal(t, int64(4), a.previewGen.Load(), "the generation still advances")
+}
+
+func TestFetchPreviewWithoutKeysEmitsNamedErrors(t *testing.T) {
+	// newTestApp pins getenv to "" and the options carry no API keys,
+	// so both providers are unconfigured. The no-key answer is
+	// synchronous: no goroutine, no network.
+	a, r := newTestApp(t, nil, previewTestOptions())
+	a.Startup(context.Background())
+	d := a.previewDispatcher()
+	require.NotNil(t, d)
+	require.False(t, d.WebConfigured())
+	require.False(t, d.AIConfigured())
 
 	a.FetchWebPreview("some query", 3)
 	events := r.emitted(eventPreviewResult)
@@ -136,7 +154,7 @@ func TestFetchPreviewStubsEmitErrorPayloads(t *testing.T) {
 	p := events[0].payload[0].(preview.Payload)
 	require.Equal(t, 3, p.Gen)
 	require.Equal(t, preview.KindError, p.Kind)
-	require.Contains(t, p.Err, "web search lands later")
+	require.Equal(t, "kagi: no API key (preview.kagi.apiKey or KAGI_API_KEY)", p.Err)
 
 	a.FetchAIPreview("some query", 4)
 	events = r.emitted(eventPreviewResult)
@@ -144,7 +162,54 @@ func TestFetchPreviewStubsEmitErrorPayloads(t *testing.T) {
 	p = events[1].payload[0].(preview.Payload)
 	require.Equal(t, 4, p.Gen)
 	require.Equal(t, preview.KindError, p.Kind)
-	require.Contains(t, p.Err, "AI answers land later")
+	require.Equal(t, "openai: no API key (preview.openai.apiKey or OPENAI_API_KEY)", p.Err)
+}
+
+func TestFetchPreviewBlankQueryEmitsError(t *testing.T) {
+	a, r := newTestApp(t, nil, previewTestOptions())
+	a.Startup(context.Background())
+
+	a.FetchWebPreview("   ", 1)
+	events := r.emitted(eventPreviewResult)
+	require.Len(t, events, 1)
+	p := events[0].payload[0].(preview.Payload)
+	require.Equal(t, preview.KindError, p.Kind)
+	require.Equal(t, "empty query", p.Err)
+}
+
+func TestStartPreviewResolvesKeysLikeGetPreviewConfig(t *testing.T) {
+	// Environment fallbacks resolve through the getenv seam.
+	opt := previewTestOptions()
+	a, _ := newTestApp(t, nil, opt)
+	a.plat.getenv = func(key string) string {
+		switch key {
+		case envKagiAPIKey:
+			return "kagi-from-env"
+		case envOpenAIAPIKey:
+			return "openai-from-env"
+		}
+		return ""
+	}
+	a.Startup(context.Background())
+	d := a.previewDispatcher()
+	require.NotNil(t, d)
+	require.True(t, d.WebConfigured(), "the KAGI_API_KEY fallback configures the provider")
+	require.True(t, d.AIConfigured(), "the OPENAI_API_KEY fallback configures the provider")
+	info := a.GetPreviewConfig()
+	require.True(t, info.KagiConfigured, "GetPreviewConfig agrees with the dispatcher")
+	require.True(t, info.OpenAIConfigured)
+
+	// Config keys win without any environment.
+	opt2 := previewTestOptions()
+	opt2.Preview.Kagi.APIKey = "kagi-from-config"
+	b, _ := newTestApp(t, nil, opt2)
+	b.Startup(context.Background())
+	d = b.previewDispatcher()
+	require.True(t, d.WebConfigured())
+	require.False(t, d.AIConfigured())
+	info = b.GetPreviewConfig()
+	require.True(t, info.KagiConfigured)
+	require.False(t, info.OpenAIConfigured)
 }
 
 func TestShutdownCancelsPreview(t *testing.T) {

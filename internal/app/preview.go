@@ -2,7 +2,10 @@ package app
 
 import (
 	"context"
+	"log"
+	"path/filepath"
 
+	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/preview"
 )
 
@@ -30,20 +33,50 @@ type PreviewConfigInfo struct {
 	OpenAIConfigured bool `json:"openaiConfigured"`
 }
 
+// aiCacheFileName is the persistent AI answer cache, next to
+// config.json (delete the file to clear the cache).
+const aiCacheFileName = "aicache.json"
+
 // startPreview brings the preview layer up once, at Startup: nothing
 // at all while the pane is disabled (every bound method degrades to a
 // no-op on the nil dispatcher), otherwise a preview.Dispatcher whose
-// parent context Shutdown cancels.
+// parent context Shutdown cancels. The provider API keys resolve here
+// -- config value first, else the environment variable through the
+// getenv seam -- exactly the resolution GetPreviewConfig reports; the
+// resolved keys flow only into the dispatcher options and are never
+// logged.
 func (a *App) startPreview() {
 	if !a.opt.Preview.Enabled {
 		return
 	}
+	p := a.opt.Preview
+	kagiKey := p.Kagi.APIKey
+	if kagiKey == "" {
+		kagiKey = a.plat.getenv(envKagiAPIKey)
+	}
+	openaiKey := p.OpenAI.APIKey
+	if openaiKey == "" {
+		openaiKey = a.plat.getenv(envOpenAIAPIKey)
+	}
+	cachePath := ""
+	if dir, err := config.Dir(); err == nil {
+		cachePath = filepath.Join(dir, aiCacheFileName)
+	} else {
+		log.Printf("preview: %v (AI answer cache not persisted)", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	d := preview.New(ctx, preview.Options{
-		TextMaxKB:     a.opt.Preview.TextMaxKB,
-		ImageMaxEdge:  a.opt.Preview.ImageMaxEdge,
-		DirMaxEntries: a.opt.Preview.DirMaxEntries,
-		Emit:          a.previewEmit,
+		TextMaxKB:             p.TextMaxKB,
+		ImageMaxEdge:          p.ImageMaxEdge,
+		DirMaxEntries:         p.DirMaxEntries,
+		Emit:                  a.previewEmit,
+		KagiAPIKey:            kagiKey,
+		KagiMaxResults:        p.Kagi.MaxResults,
+		OpenAIAPIKey:          openaiKey,
+		OpenAIModel:           p.OpenAI.Model,
+		OpenAIMaxOutputTokens: p.OpenAI.MaxOutputTokens,
+		AICachePath:           cachePath,
+		Logf:                  log.Printf,
 	})
 	a.previewMu.Lock()
 	a.previewDisp = d
@@ -98,27 +131,30 @@ func (a *App) GetPreviewConfig() PreviewConfigInfo {
 	}
 }
 
-// FetchWebPreview is the explicit web-search preview trigger. Phase-3
-// stub: it answers with an error payload so the bound surface and the
-// frontend contract are final now.
+// FetchWebPreview is the explicit web-search preview trigger -- the
+// frontend's Ctrl+K button path, its ONLY call site. The dispatcher
+// answers asynchronously with exactly one eventPreviewResult payload
+// (kind "web" or "error") under gen; the fetch shares Preview's
+// cancel/generation space, so it supersedes an in-flight file preview
+// and vice versa. Nil dispatcher (pane disabled) = safe no-op.
 func (a *App) FetchWebPreview(query string, gen int) {
 	a.previewGen.Store(int64(gen))
-	a.previewEmit(preview.Payload{
-		Gen:  gen,
-		Kind: preview.KindError,
-		Err:  "web search lands later in this PR",
-	})
+	d := a.previewDispatcher()
+	if d == nil {
+		return
+	}
+	d.FetchWeb(query, gen)
 }
 
-// FetchAIPreview is the explicit AI answer preview trigger. Phase-3
-// stub, like FetchWebPreview.
+// FetchAIPreview is the explicit AI answer preview trigger (Ctrl+I),
+// with the same contract as FetchWebPreview.
 func (a *App) FetchAIPreview(query string, gen int) {
 	a.previewGen.Store(int64(gen))
-	a.previewEmit(preview.Payload{
-		Gen:  gen,
-		Kind: preview.KindError,
-		Err:  "AI answers land later in this PR",
-	})
+	d := a.previewDispatcher()
+	if d == nil {
+		return
+	}
+	d.FetchAI(query, gen)
 }
 
 // shutdownPreview cancels the dispatcher's parent context (aborting
