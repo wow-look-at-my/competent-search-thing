@@ -2,9 +2,10 @@ package plugin
 
 import (
 	"context"
-	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/wow-look-at-my/competent-search-thing/internal/match"
 )
 
 // builtinTabsID is the provider id of the open-tabs provider.
@@ -17,16 +18,9 @@ const defaultOpenTabsMax = 6
 // tabPinnedBadge marks pinned tabs (well under the 24-rune badge cap).
 const tabPinnedBadge = "pinned"
 
-// Open-tabs score ladder, most to least specific. An already-open tab
-// whose TITLE matches outranks everything (that is the tab the user is
-// looking for); note the ordering differs from the frequent-sites
-// ladder, where the host wins.
-const (
-	tabScoreTitleWord   float64 = 85
-	tabScoreHostPrefix  float64 = 80
-	tabScoreTitleSubstr float64 = 65
-	tabScoreURLSubstr   float64 = 55
-)
+// Scoring lives in the shared engine (canonical tier bands); the
+// title-first field order below preserves the old ladder's preference
+// for the tab whose TITLE matches.
 
 // TabInfo is one open Firefox tab supplied by the app layer's OpenTabs
 // getter (converted from internal/firefox's Tab -- deliberately not
@@ -80,55 +74,39 @@ func (p *tabsProvider) match(query string, _ *AppInfo) (string, int, bool) {
 	return allQueriesMatch(query)
 }
 
-func (p *tabsProvider) query(_ context.Context, req Request) ([]Result, []string, error) {
-	needle := strings.ToLower(strings.TrimSpace(req.Stripped))
-	if needle == "" || p.tabs == nil {
-		return nil, nil, nil
+func (p *tabsProvider) limit() int { return p.max }
+
+// candidates hands the tabs snapshot to the shared engine: match
+// fields [title, host ("www." stripped), URL] -- the TITLE outranks
+// the host within a tier here, unlike frequent-sites (an already-open
+// tab whose title matches is the tab the user is looking for) -- with
+// last-accessed as the tie-break.
+func (p *tabsProvider) candidates(_ context.Context, _ Request) ([]match.Candidate, error) {
+	if p.tabs == nil {
+		return nil, nil
 	}
-	type scored struct {
-		tab   TabInfo
-		score float64
-	}
-	var matches []scored
-	for _, tb := range p.tabs() {
-		score, ok := scoreTab(tb, needle)
-		if !ok {
-			continue
-		}
-		matches = append(matches, scored{tab: tb, score: score})
-	}
-	sort.SliceStable(matches, func(i, j int) bool {
-		if matches[i].score != matches[j].score {
-			return matches[i].score > matches[j].score
-		}
-		if matches[i].tab.LastAccessed != matches[j].tab.LastAccessed {
-			return matches[i].tab.LastAccessed > matches[j].tab.LastAccessed
-		}
-		ti, tj := strings.ToLower(tabTitle(matches[i].tab)), strings.ToLower(tabTitle(matches[j].tab))
-		if ti != tj {
-			return ti < tj
-		}
-		return matches[i].tab.URL < matches[j].tab.URL
-	})
-	if len(matches) > p.max {
-		matches = matches[:p.max]
-	}
-	results := make([]Result, 0, len(matches))
-	for _, m := range matches {
-		score := m.score
-		r := Result{
-			Title:    tabTitle(m.tab),
-			Subtitle: m.tab.URL,
+	tabs := p.tabs()
+	out := make([]match.Candidate, 0, len(tabs))
+	for _, tb := range tabs {
+		host := strings.TrimPrefix(strings.ToLower(tb.Host), "www.")
+		res := Result{
+			Title:    tabTitle(tb),
+			Subtitle: tb.URL,
 			Icon:     "link", // "globe" belongs to frequent-sites
-			Score:    &score,
-			Action:   &Action{Type: ActionOpenURL, Value: m.tab.URL},
+			Action:   &Action{Type: ActionOpenURL, Value: tb.URL},
 		}
-		if m.tab.Pinned {
-			r.Badge = tabPinnedBadge
+		if tb.Pinned {
+			res.Badge = tabPinnedBadge
 		}
-		results = append(results, r)
+		out = append(out, match.Candidate{
+			Display:  tabTitle(tb),
+			Texts:    []string{tb.Title, host, tb.URL},
+			TieBreak: tb.LastAccessed,
+			SortKey:  tb.URL,
+			Payload:  res,
+		})
 	}
-	return results, nil, nil
+	return out, nil
 }
 
 // tabTitle is the display title: the tab title, or the host when the
@@ -140,22 +118,4 @@ func tabTitle(tb TabInfo) string {
 	return tb.Host
 }
 
-// scoreTab ranks one open tab against the lowercased needle: a title
-// word-start beats a host prefix ("www." ignored), beats a title
-// substring, beats a substring anywhere in the URL (which contains the
-// host, so a mid-host hit lands here). No match: ok=false.
-func scoreTab(tb TabInfo, needle string) (float64, bool) {
-	title := strings.ToLower(tb.Title)
-	host := strings.TrimPrefix(strings.ToLower(tb.Host), "www.")
-	switch {
-	case wordStart(title, needle):
-		return tabScoreTitleWord, true
-	case strings.HasPrefix(host, needle):
-		return tabScoreHostPrefix, true
-	case strings.Contains(title, needle):
-		return tabScoreTitleSubstr, true
-	case strings.Contains(strings.ToLower(tb.URL), needle):
-		return tabScoreURLSubstr, true
-	}
-	return 0, false
-}
+// Matching and scoring live in the shared engine (internal/match).

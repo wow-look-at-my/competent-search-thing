@@ -22,15 +22,6 @@ import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/watch"
 )
 
-// The searchbar window's classic fixed size -- the size whenever the
-// preview pane is off. main.go feeds the effective size (these
-// defaults, or the preview-widened one from PreviewWindowSize) to
-// Wails and into Options.WindowW/WindowH for the positioning math.
-const (
-	WindowWidth  = 680
-	WindowHeight = 460
-)
-
 // Names of the events the Go side emits to the frontend.
 const (
 	// eventIndexProgress reports index build progress; payload
@@ -93,12 +84,15 @@ type Options struct {
 	// preview section here); the zero value keeps the pane off and
 	// every preview method degrades to a no-op. See preview.go.
 	Preview config.PreviewConfig
-	// WindowW and WindowH are the effective window dimensions main.go
-	// applied (the preview pane widens the window); zero values mean
-	// the classic WindowWidth x WindowHeight. The positioning math
-	// consumes them.
-	WindowW int
-	WindowH int
+	// WindowWidth and WindowHeight are the effective bar window size
+	// in pixels; the positioning math uses them, so they must match
+	// what the native window was built with (main.go feeds both from
+	// the one app.PreviewWindowSize() read -- the configured
+	// window.width/height, or the preview-widened size when the pane
+	// is on). Zero values fall back to the config defaults, keeping
+	// bare-Options tests working.
+	WindowWidth  int
+	WindowHeight int
 }
 
 // App is the Wails-bound application object. It carries the Wails
@@ -112,7 +106,7 @@ type App struct {
 	hkOnce    sync.Once
 	notesOnce sync.Once
 
-	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, lastThemeErr, domReady, pendingShow, history
+	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, history, launchCtx, launchCancel
 	ctx        context.Context
 	visible    bool
 	lastToggle time.Time
@@ -123,6 +117,13 @@ type App struct {
 	// see toggle in window.go.
 	lastHide   time.Time
 	hotkeyStop func()
+	// launchCtx bounds the post-launch raise-watcher goroutines (see
+	// launch.go): created on first use, cancelled in Shutdown and left
+	// cancelled, so late launches spawn watchers that exit instantly.
+	launchCtx    context.Context
+	launchCancel context.CancelFunc
+	// launchOnce guards the one-time launch announce + native prep.
+	launchOnce sync.Once
 	// hotkeyCancel aborts the async portal/gsettings backend chain;
 	// portalHK is the active portal shortcut (nil otherwise);
 	// hotkeyDesc describes the effective summon trigger (see
@@ -182,6 +183,15 @@ type App struct {
 	trayOnce sync.Once
 	newTray  func() trayHandle
 
+	// System-stats sampler (see stats.go in this package): the running
+	// source and the cancel func bounding its goroutines. newStats is
+	// a seam over buildStats so unit tests never read config.json or
+	// probe /proc//sys.
+	statsOnce   sync.Once
+	newStats    func() statsSource
+	stats       statsSource
+	statsCancel context.CancelFunc
+
 	// Preview pane layer (see preview.go in this package): the
 	// dispatcher (nil while the pane is disabled), the cancel func for
 	// its parent context (Shutdown), and the generation gate mirroring
@@ -191,11 +201,6 @@ type App struct {
 	previewMu     sync.Mutex // guards previewDisp, previewCancel
 	previewDisp   *preview.Dispatcher
 	previewCancel context.CancelFunc
-
-	// winW and winH are the effective window dimensions
-	// (Options.WindowW/WindowH; the WindowWidth/WindowHeight defaults
-	// when unset) the positioning math uses.
-	winW, winH int
 
 	// Query history (see history.go): built once at Startup, nil
 	// before that -- the bound methods degrade to no-ops, which keeps
@@ -223,17 +228,15 @@ func New(m *index.Manager, opt Options) *App {
 	}
 	a.newRegistry = a.buildRegistry
 	a.newTray = a.buildTray
-	a.winW, a.winH = WindowWidth, WindowHeight
-	if opt.WindowW > 0 && opt.WindowH > 0 {
-		a.winW, a.winH = opt.WindowW, opt.WindowH
-	}
+	a.newStats = a.buildStats
 	return a
 }
 
 // Startup is wired to the Wails OnStartup hook: it saves the runtime
 // context, brings up the global hotkey through the session's backend
 // plan (best effort; see hotkey.go), starts the tray icon (linux
-// only, async, best effort; see tray.go), wires the
+// only, async, best effort; see tray.go), starts the system-stats
+// sampler (idle until the bar first shows; see stats.go), wires the
 // single-instance IPC handlers (when Options.IPC is set), brings the
 // plugin layer up (app-context cache + registry; cheap file IO),
 // builds the query-history store (best effort; see history.go),
@@ -254,8 +257,10 @@ func (a *App) Startup(ctx context.Context) {
 			log.Printf("config: %s", n)
 		}
 	})
+	a.launchOnce.Do(a.announceLaunch)
 	a.hkOnce.Do(a.registerHotkey)
 	a.trayOnce.Do(a.startTray)
+	a.statsOnce.Do(a.startStats)
 	if a.opt.IPC != nil {
 		a.opt.IPC.SetHandlers(ipc.Handlers{
 			Toggle: a.toggle,
@@ -378,6 +383,7 @@ func (a *App) emitDegraded(s watch.Stats) {
 // portal/gsettings backend chain, and closing an active portal
 // shortcut), closes the tray icon (aborting a Start still waiting on
 // the bus; closing the tray's connection unregisters the icon),
+// cancels the system-stats sampler's goroutines,
 // cancels the in-flight plugin generation, closes the registry, and
 // cancels the firefox context (aborting a frequent-sites history
 // refresh mid-copy), cancels the preview dispatcher's parent context
@@ -409,7 +415,22 @@ func (a *App) Shutdown(_ context.Context) {
 	a.trayH = nil
 	trayCancel := a.trayCancel
 	a.trayCancel = nil
+	statsCancel := a.statsCancel
+	a.statsCancel = nil
+	a.stats = nil
+	launchCancel := a.launchCancel
+	a.launchCancel = nil
+	if launchCancel == nil && a.launchCtx == nil {
+		// Nothing was ever launched: park a pre-cancelled context so a
+		// post-shutdown launch cannot arm a watcher that outlives us.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		a.launchCtx = ctx
+	}
 	a.mu.Unlock()
+	if launchCancel != nil {
+		launchCancel()
+	}
 	if hkCancel != nil {
 		hkCancel()
 	}
@@ -428,6 +449,9 @@ func (a *App) Shutdown(_ context.Context) {
 		if err := th.Close(); err != nil {
 			log.Printf("tray: close: %v", err)
 		}
+	}
+	if statsCancel != nil {
+		statsCancel()
 	}
 
 	a.pluginMu.Lock()
@@ -492,10 +516,12 @@ func (a *App) Search(query string) []Result {
 	return res
 }
 
-// Open launches path with the operating system's default handler and
-// hides the bar on success.
+// Open launches path (or URL) with the operating system's default
+// handler -- on linux through the credentialed launch path, so the
+// target application's window ends focused and raised (see launch.go)
+// -- and hides the bar on success.
 func (a *App) Open(path string) error {
-	if err := a.plat.open(path); err != nil {
+	if err := a.openTarget(path); err != nil {
 		return err
 	}
 	a.Hide()
@@ -503,9 +529,9 @@ func (a *App) Open(path string) error {
 }
 
 // Reveal shows path selected in the operating system's file manager
-// and hides the bar on success.
+// (credentialed on linux, like Open) and hides the bar on success.
 func (a *App) Reveal(path string) error {
-	if err := a.plat.reveal(path); err != nil {
+	if err := a.revealTarget(path); err != nil {
 		return err
 	}
 	a.Hide()

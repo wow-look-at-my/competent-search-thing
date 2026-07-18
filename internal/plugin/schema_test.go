@@ -266,13 +266,15 @@ func TestSanitizeActionInternalTypesStripped(t *testing.T) {
 }
 
 func TestSanitizeActionClearsStrayWindow(t *testing.T) {
-	// A window id smuggled onto an external action type is cleared,
-	// exactly like a stray argv on a value-carrying action.
+	// A window id or desktop id smuggled onto an external action type
+	// is cleared, exactly like a stray argv on a value-carrying action:
+	// both fields are internal-only and only the builtin providers may
+	// set them.
 	cases := []Action{
-		{Type: ActionOpenPath, Value: "/tmp/x", Window: "42"},
-		{Type: ActionOpenURL, Value: "https://example.com/", Window: "42"},
-		{Type: ActionCopyText, Value: "x", Window: "42"},
-		{Type: ActionRunCommand, Argv: []string{"true"}, Window: "42"},
+		{Type: ActionOpenPath, Value: "/tmp/x", Window: "42", DesktopID: "x.desktop"},
+		{Type: ActionOpenURL, Value: "https://example.com/", Window: "42", DesktopID: "x.desktop"},
+		{Type: ActionCopyText, Value: "x", Window: "42", DesktopID: "x.desktop"},
+		{Type: ActionRunCommand, Argv: []string{"true"}, Window: "42", DesktopID: "x.desktop"},
 	}
 	for _, a := range cases {
 		t.Run(a.Type, func(t *testing.T) {
@@ -283,6 +285,8 @@ func TestSanitizeActionClearsStrayWindow(t *testing.T) {
 			require.Len(t, results, 1)
 			require.NotNil(t, results[0].Action)
 			require.Empty(t, results[0].Action.Window)
+			require.Empty(t, results[0].Action.DesktopID,
+				"an external plugin must never steer the credentialed launch path")
 		})
 	}
 }
@@ -574,4 +578,63 @@ func TestActionTypeConstants(t *testing.T) {
 	require.Equal(t, "activate_window", ActionActivateWindow)
 	require.Equal(t, 1, ProtocolVersion)
 	require.Equal(t, float64(50), DefaultScore)
+}
+
+func TestSanitizeKeywords(t *testing.T) {
+	resp := &Response{Results: []Result{{
+		Title: "t",
+		Keywords: []string{
+			"  weather  ", "", "a\x00b", strings.Repeat("k", 100),
+			"k1", "k2", "k3", "k4", "k5", "k6", "k7",
+		},
+	}}}
+	results, _ := SanitizeResponse(resp, false)
+	require.Len(t, results, 1)
+	kws := results[0].Keywords
+	require.Len(t, kws, maxKeywords, "capped at 8")
+	require.Equal(t, "weather", kws[0], "trimmed")
+	require.Equal(t, "a b", kws[1], "control chars become spaces")
+	require.Equal(t, strings.Repeat("k", maxKeywordRunes), kws[2], "truncated to 64 runes")
+	require.Equal(t, "k5", kws[7])
+
+	// All-blank keyword lists clear to nil.
+	resp = &Response{Results: []Result{{Title: "t", Keywords: []string{"  ", ""}}}}
+	results, _ = SanitizeResponse(resp, false)
+	require.Nil(t, results[0].Keywords)
+}
+
+func TestSanitizeMatchRanges(t *testing.T) {
+	title := "0123456789" // 10 runes
+	resp := &Response{Results: []Result{{
+		Title: title,
+		MatchRanges: [][2]int{
+			{4, 6}, {0, 2}, {1, 3}, // out of order + overlapping: sorted and merged
+			{-5, 1},        // clamped into range (merges with {0,3})
+			{8, 99},        // end clamped to the rune length
+			{7, 7}, {6, 2}, // empty / inverted: dropped
+		},
+	}}}
+	results, _ := SanitizeResponse(resp, false)
+	require.Len(t, results, 1)
+	require.Equal(t, [][2]int{{0, 3}, {4, 6}, {8, 10}}, results[0].MatchRanges)
+
+	// Ranges validate against the POST-TRUNCATION title rune length.
+	long := strings.Repeat("x", maxTitleRunes+50)
+	resp = &Response{Results: []Result{{Title: long, MatchRanges: [][2]int{{0, maxTitleRunes + 40}}}}}
+	results, _ = SanitizeResponse(resp, false)
+	require.Equal(t, [][2]int{{0, maxTitleRunes}}, results[0].MatchRanges)
+
+	// Nothing valid left: nil.
+	resp = &Response{Results: []Result{{Title: "t", MatchRanges: [][2]int{{3, 9}}}}}
+	results, _ = SanitizeResponse(resp, false)
+	require.Nil(t, results[0].MatchRanges)
+
+	// The cap keeps the first maxMatchRanges merged ranges.
+	var many [][2]int
+	for i := 0; i < 2*maxMatchRanges; i++ {
+		many = append(many, [2]int{2 * i, 2*i + 1})
+	}
+	resp = &Response{Results: []Result{{Title: strings.Repeat("y", 200), MatchRanges: many}}}
+	results, _ = SanitizeResponse(resp, false)
+	require.Len(t, results[0].MatchRanges, maxMatchRanges)
 }

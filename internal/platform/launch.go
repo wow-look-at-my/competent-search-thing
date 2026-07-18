@@ -37,9 +37,12 @@ func OpenCommands(goos, path string) [][]string {
 // interface (highlights the file itself); --print-reply makes
 // dbus-send wait for the method reply, so a missing file manager
 // surfaces as a fast non-zero exit and the launcher falls back to
-// opening the parent directory with xdg-open. An unsupported goos
+// opening the parent directory with xdg-open. startupID rides the
+// ShowItems startup-id argument (linux only; "" preserves the old
+// empty-credential call byte-identically) so a file manager that
+// honors it can raise its window with focus. An unsupported goos
 // returns nil.
-func RevealCommands(goos, path string) [][]string {
+func RevealCommands(goos, path, startupID string) [][]string {
 	switch goos {
 	case "linux":
 		return [][]string{
@@ -49,7 +52,7 @@ func RevealCommands(goos, path string) [][]string {
 				"/org/freedesktop/FileManager1",
 				"org.freedesktop.FileManager1.ShowItems",
 				"array:string:" + fileURI(path),
-				"string:",
+				"string:" + startupID,
 			},
 			{"xdg-open", filepath.Dir(path)},
 		}
@@ -92,12 +95,15 @@ type Launcher struct {
 	// Run starts argv fire-and-forget (the plugin run_command path,
 	// where the child is a long-lived application): it returns once
 	// the process has started, and a background reaper logs a
-	// non-zero exit. Seam for tests.
-	Run func(argv []string) error
-	// Start begins argv and returns a wait func that blocks until the
-	// process exits, folding captured stderr into a non-zero exit
-	// error. Seam for tests; production is startObserved.
-	Start func(argv []string) (wait func() error, err error)
+	// non-zero exit. extraEnv entries are appended to the child's
+	// environment (nil/empty = inherit unchanged). Seam for tests.
+	Run func(argv, extraEnv []string) error
+	// Start begins argv (with extraEnv appended to the child's
+	// environment; nil = inherit unchanged) and returns the child's
+	// pid plus a wait func that blocks until the process exits,
+	// folding captured stderr into a non-zero exit error. Seam for
+	// tests; production is startObserved.
+	Start func(argv, extraEnv []string) (pid int, wait func() error, err error)
 	// Grace bounds how long Open/Reveal wait for a fast failure
 	// (DefaultGrace when zero).
 	Grace time.Duration
@@ -126,11 +132,16 @@ func (l *Launcher) logf(format string, v ...interface{}) {
 // (the actual application) inherits the descriptor, and with a pipe
 // that would either block the reaper for the application's whole
 // lifetime or -- if the read end were closed early -- SIGPIPE the
-// application when it logs. The returned wait blocks until the
-// process exits and returns its exit error with the captured stderr
-// folded in.
-func (l *Launcher) startObserved(argv []string) (func() error, error) {
+// application when it logs. extraEnv entries are appended to the
+// inherited environment (per-child only, never os.Setenv; an empty
+// extraEnv leaves cmd.Env nil, byte-identical to the pre-env
+// behavior). The returned wait blocks until the process exits and
+// returns its exit error with the captured stderr folded in.
+func (l *Launcher) startObserved(argv, extraEnv []string) (int, func() error, error) {
 	cmd := exec.Command(argv[0], argv[1:]...)
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	var capture *os.File
 	if f, err := os.CreateTemp("", "competent-search-stderr-*"); err == nil {
 		_ = os.Remove(f.Name()) // unlink now; the fd keeps it readable
@@ -141,9 +152,9 @@ func (l *Launcher) startObserved(argv []string) (func() error, error) {
 		if capture != nil {
 			_ = capture.Close()
 		}
-		return nil, err
+		return 0, nil, err
 	}
-	return func() error {
+	return cmd.Process.Pid, func() error {
 		err := cmd.Wait()
 		msg := readCapped(capture, maxStderrCapture)
 		if capture != nil {
@@ -175,9 +186,9 @@ func readCapped(f *os.File, limit int64) string {
 // runDetached starts argv without blocking and reaps it in the
 // background, logging a non-zero exit (with captured stderr) so a
 // failed launch is never invisible. It is the production Run value.
-func (l *Launcher) runDetached(argv []string) error {
+func (l *Launcher) runDetached(argv, extraEnv []string) error {
 	l.logf("run: exec %q", argv)
-	wait, err := l.startObserved(argv)
+	_, wait, err := l.startObserved(argv, extraEnv)
 	if err != nil {
 		l.logf("run: %s: failed to start: %v", argv[0], err)
 		return err
@@ -194,19 +205,58 @@ func (l *Launcher) runDetached(argv []string) error {
 // Grace: long enough to catch a handler that fails immediately, never
 // long enough to wait out one that is busy starting an application.
 func (l *Launcher) Open(path string) error {
+	return l.OpenEnv(path, nil)
+}
+
+// OpenEnv is Open with extraEnv entries appended to each candidate
+// child's environment (the launch-credential carrier; nil behaves
+// exactly like Open).
+func (l *Launcher) OpenEnv(path string, extraEnv []string) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("open: empty path")
 	}
-	return l.launch("open", OpenCommands(l.GOOS, path))
+	return l.launch("open", OpenCommands(l.GOOS, path), extraEnv)
 }
 
 // Reveal shows path selected in the OS file manager, with the same
 // bounded-wait semantics as Open.
 func (l *Launcher) Reveal(path string) error {
+	return l.RevealEnv(path, nil, "")
+}
+
+// RevealEnv is Reveal with extraEnv appended to each candidate
+// child's environment and startupID injected into the FileManager1
+// ShowItems startup-id argument (empty values behave exactly like
+// Reveal).
+func (l *Launcher) RevealEnv(path string, extraEnv []string, startupID string) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("reveal: empty path")
 	}
-	return l.launch("reveal", RevealCommands(l.GOOS, path))
+	return l.launch("reveal", RevealCommands(l.GOOS, path, startupID), extraEnv)
+}
+
+// Launch runs one specific command line (a resolved handler's Exec,
+// already expanded) with extraEnv appended to the child's
+// environment, under the same observed-grace semantics Open applies
+// to its candidates: a fast failure surfaces as an error, a child
+// still running when the grace window expires is success. It returns
+// the child's pid (0 when the start failed) so the raise watcher can
+// match the launched window by process.
+func (l *Launcher) Launch(argv, extraEnv []string) (int, error) {
+	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
+		return 0, errors.New("launch: empty command")
+	}
+	l.logf("launch: exec %q", argv)
+	pid, wait, err := l.Start(argv, extraEnv)
+	if err != nil {
+		err = fmt.Errorf("%s: failed to start: %w", argv[0], err)
+		l.logf("launch: %v", err)
+		return 0, err
+	}
+	if err := l.awaitGrace("launch", argv[0], wait); err != nil {
+		return 0, err
+	}
+	return pid, nil
 }
 
 // launch tries each candidate argv until one succeeds. Every spawn is
@@ -217,14 +267,14 @@ func (l *Launcher) Reveal(path string) error {
 // candidate. A child still running when the window closes counts as
 // success: launches stay non-blocking by design, and the background
 // reaper still logs a late failure.
-func (l *Launcher) launch(verb string, candidates [][]string) error {
+func (l *Launcher) launch(verb string, candidates [][]string, extraEnv []string) error {
 	if len(candidates) == 0 {
 		return fmt.Errorf("%s: unsupported platform %q", verb, l.GOOS)
 	}
 	var errs []error
 	for _, argv := range candidates {
 		l.logf("%s: exec %q", verb, argv)
-		wait, err := l.Start(argv)
+		_, wait, err := l.Start(argv, extraEnv)
 		if err != nil {
 			err = fmt.Errorf("%s: failed to start: %w", argv[0], err)
 			l.logf("%s: %v", verb, err)

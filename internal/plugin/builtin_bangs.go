@@ -1,6 +1,10 @@
 package plugin
 
-import "context"
+import (
+	"context"
+
+	"github.com/wow-look-at-my/competent-search-thing/internal/match"
+)
 
 // builtinSuggestID is the provider id of the bang-suggestions builtin.
 const builtinSuggestID = "bangs"
@@ -26,35 +30,41 @@ func newBangSuggestProvider(reg *Registry) *bangSuggestProvider {
 	}
 }
 
-func (p *bangSuggestProvider) query(_ context.Context, req Request) ([]Result, []string, error) {
+func (p *bangSuggestProvider) limit() int      { return maxBangSuggestions }
+func (p *bangSuggestProvider) preRanked() bool { return true }
+
+// candidates lists the completions in suggestion order: the list is
+// query-derived routing state, so the source is preRanked -- the
+// engine mints descending triggered-band scores that keep the order
+// stable in the UI.
+func (p *bangSuggestProvider) candidates(_ context.Context, req Request) ([]match.Candidate, error) {
 	bq, ok := p.reg.bangs.Parse(req.Query)
 	if !ok {
-		return nil, nil, nil // only dispatched for bang-shaped queries
+		return nil, nil // only dispatched for bang-shaped queries
 	}
 	ordered := p.candidateBangs(bq.Name)
-	if len(ordered) > maxBangSuggestions {
-		ordered = ordered[:maxBangSuggestions]
-	}
 	primary := p.reg.bangs.Primary()
-	results := make([]Result, 0, len(ordered))
-	for i, b := range ordered {
+	out := make([]match.Candidate, 0, len(ordered))
+	for _, b := range ordered {
 		subtitle := ""
 		if prov, ok := p.reg.byID[b.ProviderID]; ok {
 			subtitle = prov.displayName()
 		}
-		// Descending by list position keeps the order stable in the UI.
-		score := float64(90 - i)
-		results = append(results, Result{
+		title := primary + b.Bang
+		out = append(out, match.Candidate{
 			// Titles use the primary sigil; set_query keeps the sigil
 			// the user actually typed.
-			Title:    primary + b.Bang,
-			Subtitle: subtitle,
-			Icon:     "hash",
-			Score:    &score,
-			Action:   &Action{Type: ActionSetQuery, Value: bq.Sigil + b.Bang + " " + bq.Rest},
+			Display: title,
+			Texts:   []string{title},
+			Payload: Result{
+				Title:    title,
+				Subtitle: subtitle,
+				Icon:     "hash",
+				Action:   &Action{Type: ActionSetQuery, Value: bq.Sigil + b.Bang + " " + bq.Rest},
+			},
 		})
 	}
-	return results, nil, nil
+	return out, nil
 }
 
 // candidateBangs lists the bangs to suggest for a typed partial name:
