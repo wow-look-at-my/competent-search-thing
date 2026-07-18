@@ -81,7 +81,9 @@ func (a *App) startFrecency() {
 	// Async so a slow disk never delays Startup. A recordOpen racing
 	// the load can at worst lose that single open (Load replaces the
 	// in-memory state) -- harmless, and the window is sub-millisecond.
+	a.frecWG.Add(1)
 	go func() {
+		defer a.frecWG.Done()
 		if err := store.Load(); err != nil {
 			log.Printf("frecency: %v (starting with an empty open-count store)", err)
 		}
@@ -110,7 +112,9 @@ func (a *App) recordOpen(path string) {
 	if st == nil {
 		return
 	}
+	a.frecWG.Add(1)
 	go func() {
+		defer a.frecWG.Done()
 		if err := st.RecordOpen(path); err != nil {
 			a.frecErrOnce.Do(func() {
 				log.Printf("frecency: recording an open: %v (in-session ranking still works; further write errors suppressed)", err)
@@ -143,7 +147,9 @@ func (a *App) captureFrecencyCwd(c *appctx.Cache) {
 		a.setFrecencyCwd("")
 		return
 	}
+	a.frecWG.Add(1)
 	go func() {
+		defer a.frecWG.Done()
 		cwd, _ := frecency.DeriveCwd(newTree(), pid)
 		a.setFrecencyCwd(cwd) // "" (no meaningful cwd) clears
 	}()

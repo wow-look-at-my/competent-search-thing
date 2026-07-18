@@ -178,12 +178,17 @@ type App struct {
 	// the blend the Manager serves, built once at Startup; nil/zero
 	// before that or when config disables the feature (recordOpen and
 	// the cwd capture then no-op). frecBlend is the base copy the cwd
-	// stash derives fresh immutable Blends from.
+	// stash derives fresh immutable Blends from. frecWG tracks the
+	// layer's short-lived goroutines (state load, open recording, cwd
+	// derivation) so Shutdown can drain them -- a recording racing
+	// process teardown would otherwise be lost, and in tests a write
+	// racing the TempDir cleanup fails the test.
 	frecOnce    sync.Once
 	frecErrOnce sync.Once
 	frecMu      sync.Mutex // guards frecStore, frecBlend
 	frecStore   *frecency.Store
 	frecBlend   index.Blend
+	frecWG      sync.WaitGroup
 
 	// rt and plat are seams over the Wails runtime and the platform
 	// layer. Production fills them in New; unit tests MUST replace
@@ -443,6 +448,13 @@ func (a *App) Shutdown(_ context.Context) {
 	if tw != nil {
 		tw.stop()
 	}
+
+	// Drain the frecency layer's short-lived goroutines (one state
+	// load, in-flight open recordings, a cwd derivation) so an open
+	// recorded moments before quit still hits the disk. Each is a
+	// single bounded file operation or /proc walk -- no lock is held
+	// here and none of them can block indefinitely.
+	a.frecWG.Wait()
 }
 
 // Search returns index entries whose name contains query,
