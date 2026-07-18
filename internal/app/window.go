@@ -12,6 +12,7 @@ import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
 	"github.com/wow-look-at-my/competent-search-thing/internal/firefox"
 	"github.com/wow-look-at-my/competent-search-thing/internal/gsettings"
+	"github.com/wow-look-at-my/competent-search-thing/internal/launch"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform/native"
 )
@@ -85,15 +86,49 @@ type platformSeams struct {
 	mediaKeysDaemon func(ctx context.Context) (bool, error)
 	cursorInfo      func() (cx, cy int, ds []platform.Display, ok bool)
 	moveWindow      func(x, y int) bool
-	// lstat probes the disk for the outside-roots hint (hint.go);
-	// production is os.Lstat, tests pin it so no real IO happens.
-	lstat  func(path string) (os.FileInfo, error)
-	open   func(path string) error
-	reveal func(path string) error
-	run    func(argv []string) error
+	// lstat probes the disk for the outside-roots hint (hint.go) and
+	// the launch path's directory check; production is os.Lstat, tests
+	// pin it so no real IO happens.
+	lstat func(path string) (os.FileInfo, error)
+	// open/reveal/run execute launches; extraEnv carries the minted
+	// launch credential to the child (nil = old behavior), and
+	// reveal's startupID rides the FileManager1 ShowItems argument.
+	open   func(path string, extraEnv []string) error
+	reveal func(path string, extraEnv []string, startupID string) error
+	run    func(argv, extraEnv []string) error
+	// launchExec spawns one resolved handler command line under the
+	// launcher's observed-grace semantics and reports the child pid
+	// for the raise watcher; production is Launcher.Launch.
+	launchExec func(argv, extraEnv []string) (int, error)
+	// resolveHandler and handlerByID look up the default application
+	// for a target / a .desktop id (launch capabilities included);
+	// production is the native gio glue, linux only.
+	resolveHandler func(t launch.Target) (launch.Handler, bool)
+	handlerByID    func(id string) (launch.Handler, bool)
+	// mintCredential mints one launch credential on the GTK thread
+	// (startup-notification id or activation token), described by the
+	// resolved handler's desktop id ("" = a synthesized appinfo);
+	// best-effort, a none-credential on timeout or unsupported
+	// backends.
+	mintCredential func(desktopID string) launch.Credential
+	// prepareLaunch performs the one-time native launch setup (the
+	// Wayland input-serial listener); called once at Startup.
+	prepareLaunch func()
+	// dbusLaunch performs one org.freedesktop.Application activation
+	// (the D-Bus launch transport); production wraps
+	// launch.DBusActivate with a bounded timeout.
+	dbusLaunch func(call launch.DBusCall) error
+	// watchState reads the raise watcher's X snapshot (stacking-order
+	// windows + active window); ok=false when there is no X server.
+	watchState func() (launch.XState, bool)
+	// snRemove broadcasts the startup-notification remove message
+	// that reaps an X11 startup sequence our launchee never completed
+	// (chromium-family apps); production is the native xgb broadcast.
+	snRemove func(id string) error
 	// activateWindow raises and focuses one open window by its
-	// window-system id (the activate_window plugin action); production
-	// is the native EWMH client message.
+	// window-system id (the activate_window plugin action and the
+	// raise watcher); production is the native EWMH client message
+	// with a fresh server timestamp.
 	activateWindow func(id uint32) error
 	appSource      appctx.Source
 	// firefoxBases lists the Firefox profiles.ini base directories the
@@ -125,12 +160,26 @@ func defaultPlatformSeams() platformSeams {
 		cursorInfo:      native.CursorDisplays,
 		moveWindow:      native.MoveWindow,
 		lstat:           os.Lstat,
-		open:            launcher.Open,
-		reveal:          launcher.Reveal,
+		open:            launcher.OpenEnv,
+		reveal:          launcher.RevealEnv,
 		run:             launcher.Run,
-		activateWindow:  native.ActivateWindow,
-		appSource:       native.AppSource(),
-		firefoxBases:    firefox.DefaultBaseDirs,
+		launchExec:      launcher.Launch,
+		resolveHandler:  native.ResolveHandler,
+		handlerByID:     native.HandlerByDesktopID,
+		mintCredential: func(desktopID string) launch.Credential {
+			return native.MintLaunchCredential(launchMintTimeout, desktopID)
+		},
+		prepareLaunch: native.PrepareLaunch,
+		dbusLaunch: func(call launch.DBusCall) error {
+			ctx, cancel := context.WithTimeout(context.Background(), launchDBusTimeout)
+			defer cancel()
+			return launch.DBusActivate(ctx, call)
+		},
+		watchState:     native.WatchState,
+		snRemove:       native.RemoveStartupSequence,
+		activateWindow: native.ActivateWindow,
+		appSource:      native.AppSource(),
+		firefoxBases:   firefox.DefaultBaseDirs,
 	}
 }
 

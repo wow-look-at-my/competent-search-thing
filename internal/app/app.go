@@ -112,7 +112,7 @@ type App struct {
 	hkOnce    sync.Once
 	notesOnce sync.Once
 
-	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, lastThemeErr, domReady, pendingShow, history
+	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, lastThemeErr, domReady, pendingShow, history, launchCtx, launchCancel
 	ctx        context.Context
 	visible    bool
 	lastToggle time.Time
@@ -123,6 +123,13 @@ type App struct {
 	// see toggle in window.go.
 	lastHide   time.Time
 	hotkeyStop func()
+	// launchCtx bounds the post-launch raise-watcher goroutines (see
+	// launch.go): created on first use, cancelled in Shutdown and left
+	// cancelled, so late launches spawn watchers that exit instantly.
+	launchCtx    context.Context
+	launchCancel context.CancelFunc
+	// launchOnce guards the one-time launch announce + native prep.
+	launchOnce sync.Once
 	// hotkeyCancel aborts the async portal/gsettings backend chain;
 	// portalHK is the active portal shortcut (nil otherwise);
 	// hotkeyDesc describes the effective summon trigger (see
@@ -254,6 +261,7 @@ func (a *App) Startup(ctx context.Context) {
 			log.Printf("config: %s", n)
 		}
 	})
+	a.launchOnce.Do(a.announceLaunch)
 	a.hkOnce.Do(a.registerHotkey)
 	a.trayOnce.Do(a.startTray)
 	if a.opt.IPC != nil {
@@ -409,7 +417,19 @@ func (a *App) Shutdown(_ context.Context) {
 	a.trayH = nil
 	trayCancel := a.trayCancel
 	a.trayCancel = nil
+	launchCancel := a.launchCancel
+	a.launchCancel = nil
+	if launchCancel == nil && a.launchCtx == nil {
+		// Nothing was ever launched: park a pre-cancelled context so a
+		// post-shutdown launch cannot arm a watcher that outlives us.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		a.launchCtx = ctx
+	}
 	a.mu.Unlock()
+	if launchCancel != nil {
+		launchCancel()
+	}
 	if hkCancel != nil {
 		hkCancel()
 	}
@@ -492,10 +512,12 @@ func (a *App) Search(query string) []Result {
 	return res
 }
 
-// Open launches path with the operating system's default handler and
-// hides the bar on success.
+// Open launches path (or URL) with the operating system's default
+// handler -- on linux through the credentialed launch path, so the
+// target application's window ends focused and raised (see launch.go)
+// -- and hides the bar on success.
 func (a *App) Open(path string) error {
-	if err := a.plat.open(path); err != nil {
+	if err := a.openTarget(path); err != nil {
 		return err
 	}
 	a.Hide()
@@ -503,9 +525,9 @@ func (a *App) Open(path string) error {
 }
 
 // Reveal shows path selected in the operating system's file manager
-// and hides the bar on success.
+// (credentialed on linux, like Open) and hides the bar on success.
 func (a *App) Reveal(path string) error {
-	if err := a.plat.reveal(path); err != nil {
+	if err := a.revealTarget(path); err != nil {
 		return err
 	}
 	a.Hide()

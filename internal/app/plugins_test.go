@@ -338,7 +338,7 @@ func TestRunPluginActionCopyTextErrors(t *testing.T) {
 func TestRunPluginActionOpenPath(t *testing.T) {
 	a, r, _ := newPluginTestApp(t)
 	require.NoError(t, a.RunPluginAction("files", plugin.Action{Type: plugin.ActionOpenPath, Value: "/tmp/report.pdf"}))
-	require.Equal(t, []string{"open:/tmp/report.pdf", "hide"}, r.callNames())
+	require.Equal(t, []string{"resolve:/tmp/report.pdf", "mint", "open:/tmp/report.pdf", "hide"}, r.callNames())
 }
 
 func TestRunPluginActionOpenPathValidation(t *testing.T) {
@@ -349,7 +349,7 @@ func TestRunPluginActionOpenPathValidation(t *testing.T) {
 	require.Empty(t, r.callNames(), "invalid paths never reach the launcher")
 
 	boom := errors.New("no handler")
-	a.plat.open = func(string) error { return boom }
+	a.plat.open = func(string, []string) error { return boom }
 	require.ErrorIs(t, a.RunPluginAction("files", plugin.Action{Type: plugin.ActionOpenPath, Value: "/tmp/x"}), boom)
 	require.False(t, r.has("hide"), "a failed open does not hide the bar")
 }
@@ -357,7 +357,7 @@ func TestRunPluginActionOpenPathValidation(t *testing.T) {
 func TestRunPluginActionOpenURL(t *testing.T) {
 	a, r, _ := newPluginTestApp(t)
 	require.NoError(t, a.RunPluginAction("web", plugin.Action{Type: plugin.ActionOpenURL, Value: "https://example.com/x"}))
-	require.Equal(t, []string{"open:https://example.com/x", "hide"}, r.callNames())
+	require.Equal(t, []string{"resolve:https://example.com/x", "mint", "open:https://example.com/x", "hide"}, r.callNames())
 }
 
 func TestRunPluginActionOpenURLValidation(t *testing.T) {
@@ -399,7 +399,7 @@ func TestRunPluginActionRunCommandValidation(t *testing.T) {
 	require.Empty(t, r.callNames(), "invalid argv never reaches the launcher")
 
 	boom := errors.New("spawn failed")
-	a.plat.run = func([]string) error { return boom }
+	a.plat.run = func([]string, []string) error { return boom }
 	require.ErrorIs(t, a.RunPluginAction("apps", plugin.Action{Type: plugin.ActionRunCommand, Argv: []string{"firefox"}}), boom)
 	require.False(t, r.has("hide"), "a failed spawn does not hide the bar")
 }
@@ -474,7 +474,9 @@ func TestRunBuiltinConfigOpensConfigJSON(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(config.EnvConfigDir, dir)
 	require.NoError(t, a.RunPluginAction("app", plugin.Action{Type: plugin.ActionRunBuiltin, Value: "config"}))
-	require.Equal(t, []string{"open:" + filepath.Join(dir, "config.json"), "hide"}, r.callNames())
+	cfgPath := filepath.Join(dir, "config.json")
+	require.Equal(t, []string{"resolve:" + cfgPath, "mint", "open:" + cfgPath, "hide"}, r.callNames(),
+		"the config file opens through the credentialed launch path too")
 }
 
 func TestRunBuiltinVersionCopiesWithoutHiding(t *testing.T) {
