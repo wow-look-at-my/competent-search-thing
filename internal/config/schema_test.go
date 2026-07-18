@@ -88,6 +88,20 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 				ProfileDir: "/home/me/.mozilla/firefox/abc.default",
 			},
 		},
+		Preview: PreviewConfig{
+			Enabled:       true,
+			WindowWidth:   1920,
+			WindowHeight:  1000,
+			TextMaxKB:     512,
+			ImageMaxEdge:  1200,
+			DirMaxEntries: 500,
+			Kagi:          PreviewKagiConfig{APIKey: "kagi-secret", MaxResults: 5},
+			OpenAI: PreviewOpenAIConfig{
+				APIKey:          "sk-secret",
+				Model:           "gpt-5",
+				MaxOutputTokens: 2048,
+			},
+		},
 	}
 	data, err = json.Marshal(full)
 	require.NoError(t, err)
@@ -131,6 +145,19 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"negative openTabs max":            `{"firefox":{"openTabs":{"maxResults":-2}}}`,
 		"openTabs key typo":                `{"firefox":{"openTabs":{"maxResluts":6}}}`,
 		"non-string tabs dir":              `{"firefox":{"openTabs":{"profileDir":7}}}`,
+		"non-bool preview enabled":         `{"preview":{"enabled":"yes"}}`,
+		"zero preview windowWidth":         `{"preview":{"windowWidth":0}}`,
+		"negative preview windowHeight":    `{"preview":{"windowHeight":-1}}`,
+		"zero preview textMaxKB":           `{"preview":{"textMaxKB":0}}`,
+		"zero preview imageMaxEdge":        `{"preview":{"imageMaxEdge":0}}`,
+		"zero preview dirMaxEntries":       `{"preview":{"dirMaxEntries":0}}`,
+		"preview key typo":                 `{"preview":{"enbled":true}}`,
+		"non-string kagi apiKey":           `{"preview":{"kagi":{"apiKey":7}}}`,
+		"zero kagi maxResults":             `{"preview":{"kagi":{"maxResults":0}}}`,
+		"kagi key typo":                    `{"preview":{"kagi":{"apikey":"x"}}}`,
+		"empty openai model":               `{"preview":{"openai":{"model":""}}}`,
+		"zero openai maxOutputTokens":      `{"preview":{"openai":{"maxOutputTokens":0}}}`,
+		"openai key typo":                  `{"preview":{"openai":{"modle":"gpt-5-mini"}}}`,
 	}
 	for name, doc := range cases {
 		require.Error(t, validateConfigJSON(sch, []byte(doc)), "case %q must fail validation", name)
@@ -214,4 +241,10 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json $defs/frequentSitesConfig out of sync with FrequentSitesConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(OpenTabsConfig{})), configSchemaProperties(t, "openTabsConfig"),
 		"config.schema.json $defs/openTabsConfig out of sync with OpenTabsConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PreviewConfig{})), configSchemaProperties(t, "previewConfig"),
+		"config.schema.json $defs/previewConfig out of sync with PreviewConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PreviewKagiConfig{})), configSchemaProperties(t, "previewKagiConfig"),
+		"config.schema.json $defs/previewKagiConfig out of sync with PreviewKagiConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PreviewOpenAIConfig{})), configSchemaProperties(t, "previewOpenAIConfig"),
+		"config.schema.json $defs/previewOpenAIConfig out of sync with PreviewOpenAIConfig")
 }

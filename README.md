@@ -383,6 +383,16 @@ The file is created with defaults on first run:
       "maxResults": 6,
       "profileDir": ""
     }
+  },
+  "preview": {
+    "enabled": false,
+    "windowWidth": 1600,
+    "windowHeight": 800,
+    "textMaxKB": 256,
+    "imageMaxEdge": 800,
+    "dirMaxEntries": 200,
+    "kagi": { "apiKey": "", "maxResults": 8 },
+    "openai": { "apiKey": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 }
   }
 }
 ```
@@ -486,6 +496,20 @@ Field reference:
   transmitted; disable the sections via
   `plugins.entries["firefox-frequent"].disabled` and
   `plugins.entries["firefox-tabs"].disabled`.
+- `preview` -- the preview pane (opt-in). `enabled` (default `false`)
+  turns on a right-hand pane showing the selected result and widens
+  the window to `windowWidth` x `windowHeight` (defaults 1600 x 800;
+  read once at startup). `textMaxKB` (default 256) caps how much of a
+  text file one preview reads; `imageMaxEdge` (default 800) caps a
+  thumbnail's longest edge; `dirMaxEntries` (default 200) caps a
+  directory listing. `kagi.apiKey` / `openai.apiKey` are SECRETS
+  (passed through verbatim, never logged; the `KAGI_API_KEY` /
+  `OPENAI_API_KEY` environment variables work too) enabling the
+  explicit-trigger web-search and answer previews; `kagi.maxResults`
+  (default 8), `openai.model` (default `gpt-5-mini`) and
+  `openai.maxOutputTokens` (default 1024) tune them. Zero or negative
+  numbers and an empty model are repaired to the defaults. See
+  [Preview pane](#preview-pane).
 
 The full format is formally described by
 [`schemas/config.schema.json`](schemas/config.schema.json) -- add a
@@ -1353,6 +1377,90 @@ So on a Wayland session the section simply never appears, and one log
 line says why. A future option is a GNOME Shell extension that exports
 the window list over D-Bus (for example "Window Calls"), which the app
 could consume opt-in; nothing like that ships today.
+
+## Preview pane
+
+An opt-in right-hand pane that previews the selected result as you
+move through the list, plus explicit web-search and AI-answer lookups.
+Off by default; enable it in `config.json`:
+
+```json
+{ "preview": { "enabled": true } }
+```
+
+With the pane enabled the window opens at `preview.windowWidth` x
+`preview.windowHeight` (defaults 1600 x 800, read once at startup):
+the classic 680-wide results column stays on the left, exactly as
+before, and the pane fills the remaining width behind a divider. With
+the pane disabled the window is the classic 680 x 460 and none of
+this exists -- no pane markup is active and no preview code runs.
+
+What the pane shows for the selected row:
+
+- **Text files** -- the first `textMaxKB` KiB (default 256) with
+  syntax highlighting (highlight.js, bundled grammars: Go, JS/TS,
+  Python, Rust, C/C++, C#, Java, Kotlin, Swift, Ruby, PHP, Lua,
+  bash/shell, JSON, YAML, TOML/INI, XML/HTML, CSS/SCSS, Markdown,
+  SQL, Dockerfile, Makefile, diff, Vim script, plain text). The
+  backend hints the language from the file name; small unhinted files
+  are auto-detected, and anything past the cap notes the truncation.
+- **Images** (png/jpg/gif/webp/bmp) -- a downscaled thumbnail
+  (longest edge `imageMaxEdge`, default 800) with pixel dimensions
+  and file size.
+- **Directories** -- the first `dirMaxEntries` entries (default 200),
+  directories first, with sizes.
+- **Everything else** -- a metadata card (size, modified time, mode,
+  kind). Binary files are sniffed and described, never dumped;
+  symlinks are described, never followed. Plugin rows get a card from
+  their own title/subtitle/source.
+
+A fast metadata card appears immediately while the content preview
+computes, and repeat visits are served from an in-memory cache that
+invalidates when the file's size or mtime changes. Browsing stays
+free: the pane paints an instant header from data already in memory,
+the disk-touching dispatch is debounced (~90ms) so a held arrow key
+never queues work, stale answers are dropped by generation, and a
+spinner appears only when a preview takes longer than ~150ms.
+
+Web search (Kagi) and AI answers (OpenAI) run ONLY on an explicit
+trigger: the two buttons at the bottom of the pane or their
+shortcuts, `Ctrl+K` (search the web for the current query) and
+`Ctrl+I` (ask AI). No keystroke, selection, or render path ever
+calls out to the network by itself. Each provider needs its API key:
+
+- Kagi: `preview.kagi.apiKey`, or the `KAGI_API_KEY` environment
+  variable; `preview.kagi.maxResults` (default 8) caps the hits.
+- OpenAI: `preview.openai.apiKey`, or `OPENAI_API_KEY`;
+  `preview.openai.model` (default `gpt-5-mini`) and
+  `preview.openai.maxOutputTokens` (default 1024) shape the answer.
+
+The keys are passed through verbatim and NEVER logged or exposed to
+the page -- the frontend only learns "configured or not", and an
+unconfigured provider's button renders disabled with a hint naming
+the config key.
+
+Web searches go to the Kagi Search API (v1: `GET
+https://kagi.com/api/v1/search`, `Authorization: Bot <key>`). Repeat
+queries are served from a 15-minute in-memory cache (marked `cached`
+in the pane, zero network), and a client-side courtesy rate limit --
+a burst of 3 requests refilling at 1 per second -- fails fast with
+"rate limited, retry shortly" instead of dialing. Searches time out
+hard at 10 seconds.
+
+AI answers go to the OpenAI Responses API (`POST /v1/responses` with
+your `model` and `maxOutputTokens`; answers cut off by the token cap
+end with a `[truncated by max_output_tokens]` marker line). Answers
+are cached PERSISTENTLY in `<configDir>/aicache.json` -- up to 128
+entries, least-recently-used evicted, file mode 0600 -- so asking the
+same question again (even across restarts) answers instantly with a
+`cached` badge and zero network; delete the file to clear the cache.
+Answers time out hard at 90 seconds.
+
+Both fetches share the preview pane's generation counter: answers
+that arrive after you moved on -- or after a newer fetch -- are
+dropped like any other stale preview, and provider failures render as
+a terse error card (HTTP status plus the provider's short message;
+never your key, never a raw response dump).
 
 ## Tray icon
 

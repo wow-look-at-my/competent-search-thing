@@ -13,15 +13,19 @@ import (
 	"time"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
+	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/history"
 	"github.com/wow-look-at-my/competent-search-thing/internal/index"
 	"github.com/wow-look-at-my/competent-search-thing/internal/ipc"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
+	"github.com/wow-look-at-my/competent-search-thing/internal/preview"
 	"github.com/wow-look-at-my/competent-search-thing/internal/watch"
 )
 
-// The searchbar window's fixed size; main.go feeds these to Wails and
-// the positioning math uses them.
+// The searchbar window's classic fixed size -- the size whenever the
+// preview pane is off. main.go feeds the effective size (these
+// defaults, or the preview-widened one from PreviewWindowSize) to
+// Wails and into Options.WindowW/WindowH for the positioning math.
 const (
 	WindowWidth  = 680
 	WindowHeight = 460
@@ -85,6 +89,16 @@ type Options struct {
 	// produced (wire cfg.MigrationNotes here); Startup logs each one
 	// loudly, exactly once, so a changed index scope is never silent.
 	ConfigNotes []string
+	// Preview is the preview pane configuration (wire config's
+	// preview section here); the zero value keeps the pane off and
+	// every preview method degrades to a no-op. See preview.go.
+	Preview config.PreviewConfig
+	// WindowW and WindowH are the effective window dimensions main.go
+	// applied (the preview pane widens the window); zero values mean
+	// the classic WindowWidth x WindowHeight. The positioning math
+	// consumes them.
+	WindowW int
+	WindowH int
 }
 
 // App is the Wails-bound application object. It carries the Wails
@@ -168,6 +182,21 @@ type App struct {
 	trayOnce sync.Once
 	newTray  func() trayHandle
 
+	// Preview pane layer (see preview.go in this package): the
+	// dispatcher (nil while the pane is disabled), the cancel func for
+	// its parent context (Shutdown), and the generation gate mirroring
+	// the plugin layer's pluginGen.
+	previewOnce   sync.Once
+	previewGen    atomic.Int64
+	previewMu     sync.Mutex // guards previewDisp, previewCancel
+	previewDisp   *preview.Dispatcher
+	previewCancel context.CancelFunc
+
+	// winW and winH are the effective window dimensions
+	// (Options.WindowW/WindowH; the WindowWidth/WindowHeight defaults
+	// when unset) the positioning math uses.
+	winW, winH int
+
 	// Query history (see history.go): built once at Startup, nil
 	// before that -- the bound methods degrade to no-ops, which keeps
 	// newTestApp working without extra wiring.
@@ -194,6 +223,10 @@ func New(m *index.Manager, opt Options) *App {
 	}
 	a.newRegistry = a.buildRegistry
 	a.newTray = a.buildTray
+	a.winW, a.winH = WindowWidth, WindowHeight
+	if opt.WindowW > 0 && opt.WindowH > 0 {
+		a.winW, a.winH = opt.WindowW, opt.WindowH
+	}
 	return a
 }
 
@@ -231,6 +264,7 @@ func (a *App) Startup(ctx context.Context) {
 		})
 	}
 	a.pluginOnce.Do(a.startPlugins)
+	a.previewOnce.Do(a.startPreview)
 	a.histOnce.Do(a.startHistory)
 	a.themeOnce.Do(a.startThemeWatch)
 	if a.manager == nil {
@@ -346,7 +380,9 @@ func (a *App) emitDegraded(s watch.Stats) {
 // the bus; closing the tray's connection unregisters the icon),
 // cancels the in-flight plugin generation, closes the registry, and
 // cancels the firefox context (aborting a frequent-sites history
-// refresh mid-copy), cancels a still-running initial build (its walk aborts
+// refresh mid-copy), cancels the preview dispatcher's parent context
+// (aborting an in-flight preview request; see preview.go), cancels a
+// still-running initial build (its walk aborts
 // and logs "index: initial build cancelled"), and stops the rescanner
 // first (it may be mid-rescan and calls back into the watcher to
 // resync watches), then the watcher, then the theme hot-reload
@@ -411,6 +447,8 @@ func (a *App) Shutdown(_ context.Context) {
 	if ffCancel != nil {
 		ffCancel()
 	}
+
+	a.shutdownPreview()
 
 	a.watchMu.Lock()
 	a.shuttingDown = true

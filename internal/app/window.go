@@ -287,12 +287,12 @@ func (a *App) positionOnCursorDisplay(ctx context.Context) bool {
 	if !ok {
 		return false
 	}
-	x, y := platform.BarPosition(target, WindowWidth, WindowHeight)
+	x, y := platform.BarPosition(target, a.winW, a.winH)
 	if a.plat.goos == "darwin" {
 		return a.plat.moveWindow(x, y)
 	}
 	wx, wy := a.rt.getPos(ctx)
-	cur, ok := platform.DisplayForWindow(displays, wx, wy, WindowWidth, WindowHeight)
+	cur, ok := platform.DisplayForWindow(displays, wx, wy, a.winW, a.winH)
 	if !ok {
 		return false
 	}
