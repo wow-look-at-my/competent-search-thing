@@ -420,3 +420,53 @@ func TestFirefoxConfig(t *testing.T) {
 	require.Equal(t, 3, got.Firefox.OpenTabs.MaxResults)
 	require.Equal(t, "/tabs/profile", got.Firefox.OpenTabs.ProfileDir)
 }
+
+func TestFrecencyConfig(t *testing.T) {
+	setConfigDir(t)
+	require.Equal(t, FrecencyConfig{
+		HalfLifeDays:   14,
+		WeightFrecency: 1.0,
+		WeightRecency:  1.0,
+		WeightCwd:      1.0,
+		WeightNoise:    1.0,
+		TierJumpCount:  3.0,
+	}, Default().Search.Frecency)
+
+	// A config predating the frecency block normalizes to the defaults.
+	var c Config
+	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
+	c.Normalize()
+	require.Equal(t, DefaultFrecency(), c.Search.Frecency)
+
+	// Exact zeros are repaired; NEGATIVE values are the documented
+	// per-signal off switch and pass through untouched -- except the
+	// half-life, which has no off meaning and repairs on <= 0.
+	c = Config{Search: SearchConfig{Frecency: FrecencyConfig{
+		Disabled:       true,
+		HalfLifeDays:   -2,
+		WeightFrecency: 0,
+		WeightRecency:  -1,
+		WeightCwd:      2.5,
+		WeightNoise:    0,
+		TierJumpCount:  -1,
+	}}}
+	c.Normalize()
+	fr := c.Search.Frecency
+	require.True(t, fr.Disabled, "the kill switch is never touched")
+	require.Equal(t, float64(DefaultFrecencyHalfLifeDays), fr.HalfLifeDays)
+	require.Equal(t, DefaultFrecencyWeight, fr.WeightFrecency)
+	require.Equal(t, -1.0, fr.WeightRecency, "negative weight = off, preserved")
+	require.Equal(t, 2.5, fr.WeightCwd)
+	require.Equal(t, DefaultFrecencyWeight, fr.WeightNoise)
+	require.Equal(t, -1.0, fr.TierJumpCount, "negative tier jump = off, preserved")
+
+	// The block round-trips through Save/Load.
+	in := Default()
+	in.Search.Frecency.HalfLifeDays = 7
+	in.Search.Frecency.TierJumpCount = 5
+	require.NoError(t, Save(in))
+	got, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 7.0, got.Search.Frecency.HalfLifeDays)
+	require.Equal(t, 5.0, got.Search.Frecency.TierJumpCount)
+}
