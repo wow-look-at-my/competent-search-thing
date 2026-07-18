@@ -258,10 +258,15 @@ func (a *App) startGnomeBinding(ctx context.Context, hk platform.Hotkey) bool {
 	// Prefer a stable spelling of that path: os.Executable is fully
 	// resolved, so under a symlinked install layout (Homebrew's
 	// versioned Cellar, Nix, stow) it names a directory the next
-	// upgrade deletes, killing the keybinding. The PATH shim -- or the
-	// symlink argv[0] was launched through -- keeps pointing at the
-	// current version; StableExecutable only ever substitutes a path
-	// proven (os.SameFile) to be this very binary.
+	// upgrade deletes, killing the keybinding. The PATH shim, the
+	// structural Homebrew mapping (the versioned Cellar path taken
+	// apart into the linked <prefix>/bin spelling, then the opt
+	// fallback -- derived from the path itself, so it works even when
+	// gsd's shim-less PATH and a Cellar-path argv[0] cooperate on
+	// nothing better), or the symlink argv[0] was launched through
+	// keeps pointing at the current version; StableExecutable only
+	// ever substitutes a path proven (os.SameFile) to be this very
+	// binary.
 	args0 := ""
 	if a.plat.args0 != nil {
 		args0 = a.plat.args0()

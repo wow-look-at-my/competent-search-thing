@@ -9,8 +9,15 @@
 // (app:shown, index:progress, watch:degraded, theme:changed,
 // stats:update -- the system stats row at the bottom edge). Rendering
 // lives in render.ts (results) and stats.ts (the stats row's
-// formatting); theme token/custom-css application lives in theme.ts.
+// formatting); theme token/custom-css application lives in theme.ts;
+// the opt-in preview pane lives in preview.ts (wired below through
+// GetPreviewConfig + the selection/query hooks).
 
+import {
+  initPreview,
+  previewOnQueryChange,
+  previewOnSelectionChange,
+} from "./preview";
 import {
   applySelection,
   renderPluginSections,
@@ -171,6 +178,11 @@ const rowHandlers = {
 function select(index: number): void {
   state.selected = index;
   applySelection(state.rows, index);
+  // The single selection choke point: every path (arrows, hover,
+  // Home/End, render reconciles, history recall, app:shown reset)
+  // funnels through here, so the preview pane sees them all. A no-op
+  // while the pane is disabled.
+  previewOnSelectionChange(state.items[index] ?? null);
 }
 
 function moveSelection(delta: number): void {
@@ -391,6 +403,7 @@ function runSearch(app: WailsAppBindings): void {
   const seq = ++state.seq;
   const query = inputEl.value;
   state.query = query;
+  previewOnQueryChange(query); // no-op while the pane is disabled
   state.sections = []; // plugin sections are per-generation
   if (query.trim() === "") {
     fetchCheatSheet(app, seq);
@@ -611,6 +624,14 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
 
 function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   initTheme(app, rt);
+  app
+    .GetPreviewConfig()
+    .then((cfg) => {
+      initPreview(app, rt, cfg);
+    })
+    .catch((err: unknown) => {
+      console.warn("preview config fetch failed: " + String(err));
+    });
   inputEl.addEventListener("input", () => {
     state.histCursor = -1; // typing exits history browse mode
     scheduleSearch(app);

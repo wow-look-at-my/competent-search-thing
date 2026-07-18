@@ -240,3 +240,52 @@ func TestHideTracksVisibility(t *testing.T) {
 	a.toggle()
 	require.Len(t, r.emitted(eventShown), 2, "after Hide, toggle shows again instead of hiding")
 }
+
+func TestToggleRacedByDismissalStaysHidden(t *testing.T) {
+	// The field bug on grab-based summon backends: pressing the combo
+	// on an OPEN bar hides it through a side channel before the toggle
+	// callback runs -- activating the grab (the app's own XGrabKey, or
+	// gsd's for a GNOME media-keys binding) unfocuses the bar, the
+	// frontend's blur handler calls Hide, and on the gsettings backend
+	// the toggle then arrives a whole "<exe> toggle" process spawn +
+	// IPC round-trip later. That toggle finds the bar hidden; it must
+	// recognize the fresh hide as its own dismissal and stay hidden
+	// instead of re-summoning.
+	clk := &fakeClock{step: 50 * time.Millisecond}
+	a, r := newTestApp(t, nil, Options{})
+	a.plat.now = clk.now
+	a.Startup(context.Background())
+	a.DomReady(context.Background())
+
+	a.showOnCursorDisplay()
+	require.Len(t, r.emitted(eventShown), 1)
+
+	a.Hide()   // the blur dismissal the combo press triggered
+	a.toggle() // the same press's toggle callback, 50ms later
+	require.Len(t, r.emitted(eventShown), 1, "a dismiss press raced by its own blur-hide must not re-summon")
+
+	// Walk the clock past toggleGap: the next toggle is a normal
+	// summon again.
+	for i := 0; i < 6; i++ {
+		clk.now()
+	}
+	a.toggle()
+	require.Len(t, r.emitted(eventShown), 2, "a later toggle summons as usual")
+}
+
+func TestShowOnStartupThenToggleHides(t *testing.T) {
+	// The gsd first-press boot: "<exe> toggle" with no instance
+	// running becomes the app itself (ShowOnStartup), DomReady
+	// executes the deferred show, and the NEXT combo press must
+	// dismiss -- the deferred show marks the bar visible like any
+	// other summon.
+	a, r := newTestApp(t, nil, Options{ShowOnStartup: true})
+	a.plat.now = (&fakeClock{step: time.Second}).now
+	a.Startup(context.Background())
+	a.DomReady(context.Background())
+	require.Len(t, r.emitted(eventShown), 1, "DomReady executed the deferred show")
+
+	a.toggle()
+	require.True(t, r.has("hide"), "the next toggle hides instead of re-summoning")
+	require.Len(t, r.emitted(eventShown), 1)
+}

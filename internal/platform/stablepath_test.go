@@ -109,6 +109,46 @@ func TestStableExecutableFallsBackToExe(t *testing.T) {
 	require.Equal(t, exe, StableExecutable(exe, filepath.Join(root, "missing")), "a dead argv[0] falls through")
 }
 
+func TestStableExecutablePrefersBrewLinkedOverArgs0(t *testing.T) {
+	// THE field regression: gsd runs the keybinding command "<Cellar
+	// path> toggle" with its own PATH (no brew shim on it), and with
+	// no instance running that process boots the GUI itself -- so
+	// argv[0] IS the versioned Cellar path and trivially passes the
+	// same-binary guard. The structural mapping must win anyway, or
+	// every such startup re-registers the doomed versioned spelling.
+	exe, shim := brewLayout(t, t.TempDir(), "100")
+	emptyPath(t) // gsd's PATH does not contain the brew bin dir
+
+	require.Equal(t, shim, StableExecutable(exe, exe),
+		"the linked spelling wins over an args0 that is the versioned path itself")
+}
+
+func TestStableExecutableFallsBackToBrewOpt(t *testing.T) {
+	// An unlinked formula: no <prefix>/bin shim, but Homebrew's opt
+	// symlink (<prefix>/opt/<formula> -> Cellar/<formula>/<version>)
+	// survives upgrades all the same.
+	root := t.TempDir()
+	exe := writeExecutable(t, filepath.Join(root, "Cellar", "competent-search-thing", "1.2.3", "bin", "competent-search-thing"))
+	optDir := filepath.Join(root, "opt", "competent-search-thing")
+	require.NoError(t, os.MkdirAll(filepath.Dir(optDir), 0o755))
+	require.NoError(t, os.Symlink(filepath.Join(root, "Cellar", "competent-search-thing", "1.2.3"), optDir))
+	emptyPath(t)
+
+	require.Equal(t, filepath.Join(optDir, "bin", "competent-search-thing"), StableExecutable(exe, ""))
+}
+
+func TestStableExecutableRejectsForeignBrewCandidates(t *testing.T) {
+	// A DIFFERENT file sits at the linked location (another install
+	// writing into the same prefix): the same-binary guard refuses
+	// every brew candidate and the resolved path stands.
+	root := t.TempDir()
+	exe := writeExecutable(t, filepath.Join(root, "Cellar", "competent-search-thing", "1.2.3", "bin", "competent-search-thing"))
+	writeExecutable(t, filepath.Join(root, "bin", "competent-search-thing")) // same name, different file
+	emptyPath(t)
+
+	require.Equal(t, exe, StableExecutable(exe, ""), "a foreign file at the linked path never wins")
+}
+
 func TestStableExecutableSurvivesBrewUpgrade(t *testing.T) {
 	// The field scenario end-to-end: v1 registers the shim; after the
 	// upgrade retargets the shim and deletes the old Cellar dir, the

@@ -108,7 +108,7 @@ func parseDesktopFile(path string) (InstalledApp, bool) {
 
 	var (
 		inEntry                     bool
-		typ, name, exec             string
+		typ, name, exec, icon       string
 		noDisplay, hidden, terminal bool
 	)
 	sc := bufio.NewScanner(f)
@@ -136,6 +136,8 @@ func parseDesktopFile(path string) (InstalledApp, bool) {
 			name = val
 		case "Exec":
 			exec = val
+		case "Icon":
+			icon = val
 		case "NoDisplay":
 			noDisplay = strings.EqualFold(val, "true")
 		case "Hidden":
@@ -150,5 +152,5 @@ func parseDesktopFile(path string) (InstalledApp, bool) {
 	if typ != "Application" || name == "" || exec == "" || noDisplay || hidden || terminal {
 		return InstalledApp{}, false
 	}
-	return InstalledApp{Name: name, Exec: exec}, true
+	return InstalledApp{Name: name, Exec: exec, Icon: icon}, true
 }

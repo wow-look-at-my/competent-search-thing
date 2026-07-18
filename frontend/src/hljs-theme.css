@@ -1,0 +1,80 @@
+/* highlight.js token colors for the preview pane's code view, mapped
+   onto the --sb-* design tokens with literal dark fallbacks (the same
+   convention as style.css's .plugin-* block). Imported from
+   highlight.ts so Vite bundles it alongside the highlighter. Scoped
+   under .preview-code: nothing outside the pane is affected, and no
+   new --sb-* token is introduced (the :root block is a sync_test.go
+   contract). */
+
+.preview-code .hljs {
+  color: var(--sb-fg, #f2f2f5);
+  background: transparent;
+}
+
+/* Keywords, tags, and types. */
+.preview-code .hljs-keyword,
+.preview-code .hljs-selector-tag,
+.preview-code .hljs-template-tag,
+.preview-code .hljs-tag,
+.preview-code .hljs-name,
+.preview-code .hljs-type,
+.preview-code .hljs-built_in,
+.preview-code .hljs-selector-id,
+.preview-code .hljs-selector-class,
+.preview-code .hljs-selector-pseudo,
+.preview-code .hljs-section,
+.preview-code .hljs-bullet {
+  color: var(--sb-accent, #8db8ff);
+}
+
+/* Strings and string-like tokens. */
+.preview-code .hljs-string,
+.preview-code .hljs-char.escape_,
+.preview-code .hljs-regexp,
+.preview-code .hljs-symbol,
+.preview-code .hljs-template-variable,
+.preview-code .hljs-link,
+.preview-code .hljs-quote,
+.preview-code .hljs-addition {
+  color: var(--sb-highlight, #8db8ff);
+}
+
+/* Numbers, literals, and attribute names. */
+.preview-code .hljs-number,
+.preview-code .hljs-literal,
+.preview-code .hljs-attr,
+.preview-code .hljs-attribute,
+.preview-code .hljs-variable.constant_,
+.preview-code .hljs-deletion {
+  color: var(--sb-warning, #d9a13d);
+}
+
+/* Titles: function/class definitions. */
+.preview-code .hljs-title,
+.preview-code .hljs-title.class_,
+.preview-code .hljs-title.function_ {
+  color: var(--sb-fg, #f2f2f5);
+  font-weight: 600;
+}
+
+/* Comments and meta/preprocessor lines. */
+.preview-code .hljs-comment,
+.preview-code .hljs-doctag,
+.preview-code .hljs-meta,
+.preview-code .hljs-meta .hljs-keyword {
+  color: var(--sb-fg-dim, #8a8a94);
+}
+
+/* Interpolation bodies reset to plain foreground. */
+.preview-code .hljs-subst {
+  color: var(--sb-fg, #f2f2f5);
+}
+
+/* Markdown emphasis. */
+.preview-code .hljs-emphasis {
+  font-style: italic;
+}
+
+.preview-code .hljs-strong {
+  font-weight: 600;
+}
