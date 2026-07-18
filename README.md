@@ -21,7 +21,9 @@ them as run artifacts for visual comparison.
 
 ## Install
 
-Every CI run publishes the built binaries to
+Every fully green CI run publishes one release carrying the binaries
+for every platform CI builds -- linux/amd64, windows/amd64, and
+darwin/arm64 -- to
 [buildhost](https://github.com/wow-look-at-my/buildhost) (the org's
 package registry at pazer.build). Downloads are anonymous; `latest`
 (the URL without a version) serves the newest build of the default
@@ -89,11 +91,26 @@ but untested on real Windows -- CI only *runs* the Linux build (the
 screenshot tests). WebView2 is preinstalled on Windows 11 and current
 Windows 10.
 
-### Not published
+### macOS (Apple Silicon)
 
-- **macOS**: the darwin build needs cgo against the Apple SDK, which
-  CI's Linux runner does not have. Build from source on a Mac instead
-  (see [Building](#building)).
+```
+sudo curl -fL --compressed "https://dl.pazer.build/competent-search-thing?os=darwin&arch=arm64" \
+  -o /usr/local/bin/competent-search-thing
+sudo chmod +x /usr/local/bin/competent-search-thing
+```
+
+macOS-specific notes:
+
+- If Gatekeeper blocks the binary (typical when it was downloaded with
+  a browser, which sets the quarantine attribute -- curl does not),
+  clear it: `xattr -d com.apple.quarantine /usr/local/bin/competent-search-thing`.
+- The global hotkey uses a CGEventTap, which needs the Accessibility
+  permission: System Settings > Privacy & Security > Accessibility,
+  then add the binary. The default hotkey is Option+Space -- Cmd+Space
+  belongs to Spotlight.
+- The darwin/arm64 binary is CI-built and passes the full unit-test
+  suite on macOS runners, but it has not yet had human acceptance
+  testing on real hardware.
 
 Other URL forms: `?v=N` pins a release permanently, `?branch=<name>`
 follows a branch (URL-encode slashes), and `&fmt=tar.gz`/`zip`
@@ -320,7 +337,8 @@ apply).
 
 ### macOS
 
-Xcode command line tools are required. Untested in CI (see caveats).
+Xcode command line tools are required. CI builds darwin/arm64 and runs
+the full unit-test suite on a macOS runner (no GUI run there).
 
 ### Windows
 
