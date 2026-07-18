@@ -1,6 +1,10 @@
 package plugin
 
-import "context"
+import (
+	"context"
+
+	"github.com/wow-look-at-my/competent-search-thing/internal/match"
+)
 
 // builtinAppID is the provider id of the app-commands builtin.
 const builtinAppID = "app"
@@ -44,20 +48,28 @@ func newAppCommandProvider(version string) *appCommandProvider {
 	return p
 }
 
-func (p *appCommandProvider) query(_ context.Context, req Request) ([]Result, []string, error) {
+func (p *appCommandProvider) limit() int      { return 1 }
+func (p *appCommandProvider) preRanked() bool { return true }
+
+// candidates yields the one command the targeting bang selected --
+// query-derived by construction, so the source is preRanked (the
+// engine mints it at the top of the triggered band).
+func (p *appCommandProvider) candidates(_ context.Context, req Request) ([]match.Candidate, error) {
 	if !req.Targeted {
-		return nil, nil, nil
+		return nil, nil
 	}
 	c, ok := p.commands[req.Bang]
 	if !ok {
-		return nil, nil, nil
+		return nil, nil
 	}
-	score := float64(100)
-	return []Result{{
-		Title:    c.title,
-		Subtitle: c.subtitle,
-		Icon:     c.icon,
-		Score:    &score,
-		Action:   &Action{Type: ActionRunBuiltin, Value: c.bang},
-	}}, nil, nil
+	return []match.Candidate{{
+		Display: c.title,
+		Texts:   []string{c.title},
+		Payload: Result{
+			Title:    c.title,
+			Subtitle: c.subtitle,
+			Icon:     c.icon,
+			Action:   &Action{Type: ActionRunBuiltin, Value: c.bang},
+		},
+	}}, nil
 }

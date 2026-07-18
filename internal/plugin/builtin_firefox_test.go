@@ -32,10 +32,7 @@ func firefoxQuery(t *testing.T, p *firefoxProvider, q string) []Result {
 		return nil
 	}
 	require.Zero(t, boost)
-	results, dropped, err := p.query(context.Background(), baseRequest(q, stripped, 1, nil))
-	require.NoError(t, err)
-	require.Empty(t, dropped)
-	return results
+	return srcResults(t, p, baseRequest(q, stripped, 1, nil))
 }
 
 func TestFirefoxProviderMatchGatesShortQueries(t *testing.T) {
@@ -59,15 +56,15 @@ func TestFirefoxProviderRanking(t *testing.T) {
 		want  string  // first result title
 		score float64 // its score
 	}{
-		{query: "git", want: "Pull requests", score: siteScoreHostPrefix},
-		{query: "GITHUB.COM", want: "Pull requests", score: siteScoreHostPrefix},
-		{query: "google", want: "Google", score: siteScoreHostPrefix}, // www. stripped
-		{query: "news", want: "Hacker News", score: siteScoreHostPrefix},
-		{query: "hacker", want: "Hacker News", score: siteScoreTitleWord},
-		{query: "started", want: "Get started with Go", score: siteScoreTitleWord},
-		{query: "ycombinator", want: "Hacker News", score: siteScoreHostSubstr},
-		{query: "tarted", want: "Get started with Go", score: siteScoreAnySubstr}, // mid-word title hit
-		{query: "pulls", want: "Pull requests", score: siteScoreAnySubstr},        // URL-only hit
+		{query: "git", want: "Pull requests", score: 73},        // host prefix
+		{query: "GITHUB.COM", want: "Pull requests", score: 83}, // host EXACT under the unified ladder
+		{query: "google", want: "Google", score: 83},            // title EXACT beats the host prefix
+		{query: "news", want: "Hacker News", score: 73},         // host prefix
+		{query: "hacker", want: "Hacker News", score: 73},       // title prefix
+		{query: "started", want: "Get started with Go", score: 63},
+		{query: "ycombinator", want: "Hacker News", score: 63},    // host segment = word start (after '.')
+		{query: "tarted", want: "Get started with Go", score: 53}, // mid-word title hit
+		{query: "pulls", want: "Pull requests", score: 63},        // URL path segment = word start (after '/')
 	}
 	for _, tt := range tests {
 		t.Run(tt.query, func(t *testing.T) {
@@ -139,41 +136,8 @@ func TestFirefoxProviderNoMatchesAndNoSource(t *testing.T) {
 	require.Empty(t, firefoxQuery(t, empty, "git"))
 
 	nilFn := newFirefoxProvider(nil, 0)
-	results, dropped, err := nilFn.query(context.Background(), baseRequest("git", "git", 1, nil))
-	require.NoError(t, err)
-	require.Empty(t, dropped)
-	require.Empty(t, results, "a nil source is inert, never a panic")
-}
-
-func TestWordStart(t *testing.T) {
-	tests := []struct {
-		s, needle string
-		want      bool
-	}{
-		{"pull requests", "pull", true},
-		{"pull requests", "requests", true},
-		{"pull requests", "equests", false},
-		{"hacker-news daily", "news", true},
-		{"hacker-news daily", "acker", false},
-		{"go", "go", true},
-		{"a b", "", false},
-		{"", "x", false},
-		// Cases folded in from the open-windows provider's copy of
-		// wordStart when the duplicate was removed (both features
-		// share this one helper now).
-		{"foo-main", "main", true},       // after punctuation
-		{"[main] scratch", "main", true}, // after a bracket
-		{"domain", "main", false},        // mid-word only
-		{"domain main", "main", true},    // later word-start occurrence wins
-		{"xx2main", "main", false},       // digits end a word too
-		{"main.go - code", "main", true}, // start of string
-		{"app - main.go", "main", true},  // after a space
-		{"", "main", false},
-		{"main", "nomatch", false},
-	}
-	for _, tt := range tests {
-		require.Equal(t, tt.want, wordStart(tt.s, tt.needle), "wordStart(%q, %q)", tt.s, tt.needle)
-	}
+	require.Empty(t, srcResults(t, nilFn, baseRequest("git", "git", 1, nil)),
+		"a nil source is inert, never a panic")
 }
 
 func TestNewRegistersFirefoxProviderOnlyWithSource(t *testing.T) {

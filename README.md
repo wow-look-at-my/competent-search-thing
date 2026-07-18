@@ -263,37 +263,91 @@ the full path instead (Everything-style):
 - Within a rank class the usual tie-breaks apply: directories first,
   then shorter paths, then alphabetical.
 
-## Fuzzy matching
+## Fuzzy matching and multi-term queries
 
-A name query also matches names that contain its characters **in
+Matching is ONE shared engine (`internal/match`) used by every result
+section: files, installed apps, open windows, Firefox frequent sites,
+open tabs, and (for gating and ranking) external plugin results. Two
+behaviors compose:
+
+**Multi-term**: whitespace splits a query into terms; ALL terms must
+match, **in any order**, each anywhere in the row's match fields:
+
+- `fire fox` (and `fox fire`) finds **Firefox** -- the app AND files
+- `my backup` finds `My Documents Backup`
+- `data report` finds `report_data_2.txt`
+
+**Fuzzy**: a term also matches text containing its characters **in
 order with gaps** -- a subsequence, the fzf/VS-Code-style fuzzy UX:
 
 - `fbar` finds `foo_bar.txt`
+- `firefx` finds Firefox (everywhere, not just files)
 - `drpt12` finds `data_report_12.txt`
-- `cst` finds `competent-search-thing`
 
-The ranking guarantee: exact, prefix, and substring matches ALWAYS
-rank above every fuzzy match -- fuzzy is a strictly lower tier and
-the existing tiers behave exactly as before. Within the fuzzy tier,
-matches rank by a position-aware score: hits at the name start, after
-word boundaries (`-`, `_`, `.`, space, letter/digit transitions) and
-at camelCase steps score higher, consecutive runs score higher, and
-large gaps are penalized (with a cap, so one long gap does not drown
-an otherwise good match). For the query `fb` that means `foo_bar` >
-`FooBar` > `fxxbyyy`.
+The ranking guarantee: exact, prefix, word-start, and substring
+matches ALWAYS rank above every fuzzy match -- fuzzy is a strictly
+lower tier. A multi-term match ranks at its WORST term's tier (every
+term a substring = the substring tier; any term subsequence-only = the
+fuzzy tier). Within the fuzzy tier, matches rank by a position-aware
+score: hits at the text start, after word boundaries (`-`, `_`, `.`,
+space, letter/digit transitions) and at camelCase steps score higher,
+consecutive runs score higher, and large gaps are penalized (with a
+cap, so one long gap does not drown an otherwise good match). For the
+query `fb` that means `foo_bar` > `FooBar` > `fxxbyyy`.
 
-There is no typo tolerance: a character that never occurs in the name
+The characters that matched **light up** in every result row --
+per-character letter coloring through the `highlight` theme token
+(never a background rectangle), including the exact characters a
+fuzzy alignment picked.
+
+There is no typo tolerance: a character that never occurs in the text
 is a miss (subsequence fuzz is also how fzf and VS Code's quick-open
 behave; Everything's matching is not typo-based either). Queries with
-a path separator ([path mode](#search-by-path)) have no fuzzy tier.
+a path separator ([path mode](#search-by-path)) stay literal
+single-pattern -- paths legitimately contain spaces, so no term
+splitting and no fuzzy tier there; space-named files are still found
+in name mode because each term matches on its own.
 
 Common queries cost nothing extra: whenever the substring tiers alone
 already fill the result limit, the fuzzy pass is skipped outright
 (every substring match outranks every fuzzy one, so it could not
-change the list). Turn the tier off entirely with
-`"search": { "fuzzyDisabled": true }` in
-[the configuration](#configuration); the engine then behaves exactly
-like the pre-fuzzy versions.
+change the list). Turn the fuzzy tier off EVERYWHERE (files and all
+builtin sections) with `"search": { "fuzzyDisabled": true }` in
+[the configuration](#configuration); term splitting applies regardless
+of the toggle.
+
+## Rewrite rules
+
+`rewrites` in [the configuration](#configuration) defines regex ->
+URL rules: paste `XY-12345` into the bar and the top result instantly
+opens your tracker.
+
+```json
+"rewrites": [
+  {
+    "name": "jira",
+    "pattern": "[A-Z]+-\\d+",
+    "replacement": "https://my.jira.com/$0"
+  }
+]
+```
+
+- Patterns are Go regexp (RE2: linear time, no backtracking; a handful
+  of compiled rules per keystroke is negligible). They FULL-MATCH the
+  trimmed query by default -- the pattern is compiled as
+  `^(?:pattern)$` unless you anchor it yourself (a leading `^` or
+  trailing `$` keeps it verbatim); write looser rules with explicit
+  `.*`.
+- `replacement` (and the optional `title`) expand capture groups with
+  the stdlib syntax: `$0`, `$1`, `${name}`, `$$` for a literal `$`.
+- The expansion must produce an absolute `http(s)` URL -- rewrites can
+  ONLY open URLs (no command execution; that power class stays in
+  plugins, behind their manifest permission). Anything else (a
+  `javascript:` scheme, a relative path) is dropped and logged.
+- Every matching rule emits one result, in config order, at the
+  triggered tier (above all text-matched rows). Invalid patterns are
+  logged once at startup and skipped. `title` defaults to the URL,
+  `icon` to `link`; `"disabled": true` turns a rule off.
 
 ## Building
 
@@ -383,7 +437,14 @@ The file is created with defaults on first run:
       "maxResults": 6,
       "profileDir": ""
     }
-  }
+  },
+  "rewrites": [
+    {
+      "name": "jira",
+      "pattern": "[A-Z]+-\\d+",
+      "replacement": "https://my.jira.com/$0"
+    }
+  ]
 }
 ```
 
@@ -486,6 +547,9 @@ Field reference:
   transmitted; disable the sections via
   `plugins.entries["firefox-frequent"].disabled` and
   `plugins.entries["firefox-tabs"].disabled`.
+- `rewrites` -- regex -> URL rewrite rules; see
+  [Rewrite rules](#rewrite-rules). Empty by default; disable all at
+  once via `plugins.entries["rewrites"].disabled`.
 
 The full format is formally described by
 [`schemas/config.schema.json`](schemas/config.schema.json) -- add a
@@ -561,7 +625,7 @@ inherits every metric it does not override from dark via `extends`.
 | `selection-bg` | `--sb-selection-bg` | Selected result row background | `#2b3f66` | `#d8e4fb` |
 | `selection-fg` | `--sb-selection-fg` | Text on the selected result row | `#f2f2f5` | `#14213d` |
 | `border` | `--sb-border` | The bar's outer border | `#3a3a42` | `#cfcfd8` |
-| `highlight` | `--sb-highlight` | Matched-substring highlight in result names | `#8db8ff` | `#1a56c0` |
+| `highlight` | `--sb-highlight` | Per-character match highlight (letter color) in result names and plugin titles | `#8db8ff` | `#1a56c0` |
 | `warning` | `--sb-warning` | Warning accents (the staleness chip) | `#d9a13d` | `#9a6b12` |
 | `badge-bg` | `--sb-badge-bg` | Reserved: plugin result badge background | `#2b3f66` | `#dbe7ff` |
 | `badge-fg` | `--sb-badge-fg` | Reserved: plugin result badge text | `#b8c6e8` | `#1d3a6e` |
@@ -861,9 +925,11 @@ and anything dropped is logged with a reason.
 | `icon` | no | see below | built-in icon name, or a literal glyph/emoji up to 32 bytes |
 | `badge` | no | 24 runes | small accent-colored tag on the row's right edge |
 | `accent_color` | no | `#rgb` / `#rrggbb` | must match `^#([0-9a-fA-F]{3}\|[0-9a-fA-F]{6})$`; anything else is cleared |
-| `score` | no | 0..100 | default 50 when absent; clamped |
+| `score` | no | 0..100 | a HINT, not the wire score -- see the ranking engine below |
 | `fields` | no | 8 fields; label 40 / value 200 runes | rendered as dim `label: value` pairs under the title |
 | `action` | no | -- | what Enter/click does; see [Actions](#actions) |
+| `keywords` | no | 8 entries, 64 runes each | extra match texts for the ranking engine (see below) |
+| `matchRanges` | no | 32 pairs | per-character highlight ranges on `title`: half-open `[start, end)` RUNE index pairs; clamped/sorted/merged |
 
 Response-wide caps: at most 20 results per response and 1 MiB of
 response body (both transports); control characters in any string are
@@ -871,8 +937,48 @@ replaced with spaces.
 
 **Ordering**: file results always come first. Plugin sections sort by
 their best result's score (then plugin id); results within a section
-sort by score (then response order). A score of 100 puts your section
-above other plugins' sections.
+sort by score (then response order). Scores are engine-minted (below),
+so the triggered tier -- not a self-declared 100 -- is what puts a
+section on top.
+
+### The ranking engine (how plugin scores really work)
+
+Every result in the app -- files, builtin sections, and plugin
+responses -- is ranked by ONE shared engine. For plugins that means:
+
+- **Text-matched plugins** (an `all_queries` trigger): the engine
+  matches the query terms against each result's `title` PLUS its
+  `keywords`. Results that match no term are DROPPED (with a logged
+  reason). Fill `keywords` with whatever a result should be findable
+  by. The wire score becomes the engine's tier band (exact 83, prefix
+  73, word-start 63, substring 53, fuzzy below all of those); your
+  self-declared `score` is demoted to an intra-tier HINT that can
+  nudge a result up to +/-2 within its band -- it can never lift a row
+  across tiers, and it is never the emitted score.
+- **Triggered plugins** (a `prefix`/`regex` trigger that matched, or a
+  bang target): your plugin CLAIMED the query, so its results skip
+  text matching entirely and enter at the `triggered` tier (86..100,
+  scaled by your self-score hint) -- ABOVE every text-matched tier.
+  That is the sanctioned home for results that answer the query
+  rather than contain it: a calculator's `42` for `=6*7` can never
+  text-match and does not have to. Response order is preserved on
+  hint ties.
+- **Highlighting**: for text-matched results the engine computes
+  per-character `matchRanges` on the title; supply your own only when
+  your plugin did its own matching (they win). Triggered-tier results
+  get no engine highlight (provide `matchRanges` if you want one).
+
+**Migration notes for plugin authors** (pre-engine plugins keep
+working, with two behavior changes):
+
+1. If your plugin uses `all_queries` and returns results whose titles
+   do not literally contain the query, they used to render and now get
+   dropped -- either add `keywords`, or (better) claim your queries
+   with a `prefix`/`regex` trigger or a bang, which puts you on the
+   triggered tier with no text gating.
+2. `score` no longer sets the emitted score directly; it is the
+   intra-tier hint described above. On the triggered tier a self-score
+   of 100 still maps to an emitted 100.
 
 **Icons**: the built-in names are `calculator`, `globe`, `clock`,
 `star`, `info`, `warning`, `link`, `terminal`, `text`, `hash`, `bolt`,
