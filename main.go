@@ -56,6 +56,10 @@ func runGUI(opts cli.RunOptions) error {
 	mgr.SetFuzzyDisabled(cfg.Search.FuzzyDisabled)
 	a := app.New(mgr, app.Options{
 		RescanEvery:            time.Duration(cfg.RescanIntervalMinutes) * time.Minute,
+		WatchMaxWatches:        cfg.Watcher.MaxWatches,
+		SweepInterval:          time.Duration(cfg.Watcher.SweepMinutes) * time.Minute,
+		SweepDisabled:          cfg.Watcher.SweepDisabled,
+		WatchExcludes:          cfg.Watcher.WatchExcludes,
 		Hotkey:                 cfg.Hotkey,
 		IPC:                    opts.Server,
 		ShowOnStartup:          opts.ShowOnStartup,

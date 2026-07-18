@@ -15,6 +15,8 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/require"
+
+	"github.com/wow-look-at-my/competent-search-thing/internal/index"
 )
 
 func TestWatcherInitialWatchSet(t *testing.T) {
@@ -53,6 +55,55 @@ func TestWatcherExcludedRootIsNotWatched(t *testing.T) {
 	waitFor(t, func() bool { return w.Stats().WatchedDirs == 1 }, "only sub gets a watch")
 	require.False(t, f.has(root), "a root matching its own exclude list is not watched")
 	require.True(t, f.has(paths["sub/"]))
+}
+
+func TestWatcherWatchExcludedDirIndexedSweptNeverWatched(t *testing.T) {
+	root := t.TempDir()
+	paths := mkTree(t, root, "hot/", "churn/", "churn/sub/")
+	m := buildManager(t, root, nil)
+
+	watchEx, err := index.NewExcluder([]string{"churn"})
+	require.NoError(t, err)
+	opt := fastOptions()
+	opt.WatchEx = watchEx
+	f := newFakeNotifier()
+	w := New(m, m.Roots(), nil, opt)
+	w.newNotifier = func() (notifier, error) { return f, nil }
+	startWatcherRegistered(t, w)
+
+	// The fill: the excluded dir AND its subtree get no watches and no
+	// desired-set slot, while the index keeps all of them.
+	require.True(t, hasPath(m, paths["churn/"]), "watch-excluded dirs stay indexed")
+	require.True(t, hasPath(m, paths["churn/sub/"]))
+	require.True(t, f.has(root))
+	require.True(t, f.has(paths["hot/"]))
+	require.False(t, f.has(paths["churn/"]), "watch-excluded dirs are never watched at the fill")
+	require.False(t, f.has(paths["churn/sub/"]), "a watch-exclude match covers its whole subtree")
+	st := w.Stats()
+	require.Equal(t, 2, st.WatchedDirs, "root + hot only")
+	require.Equal(t, 2, st.IndexedDirs, "watch-excluded dirs are not part of the desired watch set")
+	require.Zero(t, st.DroppedWatches, "withheld watches are never counted as drops")
+
+	// Events inside the subtree (a wideCoverage backend would deliver
+	// them) still reconcile into the index -- but promote no watch.
+	inChurn := filepath.Join(paths["churn/"], "seen.txt")
+	require.NoError(t, os.WriteFile(inChurn, nil, 0o644))
+	f.send(fsnotify.Create, inChurn)
+	waitFor(t, func() bool { return hasPath(m, inChurn) }, "events under a watch-excluded dir still index")
+	f.send(fsnotify.Create, paths["churn/"]) // a dirty excluded DIR reconciles without a refreshWatch
+	settle(t, m, f, root)
+	require.False(t, f.has(paths["churn/"]), "reconcile never arms a watch on a watch-excluded dir")
+
+	// The sweep tier: changes nobody watched or reported converge, and
+	// sweep promotion respects the exclusion too.
+	s := newTestSweeper(t, m, w, SweepOptions{})
+	startSweeper(t, s)
+	swept := filepath.Join(paths["churn/sub/"], "swept.txt")
+	require.NoError(t, os.WriteFile(swept, nil, 0o644))
+	s.Request()
+	waitFor(t, func() bool { return hasPath(m, swept) }, "sweeps converge watch-excluded subtrees")
+	require.False(t, f.has(paths["churn/"]), "sweep promotion skips watch-excluded dirs")
+	require.False(t, f.has(paths["churn/sub/"]))
 }
 
 func TestWatcherDroppedWatchesDegrade(t *testing.T) {

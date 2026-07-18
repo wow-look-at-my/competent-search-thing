@@ -63,6 +63,25 @@ type Options struct {
 	// RescanEvery > 0 enables periodic full rescans at that interval
 	// (wire config.RescanIntervalMinutes here); 0 disables them.
 	RescanEvery time.Duration
+	// WatchMaxWatches bounds the live-watch hot set (wire config's
+	// watcher.maxWatches here): 0 = automatic budget, negative =
+	// explicitly unlimited, positive taken as-is. See
+	// watch.Options.MaxWatches.
+	WatchMaxWatches int
+	// SweepInterval is the reconcile-sweep cadence (wire config's
+	// watcher.sweepMinutes here, as a Duration); 0 selects the watch
+	// layer's default (20 minutes).
+	SweepInterval time.Duration
+	// SweepDisabled turns the sweep tier off entirely (wire config's
+	// watcher.sweepDisabled here). startWatch then logs a loud
+	// warning: without sweeps, directories without a live watch
+	// converge only at full rescans.
+	SweepDisabled bool
+	// WatchExcludes are exclude patterns applied to live watching
+	// only (wire config's watcher.watchExcludes here): matching
+	// directories and their subtrees stay indexed and swept but never
+	// hold a watch. See watch.Options.WatchEx.
+	WatchExcludes []string
 	// Hotkey is the config hotkey string ("alt+space"); empty disables
 	// the global hotkey.
 	Hotkey string
@@ -290,22 +309,25 @@ func (a *App) buildIndex(ctx context.Context) {
 	a.startWatch()
 }
 
-// defaultSweepInterval is the always-on sweep cadence (the
-// convergence bound for directories the bounded hot set does not
-// watch live); a config knob lands in a later stage.
+// defaultSweepInterval is the default sweep cadence (the convergence
+// bound for directories the bounded hot set does not watch live),
+// used when watcher.sweepMinutes is 0.
 const defaultSweepInterval = 20 * time.Minute
 
-// startWatch starts the live-update layer: the fsnotify Watcher over
-// the manager's roots (bounded hot set; filtering events through the
-// same Excluder semantics the walks use, reporting degradation to the
-// frontend), the Rescanner for periodic and requested full rebuilds,
-// and the always-on Sweeper whose passes converge everything the hot
+// startWatch starts the live-update layer: the Watcher over the
+// manager's roots (fanotify or the bounded inotify hot set; filtering
+// events through the same Excluder semantics the walks use, honoring
+// the watcher.* budget and watch-only excludes, reporting degradation
+// to the frontend), the Rescanner for periodic and requested full
+// rebuilds, and the Sweeper whose passes converge everything the hot
 // set does not cover (its watermark starts at this call's entry time
 // -- the just-finished initial build vouches for everything older).
-// After all three are up it waits for the watcher's initial
-// registration (ctx-abortable, so Shutdown cuts the wait) and logs
-// one loud behavior-contract summary. It is skipped when Shutdown
-// already ran.
+// watcher.sweepDisabled skips the Sweeper and logs a LOUD warning
+// instead: the coverage invariant (tiers differ only in latency) then
+// holds only through full rescans. After everything is up it waits
+// for the watcher's initial registration (ctx-abortable, so Shutdown
+// cuts the wait) and logs one loud behavior-contract summary
+// including the sweep state. It is skipped when Shutdown already ran.
 func (a *App) startWatch() {
 	watermark := time.Now()
 	ex, err := index.NewExcluder(a.manager.Excludes())
@@ -316,12 +338,32 @@ func (a *App) startWatch() {
 		log.Printf("watch: bad exclude patterns: %v", err)
 		ex = nil
 	}
-	w := watch.New(a.manager, a.manager.Roots(), ex, watch.Options{OnDegraded: a.emitDegraded})
-	r := watch.NewRescanner(a.manager, w, watch.RescanOptions{Interval: a.opt.RescanEvery})
-	s := watch.NewSweeper(a.manager, w, watch.SweepOptions{
-		Interval:         defaultSweepInterval,
-		InitialWatermark: watermark,
+	watchEx, err := index.NewExcluder(a.opt.WatchExcludes)
+	if err != nil {
+		// Same stance: a bad watch-only pattern costs the feature, not
+		// the watch layer (nil excludes nothing from watching).
+		log.Printf("watch: bad watcher.watchExcludes patterns: %v", err)
+		watchEx = nil
+	}
+	w := watch.New(a.manager, a.manager.Roots(), ex, watch.Options{
+		MaxWatches: a.opt.WatchMaxWatches,
+		WatchEx:    watchEx,
+		OnDegraded: a.emitDegraded,
 	})
+	r := watch.NewRescanner(a.manager, w, watch.RescanOptions{Interval: a.opt.RescanEvery})
+	sweepEvery := a.opt.SweepInterval
+	if sweepEvery <= 0 {
+		sweepEvery = defaultSweepInterval
+	}
+	var s *watch.Sweeper
+	if a.opt.SweepDisabled {
+		log.Printf("watch: sweeps disabled in config; directories without live watches converge only at full rescans (!rescan or rescanIntervalMinutes)")
+	} else {
+		s = watch.NewSweeper(a.manager, w, watch.SweepOptions{
+			Interval:         sweepEvery,
+			InitialWatermark: watermark,
+		})
+	}
 
 	a.watchMu.Lock()
 	if a.shuttingDown {
@@ -335,8 +377,10 @@ func (a *App) startWatch() {
 	if err := r.Start(); err != nil {
 		log.Printf("watch: rescanner failed to start: %v", err)
 	}
-	if err := s.Start(); err != nil {
-		log.Printf("watch: sweeper failed to start: %v", err)
+	if s != nil {
+		if err := s.Start(); err != nil {
+			log.Printf("watch: sweeper failed to start: %v", err)
+		}
 	}
 	a.watcher, a.rescanner, a.sweeper = w, r, s
 	a.watchMu.Unlock()
@@ -348,12 +392,16 @@ func (a *App) startWatch() {
 		<-w.InitialRegistration()
 	}
 	st := w.Stats()
+	sweepDesc := "disabled"
+	if s != nil {
+		sweepDesc = sweepEvery.String()
+	}
 	rescanDesc := "off"
 	if a.opt.RescanEvery > 0 {
 		rescanDesc = a.opt.RescanEvery.String()
 	}
 	log.Printf("watch: backend %s: %d/%d dirs live-watched (budget %d); sweep interval %s; full rescan interval %s",
-		st.Backend, st.WatchedDirs, st.IndexedDirs, st.Budget, defaultSweepInterval, rescanDesc)
+		st.Backend, st.WatchedDirs, st.IndexedDirs, st.Budget, sweepDesc, rescanDesc)
 }
 
 // emitDegraded forwards watcher degradation to the frontend (the

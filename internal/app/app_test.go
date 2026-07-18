@@ -358,6 +358,72 @@ func TestStartWatchLogsTierSummary(t *testing.T) {
 	a2.Shutdown(context.Background())
 }
 
+func TestStartWatchWiresWatcherConfig(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "skipme"), 0o755))
+	m := index.NewManager([]string{dir}, nil, 0)
+	_, _, err := m.BuildFromDisk(context.Background(), nil)
+	require.NoError(t, err)
+
+	a, _ := newTestApp(t, m, Options{
+		WatchMaxWatches: 7,
+		SweepInterval:   45 * time.Minute,
+		WatchExcludes:   []string{"skipme"},
+	})
+	a.startWatch()
+	require.True(t, watchUp(a))
+	out := buf.String()
+	require.Contains(t, out, "(budget 7)", "watcher.maxWatches reaches the watch layer")
+	require.Contains(t, out, "sweep interval 45m0s", "watcher.sweepMinutes reaches the sweeper")
+	require.Contains(t, out, ": 1/1 dirs live-watched",
+		"the watch-excluded dir is neither watched nor part of the desired set (root only)")
+	a.Shutdown(context.Background())
+}
+
+func TestStartWatchToleratesBadWatchExcludes(t *testing.T) {
+	// A malformed watcher.watchExcludes pattern costs the feature, not
+	// the watch layer: logged, then everything watches as usual.
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	m := index.NewManager([]string{t.TempDir()}, nil, 0)
+	a, _ := newTestApp(t, m, Options{WatchExcludes: []string{"["}})
+	a.startWatch()
+	require.True(t, watchUp(a))
+	require.Contains(t, buf.String(), "bad watcher.watchExcludes patterns")
+	a.Shutdown(context.Background())
+}
+
+func TestStartWatchSweepDisabledLogsLoudly(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	m := index.NewManager([]string{t.TempDir()}, nil, 0)
+	_, _, err := m.BuildFromDisk(context.Background(), nil)
+	require.NoError(t, err)
+	a, _ := newTestApp(t, m, Options{SweepDisabled: true})
+	a.startWatch()
+
+	a.watchMu.Lock()
+	w, r, s := a.watcher, a.rescanner, a.sweeper
+	a.watchMu.Unlock()
+	require.NotNil(t, w, "the watcher still runs")
+	require.NotNil(t, r, "the rescanner still runs")
+	require.Nil(t, s, "no sweeper is created when sweeps are disabled")
+	out := buf.String()
+	require.Contains(t, out,
+		"watch: sweeps disabled in config; directories without live watches converge only at full rescans (!rescan or rescanIntervalMinutes)",
+		"disabling the convergence tier is announced loudly")
+	require.Contains(t, out, "sweep interval disabled", "the summary reflects the sweep state")
+	a.Shutdown(context.Background())
+}
+
 func TestBuildIndexLogsAndSurvivesFailure(t *testing.T) {
 	// A malformed exclude pattern makes BuildFromDisk fail; buildIndex
 	// must swallow it (log only), never panic.

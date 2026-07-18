@@ -82,6 +82,20 @@ type Options struct {
 	// counted as drops and never degrade the watcher, and the sweep
 	// tier converges them.
 	MaxWatches int
+	// WatchEx, when non-nil, excludes directories from LIVE WATCHING
+	// only: a matching directory -- and everything beneath it, the
+	// same subtree coverage the walk excluder gets from pruning --
+	// never gets a per-directory watch: not at the initial fill, not
+	// via reconcile/sweep promotion, not at a resync refill. The
+	// subtree stays fully indexed and fully swept, so changes inside
+	// it converge within one sweep interval instead of ~1s. Distinct
+	// from the walk Excluder passed to New, which keeps paths out of
+	// the INDEX entirely. Under a wideCoverage backend (fanotify
+	// whole-filesystem marks) there are no per-directory watches to
+	// withhold, so events from matching directories still flow --
+	// watch excludes shed watch cost, they never add staleness beyond
+	// the sweep bound.
+	WatchEx *index.Excluder
 	// OnDegraded, when set, is called exactly once, from a watcher
 	// goroutine, at the moment the watcher first becomes degraded (the
 	// flag is sticky, so there is no second transition). The Stats
@@ -105,9 +119,10 @@ type Stats struct {
 	WatchedDirs int
 	// IndexedDirs is the size of the desired watch set at the last
 	// registration or resync pass: the configured roots plus every
-	// live, non-excluded indexed directory. Under a budget,
-	// WatchedDirs stays at or below it while IndexedDirs keeps
-	// counting everything.
+	// live indexed directory that is neither walk-excluded nor
+	// watch-excluded (Options.WatchEx). Under a budget, WatchedDirs
+	// stays at or below it while IndexedDirs keeps counting
+	// everything desired.
 	IndexedDirs int
 	// DroppedWatches counts directories the OS refused to watch
 	// (typically the inotify watch limit) -- strictly refusals, never
@@ -209,7 +224,7 @@ func New(m *index.Manager, roots []string, ex *index.Excluder, opt Options) *Wat
 			r = a
 		}
 		r = filepath.Clean(r)
-		if _, dup := w.pinned[r]; dup || ex.Match(filepath.Base(r), r) {
+		if _, dup := w.pinned[r]; dup || ex.Match(filepath.Base(r), r) || w.watchExcluded(r) {
 			continue // an excluded root is never watched (configuration oddity)
 		}
 		w.pinned[r] = struct{}{}
@@ -354,6 +369,29 @@ func (w *Watcher) setSweepRequester(fn func()) {
 // excluder exposes the watcher's exclude filter to the sweep tier
 // (nil is a valid Excluder that matches nothing).
 func (w *Watcher) excluder() *index.Excluder { return w.ex }
+
+// watchExcluded reports whether path is excluded from live watching
+// (Options.WatchEx; nil matches nothing). A match on the path OR any
+// ancestor counts: the walk excluder gets subtree coverage for free
+// by pruning, while watch-excluded subtrees remain fully indexed, so
+// the subtree semantics must be reproduced by walking up here. It
+// gates only the watch-issuing paths -- indexing, reconcile, and
+// sweeps never consult it.
+func (w *Watcher) watchExcluded(path string) bool {
+	if w.opt.WatchEx == nil {
+		return false // the common case costs one nil check
+	}
+	for p := path; ; {
+		if w.opt.WatchEx.Match(filepath.Base(p), p) {
+			return true
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return false
+		}
+		p = parent
+	}
+}
 
 // budgetVal returns the resolved watch budget (0 before Start).
 func (w *Watcher) budgetVal() int {

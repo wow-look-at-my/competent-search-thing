@@ -56,6 +56,12 @@ func (w *Watcher) refreshWatch(dir string) { w.watch(dir, true) }
 func (w *Watcher) promote(dir string) { w.watch(dir, true) }
 
 func (w *Watcher) watch(dir string, refresh bool) {
+	if w.watchExcluded(dir) {
+		// Watch-excluded dirs never get (or refresh) a watch, from any
+		// path -- event promotion, sweep promotion, or the fill. They
+		// stay indexed and swept; the sweep interval is their bound.
+		return
+	}
 	var notify func()
 	defer func() { // runs AFTER the unlock below; never under w.mu
 		if notify != nil {
@@ -125,6 +131,12 @@ func (w *Watcher) watch(dir string, refresh bool) {
 // must not reshuffle recency). Reports whether the budget still has
 // room, so fill loops can stop enumerating early.
 func (w *Watcher) addWatchCold(dir string) bool {
+	if w.watchExcluded(dir) {
+		// Never watched, but the budget keeps its room: later dirs may
+		// fit. (Defense in depth -- desiredSplit already filters these
+		// out of the fill lists.)
+		return true
+	}
 	var notify func()
 	defer func() {
 		if notify != nil {
@@ -311,7 +323,9 @@ func (w *Watcher) syncWatches(ctx context.Context) {
 // else, each capped at bound entries when bound >= 0 (a budgeted fill
 // never needs more than budget candidates, which keeps the buffers
 // small on huge indexes); total counts EVERY desired dir including
-// the roots and the entries beyond the caps. The index is enumerated
+// the roots and the entries beyond the caps. Watch-excluded dirs
+// (Options.WatchEx) are not desired: they appear in neither list nor
+// the total. The index is enumerated
 // in LiveDirsPage chunks, so the Manager's read lock is released
 // between pages, and cancelling ctx stops the enumeration between
 // pages; callers already treat the result as best-effort.
@@ -332,7 +346,7 @@ func (w *Watcher) desiredSplit(ctx context.Context, bound int) (home, rest []str
 			if _, isRoot := w.pinned[p]; isRoot {
 				continue // already counted with the roots
 			}
-			if w.ex.Match(filepath.Base(p), p) {
+			if w.ex.Match(filepath.Base(p), p) || w.watchExcluded(p) {
 				continue
 			}
 			total++
