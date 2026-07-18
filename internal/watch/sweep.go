@@ -51,7 +51,8 @@ type SweepOptions struct {
 	// mounts lists the current mount table's mountpoints (real,
 	// walkable filesystems only -- virtual and network types never
 	// belong in the index). The default reads /proc/self/mounts on
-	// linux and returns nil elsewhere; tests script it.
+	// linux, scoped to the configured roots via index.RealMountpoints,
+	// and returns nil elsewhere; tests script it.
 	mounts func() []string
 }
 
@@ -136,9 +137,6 @@ func NewSweeper(m *index.Manager, w *Watcher, opt SweepOptions) *Sweeper {
 	if opt.StatsPerSec <= 0 {
 		opt.StatsPerSec = defaultSweepStatsPerSec
 	}
-	if opt.mounts == nil {
-		opt.mounts = index.RealMountpoints
-	}
 	s := &Sweeper{
 		mgr:       m,
 		w:         w,
@@ -157,6 +155,11 @@ func NewSweeper(m *index.Manager, w *Watcher, opt SweepOptions) *Sweeper {
 		}
 		s.rootSet[r] = struct{}{}
 		s.roots = append(s.roots, r)
+	}
+	if s.opt.mounts == nil {
+		// The default needs the normalized roots, so it is bound here
+		// rather than with the other option defaults above.
+		s.opt.mounts = func() []string { return index.RealMountpoints(s.roots) }
 	}
 	w.setSweepRequester(s.Request)
 	return s

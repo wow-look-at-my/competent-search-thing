@@ -118,13 +118,22 @@ func ParseMountSkips(r io.Reader, roots []string) []string {
 
 // ParseMountpoints reads /proc/self/mounts-format lines (fields:
 // device mountpoint fstype options...) from r and returns the
-// mountpoints of REAL, walkable filesystems: everything skipFSType
-// would prune (virtual kernel filesystems, network filesystems, FUSE)
-// is dropped, mirroring the walk's own mount skipping, so a consumer
-// diffing successive snapshots never drags a network mount into the
-// index. Octal escapes are decoded, relative mountpoints and malformed
-// lines are ignored, and the order is the table's.
-func ParseMountpoints(r io.Reader) []string {
+// mountpoints of REAL, walkable filesystems lying under -- or equal to
+// -- one of the roots: everything skipFSType would prune (virtual
+// kernel filesystems, network filesystems, FUSE) is dropped, mirroring
+// the walk's own mount skipping, so a consumer diffing successive
+// snapshots never drags a network mount into the index, and
+// mountpoints outside every root are dropped because nothing outside
+// the roots is ever indexed or marked. Octal escapes are decoded,
+// relative mountpoints and malformed lines are ignored, and the order
+// is the table's.
+func ParseMountpoints(r io.Reader, roots []string) []string {
+	cleanRoots := make([]string, 0, len(roots))
+	for _, root := range roots {
+		if a, err := filepath.Abs(root); err == nil {
+			cleanRoots = append(cleanRoots, filepath.Clean(a))
+		}
+	}
 	var out []string
 	sc := bufio.NewScanner(r)
 	for sc.Scan() {
@@ -136,18 +145,26 @@ func ParseMountpoints(r io.Reader) []string {
 		if !filepath.IsAbs(mp) {
 			continue
 		}
-		out = append(out, filepath.Clean(mp))
+		mp = filepath.Clean(mp)
+		for _, cr := range cleanRoots {
+			if isWithin(mp, cr) { // equal-to-root counts: a root that IS a mountpoint
+				out = append(out, mp)
+				break
+			}
+		}
 	}
 	return out
 }
 
 // RealMountpoints returns the current mount table's walkable
-// mountpoints from /proc/self/mounts (see ParseMountpoints). Linux
-// only; on other platforms, and on any read failure, it returns nil.
-// The watch layer's sweeper diffs successive snapshots to
-// force-reconcile mountpoints appearing or vanishing under the indexed
-// roots.
-func RealMountpoints() []string {
+// mountpoints under the given roots, read from /proc/self/mounts (see
+// ParseMountpoints). Linux only; on other platforms, and on any read
+// failure, it returns nil. Two consumers share it: the watch layer's
+// sweeper diffs successive snapshots to force-reconcile mountpoints
+// appearing or vanishing under the indexed roots, and the
+// whole-filesystem notification backend enumerates the filesystems it
+// must mark beyond the roots' own.
+func RealMountpoints(roots []string) []string {
 	if runtime.GOOS != "linux" {
 		return nil
 	}
@@ -156,7 +173,7 @@ func RealMountpoints() []string {
 		return nil
 	}
 	defer f.Close()
-	return ParseMountpoints(f)
+	return ParseMountpoints(f, roots)
 }
 
 // SystemMountSkips returns the mountpoints under roots that

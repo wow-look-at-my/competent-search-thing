@@ -117,9 +117,39 @@ func TestParseMountpoints(t *testing.T) {
 		"weird relative-mountpoint ext4 rw 0 0",
 		"malformed-line-with-two f",
 	}, "\n")
-	got := ParseMountpoints(strings.NewReader(mounts))
-	require.Equal(t, []string{"/", "/data", "/snap/tool/42", "/mnt/with space", "/"}, got,
-		"real filesystems only (virtual/network/FUSE dropped), escapes decoded, relative and malformed lines ignored")
+	cases := []struct {
+		name  string
+		roots []string
+		want  []string
+	}{
+		{
+			name:  "whole filesystem root",
+			roots: []string{"/"},
+			want:  []string{"/", "/data", "/snap/tool/42", "/mnt/with space", "/"},
+		},
+		{
+			name:  "scoped roots keep only mounts at or under them",
+			roots: []string{"/data", "/mnt"},
+			want:  []string{"/data", "/mnt/with space"},
+		},
+		{
+			name:  "root equal to a mountpoint is included",
+			roots: []string{"/snap/tool/42"},
+			want:  []string{"/snap/tool/42"},
+		},
+		{
+			name:  "no roots means nothing is under them",
+			roots: nil,
+			want:  nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ParseMountpoints(strings.NewReader(mounts), tc.roots)
+			require.Equal(t, tc.want, got,
+				"real filesystems only (virtual/network/FUSE dropped), under-roots only, escapes decoded, relative and malformed lines ignored")
+		})
+	}
 }
 
 func TestRealMountpointsRealTable(t *testing.T) {
@@ -127,9 +157,10 @@ func TestRealMountpointsRealTable(t *testing.T) {
 	// mountpoint absolute and of a walkable type ("/" itself is a
 	// legitimate entry here, unlike the skip list). On non-linux this
 	// returns nil, which the loop trivially satisfies.
-	for _, mp := range RealMountpoints() {
+	for _, mp := range RealMountpoints([]string{"/"}) {
 		require.True(t, filepath.IsAbs(mp), mp)
 	}
+	require.Empty(t, RealMountpoints(nil), "no roots means nothing is under them")
 }
 
 func TestSystemMountSkipsRealTable(t *testing.T) {
