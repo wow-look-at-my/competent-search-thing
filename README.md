@@ -316,6 +316,60 @@ builtin sections) with `"search": { "fuzzyDisabled": true }` in
 [the configuration](#configuration); term splitting applies regardless
 of the toggle.
 
+## Ranking: frecency, recency and noise
+
+Text matching decides WHICH files surface; four additional signals
+decide how the matches ORDER, so the `log.txt` you just downloaded or
+keep opening beats the one buried 300 directories deep in `~/.cache`:
+
+- **Frecency (learned)**: every file you actually open through the bar
+  (Enter, Ctrl+Enter reveal, or a plugin `open_path` action) counts.
+  Counts decay with a 14-day half-life -- last month's habit still
+  matters, last quarter's does not. A file whose decayed count passes
+  `tierJumpCount` (default 3) competes one match tier up: the file you
+  always open as a substring match can outrank an untouched
+  prefix match, though never an exact match two tiers above.
+- **Recency (cold start)**: files with NO open history are ranked by
+  how recently the disk saw them touched -- `max(atime, mtime)`, so a
+  file just downloaded or just written floats up before the bar has
+  learned anything. The score is log-scaled (about 1.0 within the
+  hour, 0.5 after a day, 0.2 after a week, 0 past 30 days). Honesty
+  caveat: most modern Linux mounts use `relatime`, which updates atime
+  at most once a day (and only when older than mtime), so atime is a
+  COARSE signal; mtime still catches the important "just downloaded /
+  just written" cases. The stats run only over the few dozen
+  already-matched top candidates, budgeted at ~15ms and cached ~5
+  minutes -- never over the index.
+- **Working-directory proximity**: summoning the bar over a terminal
+  or editor boosts results in and under that app's working directory
+  (derived best-effort from the focused window's process tree:
+  `/proc` cwd links, with the terminal's foreground process
+  preferred). Linux-only today, and only where the focused window
+  yields a PID (X11 `_NET_WM_PID`; on Wayland the compositor decides
+  what is visible). Where no working directory can be derived, the
+  boost simply stays off -- never stale.
+- **Noise demotion**: paths under cache/temp/vcs directories
+  (`.cache`, `.git`, `node_modules`, `tmp`, ...), hidden directories,
+  and very deep nesting rank a little lower. A NUDGE, not a filter:
+  noisy paths still match and still surface when nothing cleaner
+  does, and opening one enough times outweighs the penalty.
+
+Signals only reorder the top candidates the text match already
+selected -- keystroke latency does not change (see
+[Performance](#performance) for the measured numbers). Everything is
+tunable under `search.frecency` in
+[the configuration](#configuration): `disabled` turns the whole blend
+off (exact pre-blend ordering), each `weight*` scales one signal, and
+a NEGATIVE weight (or `tierJumpCount`) turns just that signal off --
+`0` means "use the default", the config-wide zero-value convention.
+
+Privacy: the learned open counts live in
+`<configDir>/frecency.json` (next to `config.json`), capped at 4096
+paths (the lowest decayed counts are pruned), created with mode 0600.
+Delete the file to reset the learning; set
+`"search": { "frecency": { "disabled": true } }` to never record
+anything.
+
 ## Rewrite rules
 
 `rewrites` in [the configuration](#configuration) defines regex ->
@@ -418,7 +472,18 @@ The file is created with defaults on first run:
   "hotkey": "alt+space",
   "rescanIntervalMinutes": 0,
   "maxResults": 50,
-  "search": { "fuzzyDisabled": false },
+  "search": {
+    "fuzzyDisabled": false,
+    "frecency": {
+      "disabled": false,
+      "halfLifeDays": 14,
+      "weightFrecency": 1,
+      "weightRecency": 1,
+      "weightCwd": 1,
+      "weightNoise": 1,
+      "tierJumpCount": 3
+    }
+  },
   "theme": "dark",
   "plugins": { "disabled": false, "entries": {} },
   "bangs": { "sigils": ["!", "/", "@"], "aliases": {} },
@@ -493,7 +558,15 @@ Field reference:
   `false`) turns the fuzzy (subsequence) name-match tier off, leaving
   exact/prefix/substring matching only -- see
   [Fuzzy matching](#fuzzy-matching). Exact, prefix, and substring
-  matches always rank above fuzzy ones either way.
+  matches always rank above fuzzy ones either way. `frecency`
+  configures the ranking blend described under
+  [Ranking](#ranking-frecency-recency-and-noise): `disabled` (default
+  `false`) turns the whole blend off; `halfLifeDays` (default 14) is
+  the open-count decay; `weightFrecency`, `weightRecency`,
+  `weightCwd`, `weightNoise` (default 1 each) scale the four signals;
+  `tierJumpCount` (default 3) is the decayed-open-count threshold for
+  competing one match tier up. For every frecency number, `0` means
+  "use the default" and a NEGATIVE value turns that one signal off.
 - `theme` -- the UI theme (default `dark`): a builtin (`dark`,
   `light`) or the name of a user theme file at
   `<configDir>/themes/<name>.json`. An unknown or invalid theme is
