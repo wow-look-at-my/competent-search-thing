@@ -41,50 +41,23 @@ package index
 // ARE its substring matches, so the fuzzy tier is provably empty and
 // phase 2 is skipped outright.
 //
-// Scoring (fuzzyAlignDP / fuzzyAlignGreedy): per matched unit a base
-// score plus positional bonuses -- name start, after a word boundary
-// ('-', '_', '.', ' ' and letter<->digit transitions), camelCase
-// lower->upper steps, and consecutive-run continuation -- minus a
-// capped affine gap penalty per gap. Names up to fuzzyMaxDPUnits units
-// get an optimal-alignment DP (fzf-v2 style); longer names fall back
-// to a greedy first-occurrence alignment. Only candidates that already
-// passed the subsequence check are ever scored, so scoring is off the
-// hot path. Tests pin score ORDERINGS, not absolute values.
+// Scoring is the shared internal/match alignment scorer (constants,
+// bonuses, DP, and greedy fallback live THERE; fuzzyScratch below is
+// only the pooled per-worker buffer glue). Only candidates that
+// already passed the subsequence check are ever scored, so scoring is
+// off the hot path. Tests pin score ORDERINGS, not absolute values.
 
 import (
 	"runtime"
 	"sort"
 	"sync"
-	"unicode"
 	"unicode/utf8"
+
+	"github.com/wow-look-at-my/competent-search-thing/internal/match"
 )
 
-// Scoring model constants. Only their relative order is contractual
-// (fuzzy_test.go pins orderings): boundary > camel > transition keeps
-// "foo_bar" ahead of "FooBar" ahead of unstructured scatter for an
-// "fb"-style query, and the gap cap keeps one huge gap from drowning
-// an otherwise good match.
-const (
-	fuzzyScoreMatch       = 16 // per matched query unit
-	fuzzyBonusStart       = 12 // match at the first unit of the name
-	fuzzyBonusBoundary    = 10 // match right after '-', '_', '.', ' '
-	fuzzyBonusCamel       = 7  // match at a lower->upper camelCase step
-	fuzzyBonusTransition  = 6  // match at a letter<->digit transition
-	fuzzyBonusConsecutive = 8  // match directly after the previous match
-	fuzzyGapOpen          = 3  // first skipped unit of a gap
-	fuzzyGapExtend        = 1  // each further skipped unit
-	fuzzyGapCap           = 9  // ceiling of one gap's total penalty
-	// fuzzyMaxDPUnits bounds the optimal-alignment DP; longer names
-	// (pathological -- real file names top out at 255 bytes) take the
-	// greedy fallback.
-	fuzzyMaxDPUnits = 512
-)
-
-// fuzzyNInf is the DP's minus-infinity: low enough that no chain of
-// additive bonuses can ever raise an unreachable state above a real
-// score, high enough that per-row arithmetic can never underflow
-// int32.
-const fuzzyNInf = int32(-1) << 28
+// fuzzyMaxDPUnits bounds the optimal-alignment DP (match.MaxDPUnits).
+const fuzzyMaxDPUnits = match.MaxDPUnits
 
 // queryNamesFuzzy is the fuzzy-enabled name-mode scan: the substring
 // phase (identical results to queryNamesSub) followed, when the
@@ -171,20 +144,9 @@ func fuzzyViable(qs string, ascii bool) bool {
 }
 
 // fuzzyPatternUnits lowers the pre-folded pattern into comparison
-// units: bytes for the ASCII regime, runes otherwise.
+// units (match.PatternUnits).
 func fuzzyPatternUnits(qs string, ascii bool) []int32 {
-	if ascii {
-		units := make([]int32, len(qs))
-		for i := 0; i < len(qs); i++ {
-			units[i] = int32(qs[i])
-		}
-		return units
-	}
-	units := make([]int32, 0, len(qs))
-	for _, r := range qs {
-		units = append(units, int32(r))
-	}
-	return units
+	return match.PatternUnits(qs, ascii)
 }
 
 // scanRangeFuzzy is the phase-2 candidate sweep for ASCII patterns
@@ -329,34 +291,12 @@ func (s *Store) blobByteCount(c byte) uint64 {
 }
 
 // fuzzySubseqASCII reports whether the pre-folded ASCII pattern is a
-// subsequence of the name, folding each name byte through foldTable.
-func fuzzySubseqASCII(nb []byte, pat string) bool {
-	if len(pat) > len(nb) {
-		return false
-	}
-	j := 0
-	for i := 0; i < len(nb) && j < len(pat); i++ {
-		if foldTable[nb[i]] == pat[j] {
-			j++
-		}
-	}
-	return j == len(pat)
-}
+// subsequence of the name (match.SubseqASCII).
+func fuzzySubseqASCII(nb []byte, pat string) bool { return match.SubseqASCII(nb, pat) }
 
 // fuzzySubseqFold reports whether the pattern (as folded rune units)
-// is a subsequence of the name's foldRune-folded runes. Invalid UTF-8
-// decodes as U+FFFD per byte, matching foldContains.
-func fuzzySubseqFold(nb []byte, patUnits []int32) bool {
-	j := 0
-	for i := 0; i < len(nb) && j < len(patUnits); {
-		r, n := decodeRuneAt(nb, i)
-		if int32(foldRune(r)) == patUnits[j] {
-			j++
-		}
-		i += n
-	}
-	return j == len(patUnits)
-}
+// is a subsequence of the name's folded runes (match.SubseqFold).
+func fuzzySubseqFold(nb []byte, patUnits []int32) bool { return match.SubseqFold(nb, patUnits) }
 
 // Phase-1 match bitset: one bit per entry, pooled (about 3.8 MB at 30M
 // entries), written by phase 1 (64-aligned shards, no sharing), read
@@ -382,16 +322,15 @@ func markEntry(marks []uint64, e int) { marks[e>>6] |= 1 << (e & 63) }
 func entryMarked(marks []uint64, e int) bool { return marks[e>>6]&(1<<(e&63)) != 0 }
 
 // fuzzyScratch carries one worker's reusable scoring buffers: the
-// shared pattern units plus per-candidate folded name units, position
-// bonuses, and the DP's four rolling rows.
+// shared pattern units plus per-candidate folded name units and
+// position bonuses, and the shared scorer's rolling DP rows. The
+// scoring algorithm itself lives in internal/match; this struct is
+// only the pooled buffer glue around it.
 type fuzzyScratch struct {
 	pat   []int32
 	units []int32
 	bonus []int8
-	rowH  []int32
-	rowP  []int32
-	curH  []int32
-	curP  []int32
+	dp    match.DPState
 }
 
 var fuzzyScratchPool = sync.Pool{New: func() any { return new(fuzzyScratch) }}
@@ -402,224 +341,21 @@ func fuzzyScratchPut(sc *fuzzyScratch) { fuzzyScratchPool.Put(sc) }
 // scoreASCII scores an already-verified ASCII subsequence match of
 // sc.pat against the original-case name bytes.
 func (sc *fuzzyScratch) scoreASCII(nb []byte) int32 {
-	sc.units = growI32(sc.units, len(nb))
-	sc.bonus = growI8(sc.bonus, len(nb))
-	var prev byte
-	for i, c := range nb {
-		sc.units[i] = int32(foldTable[c])
-		sc.bonus[i] = asciiBonus(prev, c, i == 0)
-		prev = c
-	}
-	return sc.alignScore(len(nb))
+	sc.units = match.GrowI32(sc.units, len(nb))
+	sc.bonus = match.GrowI8(sc.bonus, len(nb))
+	match.PrepareASCII(nb, sc.units, sc.bonus)
+	return sc.dp.Align(sc.pat, sc.units, sc.bonus)
 }
 
 // scoreFold is scoreASCII for the rune regime: units are the name's
-// foldRune-folded runes, bonuses classify the original runes.
+// folded runes, bonuses classify the original runes.
 func (sc *fuzzyScratch) scoreFold(nb []byte) int32 {
-	sc.units = sc.units[:0]
-	sc.bonus = sc.bonus[:0]
-	var prev rune
-	first := true
-	for i := 0; i < len(nb); {
-		r, n := decodeRuneAt(nb, i)
-		sc.units = append(sc.units, int32(foldRune(r)))
-		sc.bonus = append(sc.bonus, runeBonus(prev, r, first))
-		prev, first = r, false
-		i += n
-	}
-	return sc.alignScore(len(sc.units))
+	sc.units, sc.bonus = match.PrepareFold(nb, sc.units[:0], sc.bonus[:0])
+	return sc.dp.Align(sc.pat, sc.units, sc.bonus)
 }
 
-// alignScore dispatches a prepared candidate (units/bonus filled for n
-// name units) to the DP or, past the size bound, the greedy fallback.
-func (sc *fuzzyScratch) alignScore(n int) int32 {
-	if n <= fuzzyMaxDPUnits {
-		return sc.alignDP(n)
-	}
-	return fuzzyAlignGreedy(sc.pat, sc.units[:n], sc.bonus[:n])
-}
-
-// asciiBonus classifies the positional bonus for a match at a byte
-// whose predecessor is prev (bytes of a multi-byte rune land in the
-// no-bonus default; the ASCII regime never inspects them as runes).
-func asciiBonus(prev, cur byte, first bool) int8 {
-	if first {
-		return fuzzyBonusStart
-	}
-	switch prev {
-	case '-', '_', '.', ' ':
-		return fuzzyBonusBoundary
-	}
-	if prev >= 'a' && prev <= 'z' && cur >= 'A' && cur <= 'Z' {
-		return fuzzyBonusCamel
-	}
-	pd := prev >= '0' && prev <= '9'
-	cd := cur >= '0' && cur <= '9'
-	pl := isASCIILetter(prev)
-	cl := isASCIILetter(cur)
-	if (pl && cd) || (pd && cl) {
-		return fuzzyBonusTransition
-	}
-	return 0
-}
-
-func isASCIILetter(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-}
-
-// runeBonus is asciiBonus over runes, using the Unicode categories; on
-// ASCII input it agrees with asciiBonus exactly (pinned by tests).
-func runeBonus(prev, cur rune, first bool) int8 {
-	if first {
-		return fuzzyBonusStart
-	}
-	switch prev {
-	case '-', '_', '.', ' ':
-		return fuzzyBonusBoundary
-	}
-	if unicode.IsLower(prev) && unicode.IsUpper(cur) {
-		return fuzzyBonusCamel
-	}
-	if (unicode.IsLetter(prev) && unicode.IsDigit(cur)) ||
-		(unicode.IsDigit(prev) && unicode.IsLetter(cur)) {
-		return fuzzyBonusTransition
-	}
-	return 0
-}
-
-// alignDP computes the optimal alignment score of sc.pat against the
-// prepared name (n units): affine gaps with a per-gap cap, consecutive
-// bonus, O(m*n) time over four rolling rows. States per pattern unit q
-// and name position p:
-//
-//	H[q][p] = best score with pat[q] matched exactly at p
-//	P[q][p] = max over k < p of H[q][k] - gapPen(p-k), the "last match
-//	          before p, gap running through p" state, where
-//	          gapPen(g) = min(fuzzyGapOpen + (g-1)*fuzzyGapExtend,
-//	          fuzzyGapCap); the cap is realized by a running-max floor
-//	          (see fillGapRow).
-//
-// The subsequence check has already passed, so a valid final state
-// exists; the gap before the first match and after the last one is
-// free (position preference is expressed by bonuses instead).
-func (sc *fuzzyScratch) alignDP(n int) int32 {
-	pat := sc.pat
-	units := sc.units[:n]
-	bonus := sc.bonus[:n]
-	m := len(pat)
-
-	sc.rowH = growI32(sc.rowH, n)
-	sc.rowP = growI32(sc.rowP, n)
-	sc.curH = growI32(sc.curH, n)
-	sc.curP = growI32(sc.curP, n)
-	prevH, prevP, curH, curP := sc.rowH, sc.rowP, sc.curH, sc.curP
-
-	for p := 0; p < n; p++ {
-		if units[p] == pat[0] {
-			curH[p] = fuzzyScoreMatch + int32(bonus[p])
-		} else {
-			curH[p] = fuzzyNInf
-		}
-	}
-	for q := 1; q < m; q++ {
-		prevH, curH = curH, prevH
-		prevP, curP = curP, prevP
-		fillGapRow(prevH, prevP)
-		curH[0] = fuzzyNInf
-		for p := 1; p < n; p++ {
-			v := fuzzyNInf
-			if units[p] == pat[q] {
-				b := int32(bonus[p])
-				cb := b
-				if cb < fuzzyBonusConsecutive {
-					cb = fuzzyBonusConsecutive
-				}
-				v = prevH[p-1] + fuzzyScoreMatch + cb
-				if w := prevP[p-1] + fuzzyScoreMatch + b; w > v {
-					v = w
-				}
-			}
-			curH[p] = v
-		}
-	}
-	best := fuzzyNInf
-	for p := 0; p < n; p++ {
-		if curH[p] > best {
-			best = curH[p]
-		}
-	}
-	sc.rowH, sc.rowP, sc.curH, sc.curP = prevH, prevP, curH, curP
-	return best
-}
-
-// fillGapRow derives one pattern row's gap state P from its match
-// state H (see alignDP): P[t] chooses, per position, between opening a
-// gap after a match at t-1, extending the running gap, and the capped
-// floor under the best match seen so far.
-func fillGapRow(h, gp []int32) {
-	runMax := fuzzyNInf
-	prev := fuzzyNInf
-	gp[0] = fuzzyNInf
-	for t := 1; t < len(h); t++ {
-		if h[t-1] > runMax {
-			runMax = h[t-1]
-		}
-		v := h[t-1] - fuzzyGapOpen
-		if w := prev - fuzzyGapExtend; w > v {
-			v = w
-		}
-		if w := runMax - fuzzyGapCap; w > v {
-			v = w
-		}
-		gp[t] = v
-		prev = v
-	}
-}
-
-// fuzzyAlignGreedy scores the first-occurrence (leftmost) alignment:
-// the fallback for names past the DP bound. Same bonus and gap model,
-// single pass, not necessarily optimal.
+// fuzzyAlignGreedy scores the first-occurrence (leftmost) alignment
+// (match.AlignGreedy), the fallback for names past the DP bound.
 func fuzzyAlignGreedy(pat, units []int32, bonus []int8) int32 {
-	score := int32(0)
-	prevMatch := -1
-	q := 0
-	for p := 0; p < len(units) && q < len(pat); p++ {
-		if units[p] != pat[q] {
-			continue
-		}
-		b := int32(bonus[p])
-		if q > 0 {
-			if prevMatch == p-1 {
-				if b < fuzzyBonusConsecutive {
-					b = fuzzyBonusConsecutive
-				}
-			} else {
-				pen := fuzzyGapOpen + int32(p-prevMatch-2)*fuzzyGapExtend
-				if pen > fuzzyGapCap {
-					pen = fuzzyGapCap
-				}
-				score -= pen
-			}
-		}
-		score += fuzzyScoreMatch + b
-		prevMatch = p
-		q++
-	}
-	return score
-}
-
-// growI32 / growI8 return the slice resized to n, reallocating only
-// when the capacity is short.
-func growI32(s []int32, n int) []int32 {
-	if cap(s) < n {
-		return make([]int32, n)
-	}
-	return s[:n]
-}
-
-func growI8(s []int8, n int) []int8 {
-	if cap(s) < n {
-		return make([]int8, n)
-	}
-	return s[:n]
+	return match.AlignGreedy(pat, units, bonus)
 }

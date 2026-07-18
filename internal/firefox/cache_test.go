@@ -145,20 +145,22 @@ func TestCacheFailureKeepsDataAndLogsOnce(t *testing.T) {
 	require.Equal(t, int32(2), calls.Load(), "a failure is not retried on every keystroke")
 
 	// ...after it the retry runs, and the identical error stays quiet.
+	// The kick happens INSIDE the poll: calls counts fetch STARTS while
+	// the single-flight latch clears at COMMIT, so under load a lone
+	// Sites() can land while the previous refresh is still in flight
+	// and be swallowed -- re-kicking until the state advances is the
+	// race-free way to drive the cache from a test.
 	clock.advance(failureRetryGap)
-	c.Sites()
-	require.Eventually(t, func() bool { return calls.Load() == 3 }, 3*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { c.Sites(); return calls.Load() == 3 }, 3*time.Second, 5*time.Millisecond)
 	require.Len(t, lg.all(), 1, "the same message is logged once, not per refresh")
 
 	// Recovery resets the dedup, so a NEW round of failures logs again.
 	fail.Store(false)
 	clock.advance(failureRetryGap)
-	c.Sites()
-	require.Eventually(t, func() bool { return calls.Load() == 4 }, 3*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { c.Sites(); return calls.Load() == 4 }, 3*time.Second, 5*time.Millisecond)
 	fail.Store(true)
 	clock.advance(11 * time.Minute)
-	c.Sites()
-	require.Eventually(t, func() bool { return len(lg.all()) == 2 }, 3*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { c.Sites(); return len(lg.all()) == 2 }, 3*time.Second, 5*time.Millisecond)
 }
 
 func TestCacheContextCancelStopsRefreshes(t *testing.T) {
