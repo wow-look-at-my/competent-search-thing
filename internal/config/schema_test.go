@@ -55,13 +55,19 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 	// too (built from the Go structs so renames are caught here).
 	full := Config{
 		Roots:                 []string{"/home/me"},
-		RootsVersion:          2,
+		RootsVersion:          3,
 		Excludes:              []string{".git", "*.tmp", "/home/*/secret"},
 		Hotkey:                "ctrl+shift+k",
 		RescanIntervalMinutes: 30,
 		MaxResults:            100,
 		Search:                SearchConfig{FuzzyDisabled: true},
-		Theme:                 "light",
+		Watcher: WatcherConfig{
+			MaxWatches:    -1,
+			SweepMinutes:  45,
+			SweepDisabled: true,
+			WatchExcludes: []string{"node_modules", "/home/*/scratch"},
+		},
+		Theme: "light",
 		Plugins: PluginsConfig{
 			Disabled: false,
 			Entries: map[string]PluginEntry{
@@ -110,6 +116,12 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"zero maxResults":                  `{"maxResults":0}`,
 		"search fuzzy typo":                `{"search":{"fuzzyDisabld":true}}`,
 		"non-bool search fuzzyDisabled":    `{"search":{"fuzzyDisabled":"yes"}}`,
+		"non-integer maxWatches":           `{"watcher":{"maxWatches":"lots"}}`,
+		"negative sweepMinutes":            `{"watcher":{"sweepMinutes":-5}}`,
+		"watcher sweep typo":               `{"watcher":{"sweepDisabld":true}}`,
+		"non-bool sweepDisabled":           `{"watcher":{"sweepDisabled":"yes"}}`,
+		"non-array watchExcludes":          `{"watcher":{"watchExcludes":"node_modules"}}`,
+		"empty watchExcludes pattern":      `{"watcher":{"watchExcludes":[""]}}`,
 		"bad theme name":                   `{"theme":"../evil"}`,
 		"bad plugin entry id":              `{"plugins":{"entries":{"Bad ID":{}}}}`,
 		"non-object settings":              `{"plugins":{"entries":{"calc":{"settings":"loud"}}}}`,
@@ -196,6 +208,8 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json top level out of sync with Config")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(SearchConfig{})), configSchemaProperties(t, "searchConfig"),
 		"config.schema.json $defs/searchConfig out of sync with SearchConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(WatcherConfig{})), configSchemaProperties(t, "watcherConfig"),
+		"config.schema.json $defs/watcherConfig out of sync with WatcherConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PluginsConfig{})), configSchemaProperties(t, "pluginsConfig"),
 		"config.schema.json $defs/pluginsConfig out of sync with PluginsConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PluginEntry{})), configSchemaProperties(t, "pluginEntry"),

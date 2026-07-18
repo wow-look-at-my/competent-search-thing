@@ -156,6 +156,7 @@ func TestNormalize(t *testing.T) {
 		Hotkey:                "",
 		RescanIntervalMinutes: -5,
 		MaxResults:            0,
+		Watcher:               WatcherConfig{MaxWatches: -1, SweepMinutes: -3},
 	}
 	c.Normalize()
 	require.Len(t, c.Roots, 2)
@@ -166,6 +167,9 @@ func TestNormalize(t *testing.T) {
 	require.Equal(t, DefaultMaxResults, c.MaxResults)
 	require.Equal(t, DefaultTheme, c.Theme, "empty theme falls back to dark")
 	require.Nil(t, c.Excludes, "excludes are not defaulted on normalize")
+	require.Equal(t, 0, c.Watcher.SweepMinutes, "negative sweepMinutes repairs to 0 (the default cadence)")
+	require.Equal(t, -1, c.Watcher.MaxWatches, "negative maxWatches means unlimited and is kept")
+	require.Nil(t, c.Watcher.WatchExcludes, "watchExcludes are not defaulted on normalize")
 
 	keep := Config{Theme: "light"}
 	keep.Normalize()
@@ -188,8 +192,10 @@ func TestDefaultRootsAreWholeFilesystem(t *testing.T) {
 	require.Equal(t, []string{"/"}, c.Roots, "linux/darwin default root is the filesystem root")
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t,
-		[]string{".git", "node_modules", ".cache", "/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"},
-		c.Excludes, "defaults carry the system excludes on unix-likes")
+		[]string{".git", "node_modules", ".cache",
+			".hg", ".svn", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox", ".venv",
+			"/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"},
+		c.Excludes, "defaults carry the noise and system excludes on unix-likes")
 }
 
 func TestDirUsesEnvOverride(t *testing.T) {

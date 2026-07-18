@@ -67,6 +67,9 @@ type Config struct {
 	MaxResults int `json:"maxResults"`
 	// Search configures the search engine behavior.
 	Search SearchConfig `json:"search"`
+	// Watcher configures the live-watch layer that keeps the index
+	// fresh between rescans (see internal/watch).
+	Watcher WatcherConfig `json:"watcher"`
 	// Theme names the UI theme: a builtin ("dark", "light") or a user
 	// theme file at <configDir>/themes/<name>.json (see internal/theme).
 	// Unknown or invalid themes fall back to dark at resolve time.
@@ -121,6 +124,41 @@ type SearchConfig struct {
 	// tray.disabled convention). Exact, prefix, and substring matches
 	// always rank above fuzzy ones either way.
 	FuzzyDisabled bool `json:"fuzzyDisabled"`
+}
+
+// WatcherConfig configures the live-watch layer (see internal/watch):
+// the bounded hot set of per-directory watches and the always-on
+// reconcile sweeps that converge everything the hot set does not
+// cover. The zero value means all defaults -- automatic watch budget,
+// the built-in sweep cadence, nothing watch-excluded -- matching the
+// tray.disabled convention.
+type WatcherConfig struct {
+	// MaxWatches bounds the hot set of live per-directory watches.
+	// 0 (the default) resolves the budget automatically: half of the
+	// kernel's per-user inotify watch allowance, capped at 65536.
+	// Negative means explicitly unlimited (watch every indexed
+	// directory, the pre-budget behavior); positive values are taken
+	// as-is. Irrelevant while the fanotify whole-filesystem backend is
+	// active (it needs no per-directory watches).
+	MaxWatches int `json:"maxWatches"`
+	// SweepMinutes is the interval between reconcile sweep passes --
+	// the convergence bound for directories without a live watch.
+	// 0 (the default) selects the built-in 20-minute cadence;
+	// negative values are repaired to 0 by Normalize.
+	SweepMinutes int `json:"sweepMinutes"`
+	// SweepDisabled true turns the sweep tier off entirely. The zero
+	// value -- the default -- keeps sweeps on (the tray.disabled
+	// convention). With sweeps off, directories without a live watch
+	// converge only at full rescans (!rescan or
+	// rescanIntervalMinutes); the app logs a loud warning saying so.
+	SweepDisabled bool `json:"sweepDisabled"`
+	// WatchExcludes are exclude patterns (the excludes syntax, see
+	// internal/index.Excluder) applied ONLY to live watching: matching
+	// directories never get a per-directory watch, but they are still
+	// indexed and still swept, so changes inside them appear within
+	// one sweep interval instead of ~1s. Use it to keep high-churn
+	// trees you still want searchable from consuming watch budget.
+	WatchExcludes []string `json:"watchExcludes,omitempty"`
 }
 
 // BangsConfig configures the bang system.
@@ -271,9 +309,10 @@ func Path() (string, error) {
 }
 
 // Load reads the config file. A missing file is created with defaults
-// (mkdir -p included). A pre-v2 file is migrated to the current roots
-// defaults (see migrateRoots) and rewritten once, with the changes
-// reported in the returned Config's MigrationNotes. On any error --
+// (mkdir -p included). A file stamped with an older rootsVersion is
+// migrated to the current defaults (see migrateRoots) and rewritten
+// once, with the changes reported in the returned Config's
+// MigrationNotes. On any error --
 // unresolvable path, unreadable or corrupt file, failed default write
 // or migration rewrite -- Load still returns a usable config alongside
 // the error; callers log the error and keep going, they never crash.
@@ -330,11 +369,14 @@ func Save(c Config) error {
 // Normalize repairs missing or nonsensical fields in place: empty roots
 // fall back to the default root, relative roots are absolutized,
 // zero/negative knobs get their defaults (the firefox.frequentSites
-// and firefox.openTabs numbers included), an empty theme name gets the
-// default theme, nil
+// and firefox.openTabs numbers included; a negative
+// watcher.sweepMinutes becomes 0 = the built-in cadence), an empty
+// theme name gets the default theme, nil
 // plugin entries and bang aliases become empty maps, and an empty
 // sigil list gets the default sigils. Excludes are left as the user
-// wrote them (an explicitly empty list means "exclude nothing").
+// wrote them (an explicitly empty list means "exclude nothing"), and
+// so are watcher.watchExcludes and watcher.maxWatches (negative =
+// explicitly unlimited).
 func (c *Config) Normalize() {
 	if len(c.Roots) == 0 {
 		c.Roots = Default().Roots
@@ -358,6 +400,9 @@ func (c *Config) Normalize() {
 	}
 	if c.RescanIntervalMinutes < 0 {
 		c.RescanIntervalMinutes = 0
+	}
+	if c.Watcher.SweepMinutes < 0 {
+		c.Watcher.SweepMinutes = 0
 	}
 	if c.MaxResults <= 0 {
 		c.MaxResults = DefaultMaxResults
