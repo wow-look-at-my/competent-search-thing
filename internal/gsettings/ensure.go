@@ -71,11 +71,13 @@ type Applied struct {
 	// Existing is true when the app's entry already existed and its
 	// (possibly user-edited) binding was deliberately left untouched.
 	Existing bool
-	// Repaired is true when an existing entry's stored command no
-	// longer launched the running binary -- its executable was gone,
-	// not absolute, unparseable, or resolved to a different file (a
-	// versioned install directory left behind by an upgrade) -- and
-	// the command key, never the binding, was rewritten.
+	// Repaired is true when an existing entry's stored command was
+	// rewritten (the command key, never the binding): it no longer
+	// launched the running binary -- its executable was gone, not
+	// absolute, unparseable, or resolved to a different file (a
+	// versioned install directory left behind by an upgrade) -- or it
+	// still did but through a version-pinned Homebrew Cellar spelling
+	// that the next upgrade would kill (see commandNeedsRepair).
 	Repaired bool
 	// PreviousCommand is the stored command a repair replaced ("" when
 	// Repaired is false).
@@ -110,9 +112,11 @@ type Applied struct {
 //
 // An entry the app created earlier is respected: its binding is never
 // rewritten -- a user edit in GNOME Settings survives restarts -- and
-// the stored command is only rewritten when it no longer launches the
-// running binary (see commandNeedsRepair): dead or foreign commands
-// self-heal to the new command, while a still-working spelling --
+// the stored command self-heals (see commandNeedsRepair): dead or
+// foreign commands are rewritten to the new command, and so is a
+// still-working spelling that is pinned to a Homebrew Cellar version
+// while the new command's is stable (the migration that keeps the
+// binding alive across upgrades); any other still-working spelling --
 // even one that differs textually from command -- is left alone. A
 // fresh entry gets the first conflict-free candidate of [configured
 // hotkey, Ctrl+Alt+Space, Super+Space]; "taken" is every accelerator
@@ -276,15 +280,24 @@ func ensureExisting(ctx context.Context, run Runner, applied Applied, command st
 // command (current, textually different from the new command) must be
 // rewritten. The accelerator is the user's; the command is app-owned
 // -- but a spelling that still launches the running binary is left
-// alone, so a working entry is never churned. Repair triggers exactly
-// when current cannot launch that binary any more: it is empty or
+// alone UNLESS it is a version-pinned Homebrew Cellar spelling, so a
+// working entry is never churned pointlessly. Repair triggers when
+// current cannot launch that binary any more -- it is empty or
 // unparseable, its executable path is not absolute (gsd runs commands
 // with its own cwd and PATH), the path no longer exists, or it exists
-// but is a different file than the one the new command names -- the
-// versioned install directory (Homebrew Cellar, Nix store) left
-// behind by an upgrade, or a foreign program. The comparison follows
-// symlinks (os.Stat + os.SameFile), so a stable shim and the resolved
-// path it points at count as the same binary.
+// but is a different file than the one the new command names (the
+// versioned install directory left behind by an upgrade, or a foreign
+// program) -- and additionally when it still launches the running
+// binary but through a Cellar-versioned path while the new command's
+// is stable (platform.ParseBrewCellar): such a spelling works today
+// and dies at the next upgrade, gsd still running the deleted path,
+// so it migrates to the upgrade-stable spelling while both still
+// resolve. Stable spellings, custom symlinks the user wrote, and a
+// versioned spelling when the new command is versioned too (no
+// stable spelling was derivable; churning buys nothing) are all kept
+// verbatim. The file comparison follows symlinks (os.Stat +
+// os.SameFile), so a stable shim and the resolved path it points at
+// count as the same binary.
 func commandNeedsRepair(current, command string) bool {
 	oldExe, ok := commandExecutable(current)
 	if !ok || oldExe == "" || !filepath.IsAbs(oldExe) {
@@ -304,7 +317,16 @@ func commandNeedsRepair(current, command string) bool {
 		// a command whose executable is alive with a doubtful one.
 		return false
 	}
-	return !os.SameFile(oldInfo, newInfo)
+	if !os.SameFile(oldInfo, newInfo) {
+		return true
+	}
+	// Same binary on both sides, but the stored spelling is pinned to
+	// a Cellar version while the new one is not: migrate to the
+	// upgrade-stable spelling now, while the versioned path still
+	// resolves.
+	_, oldVersioned := platform.ParseBrewCellar(oldExe)
+	_, newVersioned := platform.ParseBrewCellar(newExe)
+	return oldVersioned && !newVersioned
 }
 
 // candidates returns the accelerators to try, first the configured

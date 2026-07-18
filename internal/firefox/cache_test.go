@@ -61,6 +61,19 @@ func eventuallySites(t *testing.T, c *Cache) []Site {
 	return got
 }
 
+// settleCacheRefresh waits until no refresh goroutine is in flight
+// (settleTabRefresh's sibling): a counter observed inside the fetch
+// seam says nothing about the refresh's locked bookkeeping, which is
+// what the next kick and the next clock advance depend on.
+func settleCacheRefresh(t *testing.T, c *Cache) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return !c.inFlight
+	}, 3*time.Second, time.Millisecond)
+}
+
 func TestCacheFirstQuerySingleFlight(t *testing.T) {
 	var calls atomic.Int32
 	gate := make(chan struct{})
@@ -119,8 +132,13 @@ func TestCacheFailureKeepsDataAndLogsOnce(t *testing.T) {
 		Logf: lg.logf,
 		now:  clock.now,
 		fetch: func(context.Context) ([]Site, error) {
+			// The outcome is decided BEFORE the observable increment:
+			// the test flips fail as soon as the counter moves, and a
+			// still-deciding refresh must not pick the new value up
+			// retroactively.
+			failing := fail.Load()
 			calls.Add(1)
-			if fail.Load() {
+			if failing {
 				return nil, errors.New("database is sulking")
 			}
 			return []Site{{URL: "https://ok.example/", Host: "ok.example", Visits: 12}}, nil
@@ -129,6 +147,17 @@ func TestCacheFailureKeepsDataAndLogsOnce(t *testing.T) {
 	eventuallySites(t, c)
 	require.Equal(t, int32(1), calls.Load())
 
+	// Each phase must settle the previous refresh's BOOKKEEPING before
+	// advancing the clock and kicking again: a bare counter poll
+	// returns mid-fetch, and a refresh goroutine parked between its
+	// fetch and its locked bookkeeping would (a) swallow the next kick
+	// via the in-flight flag -- nothing ever re-kicks, Sites is the
+	// only kicker -- and (b) compute its retry time from the ALREADY
+	// ADVANCED fake clock, pushing the next attempt out of the frozen
+	// clock's reach for good. The phases whose refresh writes a log
+	// line are settled by the log-count wait (written in the same
+	// locked section); the quiet ones use settleCacheRefresh, exactly
+	// like the tab cache test.
 	fail.Store(true)
 	clock.advance(11 * time.Minute)
 	c.Sites() // kicks the failing refresh
@@ -148,6 +177,7 @@ func TestCacheFailureKeepsDataAndLogsOnce(t *testing.T) {
 	clock.advance(failureRetryGap)
 	c.Sites()
 	require.Eventually(t, func() bool { return calls.Load() == 3 }, 3*time.Second, 5*time.Millisecond)
+	settleCacheRefresh(t, c) // the identical error logs nothing to wait on
 	require.Len(t, lg.all(), 1, "the same message is logged once, not per refresh")
 
 	// Recovery resets the dedup, so a NEW round of failures logs again.
@@ -155,6 +185,7 @@ func TestCacheFailureKeepsDataAndLogsOnce(t *testing.T) {
 	clock.advance(failureRetryGap)
 	c.Sites()
 	require.Eventually(t, func() bool { return calls.Load() == 4 }, 3*time.Second, 5*time.Millisecond)
+	settleCacheRefresh(t, c)
 	fail.Store(true)
 	clock.advance(11 * time.Minute)
 	c.Sites()

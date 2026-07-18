@@ -21,10 +21,18 @@ import (
 //     part -- but only when it names the very binary this process is
 //     running: a PATH hit that is a different file (another install,
 //     the wrong version first in PATH) is rejected;
-//  2. args0 (os.Args[0]) when it is absolute or resolvable against
+//  2. the structural Homebrew candidates derived from exe itself
+//     (ParseBrewCellar): the linked <prefix>/<rest>, then the opt
+//     <prefix>/opt/<formula>/<rest>. These need no cooperation from
+//     PATH or argv[0] -- exactly what the dominant broken-launch
+//     context lacks: gsd spawns the keybinding command "<Cellar
+//     path> toggle" with its own shim-less PATH, and when no
+//     instance is running that very process boots the GUI, so
+//     argv[0] IS the versioned Cellar path;
+//  3. args0 (os.Args[0]) when it is absolute or resolvable against
 //     the working directory, exists, and passes the same same-binary
 //     guard -- again kept unresolved;
-//  3. exe itself, unchanged.
+//  4. exe itself, unchanged.
 //
 // exe must be the absolute path of the running binary ("" or a
 // relative path is the caller's bug and simply falls through to being
@@ -37,6 +45,15 @@ func StableExecutable(exe, args0 string) string {
 	if p, err := exec.LookPath(filepath.Base(exe)); err == nil &&
 		filepath.IsAbs(p) && sameFileOnDisk(p, exe) {
 		return p
+	}
+	// The brew candidates come BEFORE args0: in the gsd-boot context
+	// above, args0 is the versioned Cellar path and trivially passes
+	// the same-binary guard -- consulting it first would re-register
+	// the doomed versioned spelling on every startup.
+	for _, p := range brewStableCandidates(exe) {
+		if sameFileOnDisk(p, exe) {
+			return p
+		}
 	}
 	if args0 != "" {
 		p := args0
