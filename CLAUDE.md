@@ -184,7 +184,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   when hidden beyond that window it FIRST
   captures app context (`captureAppContext`: CaptureFocused +
   RefreshRunningAsync + RefreshWindowsAsync +
-  EnsureFreshInstalled(5m) -- the bar window
+  EnsureFreshInstalled(5m) + the async frecency cwd derivation
+  (captureFrecencyCwd in frecency.go: focused PID -> the
+  plat.procTree per-capture snapshot factory (production
+  appctx.NewProcTree("/proc"), linux only, nil elsewhere) ->
+  frecency.DeriveCwd on a goroutine -> setFrecencyCwd swaps a FRESH
+  immutable Blend copy into the Manager; skipped without a factory, a
+  store, or a positive CwdWeight; no focused PID or no meaningful cwd
+  CLEARS the boost rather than leaving it stale) -- the bar window
   steals focus, so this precedes showing), then
   `showOnCursorDisplay`: platform.CursorDisplays -> PickDisplay ->
   BarPosition (absolute coords), then darwin = native.MoveWindow,
@@ -219,7 +226,20 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   and the app runs on -- nil store = GetHistory returns a non-nil
   empty slice and AddHistory no-ops, so newTestApp needs no extra
   wiring. The frontend commits a query only after its activation
-  actually ran. `GetStats() sysstats.Snapshot` (stats.go) returns the
+  actually ran. Frecency wiring (frecency.go): Startup's
+  startFrecency (skipped when Options.Frecency.Disabled -- main.go
+  wires config search.frecency) builds the open-count store
+  (<configDir>/frecency.json, persist on; unresolvable config dir =
+  memory-only + one log line; Load runs ASYNC, corrupt = one log
+  line + empty store) plus the recency probe OVER THE plat.lstat
+  SEAM (tests never stat the real disk) and hands the Manager the
+  index.Blend; `recordOpen(path)` is the ONE capture hook -- called
+  from the success paths of Open and Reveal ONLY, which covers the
+  open_path plugin action (it executes through Open), while open_url
+  values sharing Open are filtered by its absolute-path guard, and
+  openConfigFile bypasses Open deliberately -- recording async, write
+  errors logged once (frecErrOnce), never blocking or failing the
+  action. `GetStats() sysstats.Snapshot` (stats.go) returns the
   sampler's cached snapshot -- instant, never IO on this path -- with
   Enabled stamped true (the sampler itself never sets that field;
   emitStats stamps the event payloads the same way); nil sampler
@@ -265,14 +285,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
   incl. run/activateWindow/appSource plus getenv/executable/args0/detectSession/
-  startPortal/ensureGnomeBinding AND the launch seams --
+  startPortal/ensureGnomeBinding/procTree AND the launch seams --
   open/reveal/run take extraEnv now (reveal also startupID),
   launchExec, resolveHandler, handlerByID, mintCredential,
   prepareLaunch, dbusLaunch, watchState, snRemove -- in window.go;
   defaults in New, plus
   the `newRegistry`, `newTray` and `newStats` seams); unit tests MUST
   replace them (see
-  newTestApp, which also nils appSource, stubs newRegistry, newTray
+  newTestApp, which also nils appSource AND procTree, stubs
+  newRegistry, newTray
   AND newStats so no config, X11, session-bus or /proc//sys IO
   happens, pins goos to
   "linux" -- identical launch-path behavior on the darwin CI job;
@@ -467,10 +488,27 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   beyond; tests pin score ORDERINGS, never absolute values, and the
   naive reference (naiveQueryFuzzy in fuzzy_test.go) reuses the score
   function but keeps matching/ordering independent.
-  `QueryWith(q, limit, QueryOptions{FuzzyDisabled})` is the toggle
-  path (config search.fuzzyDisabled -> main.go ->
+  `QueryWith(q, limit, QueryOptions{FuzzyDisabled, Blend})` is the
+  options path (config search.fuzzyDisabled -> main.go ->
   Manager.SetFuzzyDisabled): disabled dispatches to queryNamesSub,
-  the pre-fuzzy scan, behavior-identical to the old engine. A query
+  the pre-fuzzy scan, behavior-identical to the old engine. blend.go
+  is the frecency ranking blend, applied at EXACTLY one stage --
+  selectTop's post-scan merge over the <= workers*limit heap
+  survivors, never the per-entry scan: per merged candidate boost =
+  Signals.Boost, penalty = Signals.Penalty, cwd = Signals.CwdBoost,
+  and for COLD candidates only (boost 0) one budget-bounded
+  (RecencyBudget, default 15ms) Signals.Recency batch mapped through
+  recencyScore (log-scaled age -> [0,1]: ~1 within the hour, ~0.5 a
+  day, ~0.2 a week, 0 at 30d). Ordering: effective class (class - 1
+  when boost > TierJump -- one tier max) then blended = score/64 +
+  wF*boost + wR*recency + cwd - wN*penalty DESC then the pre-blend
+  chain; weights <= 0 disable each part. The Manager holds the Blend
+  (SetBlend/Blend; swapped as an IMMUTABLE copy -- the app's cwd
+  stash swaps fresh ones); nil or zero-value-Signals blends take the
+  EXACT pre-blend selectTop path, byte-identical ordering pinned by
+  TestBlendInactiveIsNoOp, and pruning stays pre-blend: a candidate
+  outside its shard's top-limit heap cannot be resurrected
+  (TestBlendMergedSetOnly, documented). A query
   containing a path
   separator (on windows '/' too, normalized) dispatches to path mode
   (path.go): matched against the FULL path via a per-query dir-table
@@ -525,7 +563,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   excludes, hotkey,
   rescanIntervalMinutes, maxResults, search {fuzzyDisabled -- the
   fuzzy-tier kill switch, zero value = fuzzy ON per the tray.disabled
-  convention; main.go wires it to Manager.SetFuzzyDisabled},
+  convention; main.go wires it to Manager.SetFuzzyDisabled -- and
+  frecency {disabled, halfLifeDays 14, weightFrecency/weightRecency/
+  weightCwd/weightNoise 1.0, tierJumpCount 3.0}, the ranking-blend
+  knobs main.go wires to app.Options.Frecency; NUMERIC CONVENTION
+  UNIQUE HERE: Normalize repairs only the EXACT zero to the default
+  (halfLifeDays repairs <= 0), a NEGATIVE value is the documented
+  per-signal off switch and passes through, and the schema rejects
+  the ambiguous literal 0},
   theme, plugins {disabled, entries
   {<id>: {disabled, settings}}}, bangs {sigils, aliases}, rewrites
   [{name, pattern, replacement, title?, icon?, disabled?}] (the regex
@@ -601,6 +646,66 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Persist format: a plain JSON array of strings at
   <configDir>/history.json (wired by internal/app history.go;
   config.json's history.persistDisabled opts out).
+- `internal/frecency` -- the PURE half of result prioritization:
+  the signal sources the ranking blend consumes (the blend itself is
+  internal/index blend.go, the app wiring internal/app frecency.go,
+  the production ProcTree internal/appctx proctree.go, the knobs
+  config search.frecency). Modeled on internal/history
+  throughout: mutex-guarded (RWMutex, queries RLock), injectable
+  clocks/seams, atomic temp-file-then-rename 0600 persistence,
+  missing file = empty + nil error, corrupt file = empty + ONE
+  returned error for logging, defensive copies, nil-receiver-safe
+  no-ops. Pieces: `Store` (frecency.go; New(path, Options{HalfLife
+  default 14d, Cap default 4096, Now, Persist}); RecordOpen lazily
+  decays the stored count to now (0.5^(dt/halfLife)), adds 1,
+  persists {v:1,entries:{path:{c,t}}} -- the in-memory update
+  survives a failed write; Boost = the READ-ONLY decayed count, 0
+  unknown, no write amplification; the cap keeps the highest decayed
+  counts (ties: newer touch, then path) on record AND load; Load
+  keeps stored values verbatim (decay applies on read), drops
+  garbage entries (empty path, c <= 0, zero t), rejects wrong
+  versions; empty paths skipped, never trimmed). `PathPenalty`
+  (penalty.go; pure location-noise score in [0, 1], a rank NUDGE
+  never an exclusion: noise-class dir components (.cache/cache/.git/
+  node_modules/tmp/.tmp/temp/.temp, case-insensitive -- /tmp and
+  /var/tmp arrive via their own "tmp" component) cost 0.3 each,
+  other dot-DIRS 0.1, depth past 6 components 0.05 each capped at
+  0.25 so deep-but-clean < /tmp workspace < deep cache noise (the
+  motivating log.txt report, pinned as ordering tests); the BASE
+  name is exempt (dotfiles like .bashrc are prime targets); / and \
+  both split). `Probe` (probe.go; NewProbe(ProbeOptions{TTL 5m,
+  Lstat, Now, Workers 8}); BatchRecency(ctx, paths, budget) =
+  max(atime, mtime) per path -- linux reads Stat_t.Atim
+  (recency_linux.go), darwin/windows fall back to mtime-only
+  (recency_other.go, keeps the windows/amd64 cross-compile pure) --
+  behind a TTL cache (failures cached negatively; bounded 4096:
+  sweep expired, then reset), bounded worker fan-out, and a HARD
+  wall-clock budget/ctx cutoff: unstatted paths are simply absent
+  (zero time on lookup), stragglers finish their one stat into the
+  cache for the next query; the relatime atime-coarseness caveat
+  lives in the package doc, mtime still catches just-downloaded).
+  `DeriveCwd(tree ProcTree, rootPID)` (cwd.go; the focused-app
+  working-directory heuristic over the injectable
+  {Children,Cwd,Foreground} seam: the tpgid-style Foreground hint on
+  the root wins when its cwd is meaningful, else the deepest
+  meaningful cwd depth-first (root included, ties keep the earlier
+  find, 32-deep cap + visited set so cycles are harmless); "/", the
+  user home, and unreadable are NOT meaningful (ok=false when
+  nothing qualifies) -- a terminal parks at ~, the shell/editor
+  CHILD holds the real signal; the production /proc wiring is
+  appctx.ProcTree, injected through the app's plat.procTree seam)
+  plus `CwdBoost(path, cwd, weight)` (full
+  weight for the cwd itself and direct children, halved per extra
+  component, component-wise containment so /projX is not under
+  /proj; weight 0 = disabled, "/" or "" cwd = no signal). `Signals`
+  (signals.go) bundles Boost/Penalty/Recency/CwdBoost plus the
+  Cwd/CwdWeight fields for the engine blend; the zero value
+  degrades to all-no-ops (appctx.Cache pattern) AND deactivates the
+  blend outright (index.Blend.active). frecency.json
+  deliberately has NO schema in schemas/ (like history.json).
+  Exhaustively unit-tested, headless, table-driven: fake clocks,
+  counting/blocking lstat fakes, scripted ProcTree fakes, real
+  tempdir files (os.Chtimes) for the atime/mtime max path.
 - `internal/sysstats` -- the system-stats sampler behind the
   frontend's stats row, pure and headless-tested (fixture proc/sys
   trees, injectable clock + gpuExec seams). `Snapshot` is the wire
@@ -1012,7 +1117,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   PRESENCE (a Hidden local copy disables a system app), localized
   Name[xx] ignored, sorted by Name). proc.go = `ProcInfo(procRoot,
   pid)` readlink exe + trimmed comm, each empty on error (cross-user
-  /proc exe readlink fails; expected).
+  /proc exe readlink fails; expected). proctree.go = `ProcTree`
+  (NewProcTree(root)), the production process-tree SNAPSHOT behind
+  the frecency cwd derivation (structurally satisfies
+  frecency.ProcTree; this package deliberately imports frecency only
+  in tests): Children from ONE memoized scan of every <root>/N/stat
+  ppid (parse after the LAST ')' -- comm may hold spaces/parens;
+  capped 8192, child lists sorted), Cwd = readlink <root>/N/cwd,
+  Foreground = bounded BFS for the first positive stat tpgid (the
+  terminal's foreground process group; a plain GUI tree has none).
+  The app builds a FRESH one per capture (plat.procTree factory), so
+  the memoized scan can never go stale; fixture-dir tested,
+  including the DeriveCwd end-to-end pair.
 - `internal/firefox` -- the Firefox data layer (frequent sites + open
   tabs), pure and headless-tested (fixture profiles.ini trees, fixture
   places.sqlite databases AND fixture recovery.jsonlz4 snapshots BUILT

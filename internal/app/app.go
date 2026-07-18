@@ -14,6 +14,7 @@ import (
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
 	"github.com/wow-look-at-my/competent-search-thing/internal/config"
+	"github.com/wow-look-at-my/competent-search-thing/internal/frecency"
 	"github.com/wow-look-at-my/competent-search-thing/internal/history"
 	"github.com/wow-look-at-my/competent-search-thing/internal/index"
 	"github.com/wow-look-at-my/competent-search-thing/internal/ipc"
@@ -80,6 +81,10 @@ type Options struct {
 	// produced (wire cfg.MigrationNotes here); Startup logs each one
 	// loudly, exactly once, so a changed index scope is never silent.
 	ConfigNotes []string
+	// Frecency configures the frecency ranking blend (wire config's
+	// search.frecency here; see frecency.go). Weights arrive
+	// Normalize-repaired; Disabled leaves the whole layer unwired.
+	Frecency config.FrecencyConfig
 	// Preview is the preview pane configuration (wire config's
 	// preview section here); the zero value keeps the pane off and
 	// every preview method degrades to a no-op. See preview.go.
@@ -215,6 +220,22 @@ type App struct {
 	histOnce sync.Once
 	history  *history.Store
 
+	// Frecency ranking (see frecency.go): the open-count store and
+	// the blend the Manager serves, built once at Startup; nil/zero
+	// before that or when config disables the feature (recordOpen and
+	// the cwd capture then no-op). frecBlend is the base copy the cwd
+	// stash derives fresh immutable Blends from. frecWG tracks the
+	// layer's short-lived goroutines (state load, open recording, cwd
+	// derivation) so Shutdown can drain them -- a recording racing
+	// process teardown would otherwise be lost, and in tests a write
+	// racing the TempDir cleanup fails the test.
+	frecOnce    sync.Once
+	frecErrOnce sync.Once
+	frecMu      sync.Mutex // guards frecStore, frecBlend
+	frecStore   *frecency.Store
+	frecBlend   index.Blend
+	frecWG      sync.WaitGroup
+
 	// rt and plat are seams over the Wails runtime and the platform
 	// layer. Production fills them in New; unit tests MUST replace
 	// every rt member before driving code that reaches it (the real
@@ -278,6 +299,7 @@ func (a *App) Startup(ctx context.Context) {
 	a.pluginOnce.Do(a.startPlugins)
 	a.previewOnce.Do(a.startPreview)
 	a.histOnce.Do(a.startHistory)
+	a.frecOnce.Do(a.startFrecency)
 	a.themeOnce.Do(a.startThemeWatch)
 	if a.manager == nil {
 		return
@@ -500,6 +522,13 @@ func (a *App) Shutdown(_ context.Context) {
 	if tw != nil {
 		tw.stop()
 	}
+
+	// Drain the frecency layer's short-lived goroutines (one state
+	// load, in-flight open recordings, a cwd derivation) so an open
+	// recorded moments before quit still hits the disk. Each is a
+	// single bounded file operation or /proc walk -- no lock is held
+	// here and none of them can block indefinitely.
+	a.frecWG.Wait()
 }
 
 // Search returns index entries whose name contains query,
@@ -526,21 +555,27 @@ func (a *App) Search(query string) []Result {
 // Open launches path (or URL) with the operating system's default
 // handler -- on linux through the credentialed launch path, so the
 // target application's window ends focused and raised (see launch.go)
-// -- and hides the bar on success.
+// -- and hides the bar on success. A successful open of an absolute
+// path is recorded as a frecency signal (recordOpen filters the
+// open_url values that share this method).
 func (a *App) Open(path string) error {
 	if err := a.openTarget(path); err != nil {
 		return err
 	}
+	a.recordOpen(path)
 	a.Hide()
 	return nil
 }
 
 // Reveal shows path selected in the operating system's file manager
-// (credentialed on linux, like Open) and hides the bar on success.
+// (credentialed on linux, like Open) and hides the bar on success. A
+// successful reveal counts as a frecency open too -- the user went
+// for that exact file.
 func (a *App) Reveal(path string) error {
 	if err := a.revealTarget(path); err != nil {
 		return err
 	}
+	a.recordOpen(path)
 	a.Hide()
 	return nil
 }

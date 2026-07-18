@@ -70,6 +70,7 @@ func runGUI(opts cli.RunOptions) error {
 		TrayDisabled:           cfg.Tray.Disabled,
 		HistoryPersistDisabled: cfg.History.PersistDisabled,
 		ConfigNotes:            cfg.MigrationNotes,
+		Frecency:               cfg.Search.Frecency,
 		Preview:                cfg.Preview,
 		WindowWidth:            width,
 		WindowHeight:           height,

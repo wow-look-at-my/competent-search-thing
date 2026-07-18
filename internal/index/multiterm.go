@@ -42,7 +42,7 @@ import (
 )
 
 // queryNamesMulti dispatches a multi-term query.
-func (s *Store) queryNamesMulti(terms []match.Term, n, limit int, fuzzyOff bool) []Result {
+func (s *Store) queryNamesMulti(terms []match.Term, n, limit int, fuzzyOff bool, b *Blend) []Result {
 	allASCII := true
 	for _, t := range terms {
 		if !t.ASCII {
@@ -55,7 +55,7 @@ func (s *Store) queryNamesMulti(terms []match.Term, n, limit int, fuzzyOff bool)
 		pats[i] = t.Units()
 	}
 	if !allASCII {
-		return s.queryMultiFold(terms, pats, n, limit, fuzzyOff)
+		return s.queryMultiFold(terms, pats, n, limit, fuzzyOff, b)
 	}
 
 	// Driver selection + the impossible-byte fast reject.
@@ -97,7 +97,7 @@ func (s *Store) queryNamesMulti(terms []match.Term, n, limit int, fuzzyOff bool)
 			s.scanRangeMultiFuzzy(terms, driver, pats, anchor, lo, hi, heaps[w], marks, sc)
 		})
 	}
-	return s.selectTop(heaps, limit)
+	return s.selectTop(heaps, limit, b)
 }
 
 // scanRangeMultiSub is phase A: the anchored substring scan for the
@@ -202,7 +202,7 @@ func (s *Store) scanRangeMultiFuzzy(terms []match.Term, driver int, pats [][]int
 // non-ASCII patterns: a sharded per-entry judgment in each term's own
 // regime. O(entries * terms * name * pat) -- the same documented cost
 // class as the single-term rune path.
-func (s *Store) queryMultiFold(terms []match.Term, pats [][]int32, n, limit int, fuzzyOff bool) []Result {
+func (s *Store) queryMultiFold(terms []match.Term, pats [][]int32, n, limit int, fuzzyOff bool, b *Blend) []Result {
 	workers, per := shardPlanMarked(n)
 	heaps := make([]*topK, workers)
 	runShards(workers, per, n, func(w, lo, hi int) {
@@ -238,7 +238,7 @@ func (s *Store) queryMultiFold(terms []match.Term, pats [][]int32, n, limit int,
 		}
 		heaps[w] = h
 	})
-	return s.selectTop(heaps, limit)
+	return s.selectTop(heaps, limit, b)
 }
 
 // termContainsBytes reports a substring match of term t in the name
