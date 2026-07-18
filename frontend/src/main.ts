@@ -7,16 +7,25 @@
 // summons empty; Up/Down recall committed queries -- see the history
 // section below), and the runtime events the Go side emits
 // (app:shown, index:progress, watch:degraded, watch:backend,
-// theme:changed).
-// Rendering lives in render.ts; theme token/custom-css application
-// lives in theme.ts.
+// theme:changed, stats:update -- the system stats row at the bottom
+// edge). Rendering lives in render.ts (results) and stats.ts (the
+// stats row's formatting); theme token/custom-css application lives in
+// theme.ts; the opt-in preview pane lives in preview.ts (wired below
+// through GetPreviewConfig + the selection/query hooks).
 
+import {
+  initPreview,
+  previewOnQueryChange,
+  previewOnSelectionChange,
+} from "./preview";
 import {
   applySelection,
   renderPluginSections,
   renderResults,
 } from "./render";
 import type { PluginRowRef, PluginSection } from "./render";
+import { renderStats } from "./stats";
+import type { StatsNodes } from "./stats";
 import { initTheme } from "./theme";
 
 const SEARCH_DEBOUNCE_MS = 15;
@@ -39,6 +48,14 @@ const degradedChipEl = document.getElementById(
 const backendChipEl = document.getElementById(
   "backend-chip",
 ) as HTMLSpanElement;
+const statsEl = document.getElementById("stats") as HTMLDivElement;
+const statsNodes: StatsNodes = {
+  cpu: document.getElementById("stat-cpu") as HTMLSpanElement,
+  gpu: document.getElementById("stat-gpu") as HTMLSpanElement,
+  ram: document.getElementById("stat-ram") as HTMLSpanElement,
+  swap: document.getElementById("stat-swap") as HTMLSpanElement,
+  net: document.getElementById("stat-net") as HTMLSpanElement,
+};
 
 // A selectable row: a file hit or one plugin result. The flat
 // keyboard/hover selection runs over files first, then plugin rows.
@@ -122,6 +139,38 @@ function refreshIdleStatus(): void {
   }
 }
 
+/* --- stats row ------------------------------------------------------ */
+
+// applyStats renders one stats snapshot into the bottom row -- or
+// hides the whole row when the feature is off (stats.disabled: the Go
+// side sends enabled false). Per-metric dashes are stats.ts's job.
+function applyStats(snap: StatsSnapshot | undefined): void {
+  if (snap === undefined) {
+    return; // malformed payload; keep whatever is on screen
+  }
+  if (!snap.enabled) {
+    statsEl.hidden = true;
+    return;
+  }
+  statsEl.hidden = false;
+  renderStats(snap, statsNodes);
+}
+
+// refreshStats re-renders from the Go side's cached snapshot --
+// instant Go-side (a mutex-guarded copy, never IO), so calling it on
+// the show path costs nothing. Live updates then arrive as
+// "stats:update" events while the bar stays visible.
+function refreshStats(app: WailsAppBindings): void {
+  app
+    .GetStats()
+    .then((snap) => {
+      applyStats(snap);
+    })
+    .catch((err: unknown) => {
+      console.warn("stats fetch failed: " + String(err));
+    });
+}
+
 /* --- selection ------------------------------------------------------ */
 
 const rowHandlers = {
@@ -132,6 +181,11 @@ const rowHandlers = {
 function select(index: number): void {
   state.selected = index;
   applySelection(state.rows, index);
+  // The single selection choke point: every path (arrows, hover,
+  // Home/End, render reconciles, history recall, app:shown reset)
+  // funnels through here, so the preview pane sees them all. A no-op
+  // while the pane is disabled.
+  previewOnSelectionChange(state.items[index] ?? null);
 }
 
 function moveSelection(delta: number): void {
@@ -352,6 +406,7 @@ function runSearch(app: WailsAppBindings): void {
   const seq = ++state.seq;
   const query = inputEl.value;
   state.query = query;
+  previewOnQueryChange(query); // no-op while the pane is disabled
   state.sections = []; // plugin sections are per-generation
   if (query.trim() === "") {
     fetchCheatSheet(app, seq);
@@ -365,7 +420,7 @@ function runSearch(app: WailsAppBindings): void {
       }
       const ms = performance.now() - t0;
       state.fileItems = items;
-      state.fileRows = renderResults(fileResultsEl, items, query, rowHandlers);
+      state.fileRows = renderResults(fileResultsEl, items, rowHandlers);
       renderPluginArea(); // re-offset plugin rows below the new file rows
       // Auto-select the first row only for a real query: the
       // empty-query cheat sheet stays unselected (Enter = no-op).
@@ -516,6 +571,13 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
     state.histCursor = -1;
     inputEl.focus();
     scheduleSearch(app);
+    // Instant cached snapshot (the summon's fresh samples follow as
+    // stats:update events moments later).
+    refreshStats(app);
+  });
+
+  rt.EventsOn("stats:update", (...data: unknown[]) => {
+    applyStats(data[0] as StatsSnapshot | undefined);
   });
 
   rt.EventsOn("index:progress", (...data: unknown[]) => {
@@ -581,6 +643,14 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
 
 function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   initTheme(app, rt);
+  app
+    .GetPreviewConfig()
+    .then((cfg) => {
+      initPreview(app, rt, cfg);
+    })
+    .catch((err: unknown) => {
+      console.warn("preview config fetch failed: " + String(err));
+    });
   inputEl.addEventListener("input", () => {
     state.histCursor = -1; // typing exits history browse mode
     scheduleSearch(app);
@@ -602,6 +672,10 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   // EventsOn registration was still in flight would otherwise be
   // missed and leave the bar blank until the first keystroke.
   scheduleSearch(app);
+  // Same reasoning for the stats row: render it (or hide it when
+  // disabled) before the first summon. Pre-first-summon the enabled
+  // snapshot is all dashes -- the sampler has not run yet.
+  refreshStats(app);
 }
 
 // window.go and window.runtime are injected by the Wails runtime

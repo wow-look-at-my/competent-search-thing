@@ -13,6 +13,7 @@ import (
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
 	"github.com/wow-look-at-my/competent-search-thing/internal/config"
+	"github.com/wow-look-at-my/competent-search-thing/internal/launch"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/plugin"
 )
@@ -100,6 +101,17 @@ func (a *App) buildRegistry() dispatcher {
 		entries[id] = plugin.Entry{Disabled: e.Disabled, Settings: e.Settings}
 	}
 	sites, tabs := a.firefoxSources(cfg.Firefox)
+	rewrites := make([]plugin.RewriteRule, len(cfg.Rewrites))
+	for i, rw := range cfg.Rewrites {
+		rewrites[i] = plugin.RewriteRule{
+			Name:        rw.Name,
+			Pattern:     rw.Pattern,
+			Replacement: rw.Replacement,
+			Title:       rw.Title,
+			Icon:        rw.Icon,
+			Disabled:    rw.Disabled,
+		}
+	}
 	reg := plugin.New(plugin.Options{
 		Manifests:        manifests,
 		LoadErrors:       loadErrs,
@@ -114,6 +126,8 @@ func (a *App) buildRegistry() dispatcher {
 		FrequentSitesMax: cfg.Firefox.FrequentSites.MaxResults,
 		OpenTabs:         tabs,
 		OpenTabsMax:      cfg.Firefox.OpenTabs.MaxResults,
+		FuzzyDisabled:    cfg.Search.FuzzyDisabled,
+		Rewrites:         rewrites,
 		Logf:             log.Printf,
 	})
 	for _, err := range reg.Errors() {
@@ -345,8 +359,13 @@ func (a *App) RunPluginAction(pluginID string, action plugin.Action) error {
 		if err := validateArgv(action.Argv); err != nil {
 			return fmt.Errorf("run_command: %w", err)
 		}
+		if action.DesktopID != "" {
+			if err := launch.ValidDesktopID(action.DesktopID); err != nil {
+				return fmt.Errorf("run_command: %w", err)
+			}
+		}
 		a.logAction(pluginID, action.Type, strings.Join(action.Argv, " "))
-		if err := a.plat.run(action.Argv); err != nil {
+		if err := a.runCommandAction(action.Argv, action.DesktopID); err != nil {
 			return err
 		}
 		a.Hide()
@@ -437,14 +456,15 @@ func (a *App) requestRescan() error {
 }
 
 // openConfigFile opens config.json with the operating system's
-// default handler, leaving bar visibility alone (callers decide
-// whether their flow ends with a hide).
+// default handler (through the credentialed launch path, so the
+// editor gets focused like any other open), leaving bar visibility
+// alone (callers decide whether their flow ends with a hide).
 func (a *App) openConfigFile() error {
 	p, err := config.Path()
 	if err != nil {
 		return err
 	}
-	return a.plat.open(p)
+	return a.openTarget(p)
 }
 
 // clipboardCopy puts text on the system clipboard via the Wails

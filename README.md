@@ -351,7 +351,9 @@ buildhost (see [Install](#install)):
       to centering when the platform cannot say, e.g. Wayland)
 - [x] Open / Reveal: Enter opens the selection with the OS default
       handler, Ctrl+Enter (Cmd+Enter on macOS) reveals it in the file
-      manager; both hide the bar on success
+      manager; both hide the bar on success, and on Linux the target
+      application's window ends focused and raised (see
+      [Focus and raise on launch](#focus-and-raise-on-launch))
 - [x] Search UI: as-you-type results with match highlighting, dimmed
       parent paths, folder/file glyphs, keyboard + mouse selection,
       live index status bar and a staleness warning chip
@@ -401,37 +403,91 @@ the full path instead (Everything-style):
 - Within a rank class the usual tie-breaks apply: directories first,
   then shorter paths, then alphabetical.
 
-## Fuzzy matching
+## Fuzzy matching and multi-term queries
 
-A name query also matches names that contain its characters **in
+Matching is ONE shared engine (`internal/match`) used by every result
+section: files, installed apps, open windows, Firefox frequent sites,
+open tabs, and (for gating and ranking) external plugin results. Two
+behaviors compose:
+
+**Multi-term**: whitespace splits a query into terms; ALL terms must
+match, **in any order**, each anywhere in the row's match fields:
+
+- `fire fox` (and `fox fire`) finds **Firefox** -- the app AND files
+- `my backup` finds `My Documents Backup`
+- `data report` finds `report_data_2.txt`
+
+**Fuzzy**: a term also matches text containing its characters **in
 order with gaps** -- a subsequence, the fzf/VS-Code-style fuzzy UX:
 
 - `fbar` finds `foo_bar.txt`
+- `firefx` finds Firefox (everywhere, not just files)
 - `drpt12` finds `data_report_12.txt`
-- `cst` finds `competent-search-thing`
 
-The ranking guarantee: exact, prefix, and substring matches ALWAYS
-rank above every fuzzy match -- fuzzy is a strictly lower tier and
-the existing tiers behave exactly as before. Within the fuzzy tier,
-matches rank by a position-aware score: hits at the name start, after
-word boundaries (`-`, `_`, `.`, space, letter/digit transitions) and
-at camelCase steps score higher, consecutive runs score higher, and
-large gaps are penalized (with a cap, so one long gap does not drown
-an otherwise good match). For the query `fb` that means `foo_bar` >
-`FooBar` > `fxxbyyy`.
+The ranking guarantee: exact, prefix, word-start, and substring
+matches ALWAYS rank above every fuzzy match -- fuzzy is a strictly
+lower tier. A multi-term match ranks at its WORST term's tier (every
+term a substring = the substring tier; any term subsequence-only = the
+fuzzy tier). Within the fuzzy tier, matches rank by a position-aware
+score: hits at the text start, after word boundaries (`-`, `_`, `.`,
+space, letter/digit transitions) and at camelCase steps score higher,
+consecutive runs score higher, and large gaps are penalized (with a
+cap, so one long gap does not drown an otherwise good match). For the
+query `fb` that means `foo_bar` > `FooBar` > `fxxbyyy`.
 
-There is no typo tolerance: a character that never occurs in the name
+The characters that matched **light up** in every result row --
+per-character letter coloring through the `highlight` theme token
+(never a background rectangle), including the exact characters a
+fuzzy alignment picked.
+
+There is no typo tolerance: a character that never occurs in the text
 is a miss (subsequence fuzz is also how fzf and VS Code's quick-open
 behave; Everything's matching is not typo-based either). Queries with
-a path separator ([path mode](#search-by-path)) have no fuzzy tier.
+a path separator ([path mode](#search-by-path)) stay literal
+single-pattern -- paths legitimately contain spaces, so no term
+splitting and no fuzzy tier there; space-named files are still found
+in name mode because each term matches on its own.
 
 Common queries cost nothing extra: whenever the substring tiers alone
 already fill the result limit, the fuzzy pass is skipped outright
 (every substring match outranks every fuzzy one, so it could not
-change the list). Turn the tier off entirely with
-`"search": { "fuzzyDisabled": true }` in
-[the configuration](#configuration); the engine then behaves exactly
-like the pre-fuzzy versions.
+change the list). Turn the fuzzy tier off EVERYWHERE (files and all
+builtin sections) with `"search": { "fuzzyDisabled": true }` in
+[the configuration](#configuration); term splitting applies regardless
+of the toggle.
+
+## Rewrite rules
+
+`rewrites` in [the configuration](#configuration) defines regex ->
+URL rules: paste `XY-12345` into the bar and the top result instantly
+opens your tracker.
+
+```json
+"rewrites": [
+  {
+    "name": "jira",
+    "pattern": "[A-Z]+-\\d+",
+    "replacement": "https://my.jira.com/$0"
+  }
+]
+```
+
+- Patterns are Go regexp (RE2: linear time, no backtracking; a handful
+  of compiled rules per keystroke is negligible). They FULL-MATCH the
+  trimmed query by default -- the pattern is compiled as
+  `^(?:pattern)$` unless you anchor it yourself (a leading `^` or
+  trailing `$` keeps it verbatim); write looser rules with explicit
+  `.*`.
+- `replacement` (and the optional `title`) expand capture groups with
+  the stdlib syntax: `$0`, `$1`, `${name}`, `$$` for a literal `$`.
+- The expansion must produce an absolute `http(s)` URL -- rewrites can
+  ONLY open URLs (no command execution; that power class stays in
+  plugins, behind their manifest permission). Anything else (a
+  `javascript:` scheme, a relative path) is dropped and logged.
+- Every matching rule emits one result, in config order, at the
+  triggered tier (above all text-matched rows). Invalid patterns are
+  logged once at startup and skipped. `title` defaults to the URL,
+  `icon` to `link`; `"disabled": true` turns a rule off.
 
 ## Building
 
@@ -509,7 +565,8 @@ The file is created with defaults on first run:
   "bangs": { "sigils": ["!", "/", "@"], "aliases": {} },
   "tray": { "disabled": false },
   "history": { "persistDisabled": false },
-  "window": { "translucent": false },
+  "stats": { "disabled": false },
+  "window": { "translucent": false, "width": 780, "height": 550 },
   "firefox": {
     "frequentSites": {
       "minVisitsMonth": 11,
@@ -522,7 +579,24 @@ The file is created with defaults on first run:
       "maxResults": 6,
       "profileDir": ""
     }
-  }
+  },
+  "preview": {
+    "enabled": false,
+    "windowWidth": 1600,
+    "windowHeight": 800,
+    "textMaxKB": 256,
+    "imageMaxEdge": 800,
+    "dirMaxEntries": 200,
+    "kagi": { "apiKey": "", "maxResults": 8 },
+    "openai": { "apiKey": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 }
+  },
+  "rewrites": [
+    {
+      "name": "jira",
+      "pattern": "[A-Z]+-\\d+",
+      "replacement": "https://my.jira.com/$0"
+    }
+  ]
 }
 ```
 
@@ -616,6 +690,11 @@ Field reference:
   history in memory only: nothing is read from or written to
   `history.json`, while in-session Up/Down recall keeps working.
   Delete `history.json` to forget previously saved entries.
+- `stats` -- the [system stats row](#system-stats-row). `disabled`
+  (default `false`) turns the feature off entirely: no sampler runs
+  and the row disappears from the bar. Leaving it on costs nothing
+  while the bar is hidden: sampling only ever happens while the bar
+  is on screen.
 - `window` -- the native window layer. `translucent` (default `false`)
   requests a per-pixel-alpha (RGBA) window so the area outside the
   bar's rounded corners is truly see-through instead of a squared-off
@@ -623,6 +702,14 @@ Field reference:
   has one, but on a compositor-less X11 setup the corners render
   solid black, which is why the flag is opt-in. Evidence and
   per-desktop status: [Translucent window](#translucent-window).
+  `width` and `height` (defaults `780` and `550`) set the bar
+  window's size in pixels; the size is fixed at startup (the bar is
+  not resizable), so changes take effect on the next launch. Zero,
+  negative, or missing values get the defaults, and positive values
+  below the 320x240 floors are raised to them. A taller window shows
+  more result rows before scrolling kicks in -- how many results a
+  query returns is still governed by `maxResults` above (there is
+  deliberately no separate max-rows knob).
 - `firefox` -- the Firefox-backed sections. `frequentSites` configures
   [Frequent sites (Firefox)](#frequent-sites-firefox): the visit
   thresholds (`minVisitsMonth`, `minVisitsWeek`), the cache refresh
@@ -635,6 +722,23 @@ Field reference:
   transmitted; disable the sections via
   `plugins.entries["firefox-frequent"].disabled` and
   `plugins.entries["firefox-tabs"].disabled`.
+- `rewrites` -- regex -> URL rewrite rules; see
+  [Rewrite rules](#rewrite-rules). Empty by default; disable all at
+  once via `plugins.entries["rewrites"].disabled`.
+- `preview` -- the preview pane (opt-in). `enabled` (default `false`)
+  turns on a right-hand pane showing the selected result and widens
+  the window to `windowWidth` x `windowHeight` (defaults 1600 x 800;
+  read once at startup). `textMaxKB` (default 256) caps how much of a
+  text file one preview reads; `imageMaxEdge` (default 800) caps a
+  thumbnail's longest edge; `dirMaxEntries` (default 200) caps a
+  directory listing. `kagi.apiKey` / `openai.apiKey` are SECRETS
+  (passed through verbatim, never logged; the `KAGI_API_KEY` /
+  `OPENAI_API_KEY` environment variables work too) enabling the
+  explicit-trigger web-search and answer previews; `kagi.maxResults`
+  (default 8), `openai.model` (default `gpt-5-mini`) and
+  `openai.maxOutputTokens` (default 1024) tune them. Zero or negative
+  numbers and an empty model are repaired to the defaults. See
+  [Preview pane](#preview-pane).
 
 The full format is formally described by
 [`schemas/config.schema.json`](schemas/config.schema.json) -- add a
@@ -710,7 +814,7 @@ inherits every metric it does not override from dark via `extends`.
 | `selection-bg` | `--sb-selection-bg` | Selected result row background | `#2b3f66` | `#d8e4fb` |
 | `selection-fg` | `--sb-selection-fg` | Text on the selected result row | `#f2f2f5` | `#14213d` |
 | `border` | `--sb-border` | The bar's outer border | `#3a3a42` | `#cfcfd8` |
-| `highlight` | `--sb-highlight` | Matched-substring highlight in result names | `#8db8ff` | `#1a56c0` |
+| `highlight` | `--sb-highlight` | Per-character match highlight (letter color) in result names and plugin titles | `#8db8ff` | `#1a56c0` |
 | `warning` | `--sb-warning` | Warning accents (the staleness chip) | `#d9a13d` | `#9a6b12` |
 | `badge-bg` | `--sb-badge-bg` | Reserved: plugin result badge background | `#2b3f66` | `#dbe7ff` |
 | `badge-fg` | `--sb-badge-fg` | Reserved: plugin result badge text | `#b8c6e8` | `#1d3a6e` |
@@ -1010,9 +1114,11 @@ and anything dropped is logged with a reason.
 | `icon` | no | see below | built-in icon name, or a literal glyph/emoji up to 32 bytes |
 | `badge` | no | 24 runes | small accent-colored tag on the row's right edge |
 | `accent_color` | no | `#rgb` / `#rrggbb` | must match `^#([0-9a-fA-F]{3}\|[0-9a-fA-F]{6})$`; anything else is cleared |
-| `score` | no | 0..100 | default 50 when absent; clamped |
+| `score` | no | 0..100 | a HINT, not the wire score -- see the ranking engine below |
 | `fields` | no | 8 fields; label 40 / value 200 runes | rendered as dim `label: value` pairs under the title |
 | `action` | no | -- | what Enter/click does; see [Actions](#actions) |
+| `keywords` | no | 8 entries, 64 runes each | extra match texts for the ranking engine (see below) |
+| `matchRanges` | no | 32 pairs | per-character highlight ranges on `title`: half-open `[start, end)` RUNE index pairs; clamped/sorted/merged |
 
 Response-wide caps: at most 20 results per response and 1 MiB of
 response body (both transports); control characters in any string are
@@ -1020,8 +1126,48 @@ replaced with spaces.
 
 **Ordering**: file results always come first. Plugin sections sort by
 their best result's score (then plugin id); results within a section
-sort by score (then response order). A score of 100 puts your section
-above other plugins' sections.
+sort by score (then response order). Scores are engine-minted (below),
+so the triggered tier -- not a self-declared 100 -- is what puts a
+section on top.
+
+### The ranking engine (how plugin scores really work)
+
+Every result in the app -- files, builtin sections, and plugin
+responses -- is ranked by ONE shared engine. For plugins that means:
+
+- **Text-matched plugins** (an `all_queries` trigger): the engine
+  matches the query terms against each result's `title` PLUS its
+  `keywords`. Results that match no term are DROPPED (with a logged
+  reason). Fill `keywords` with whatever a result should be findable
+  by. The wire score becomes the engine's tier band (exact 83, prefix
+  73, word-start 63, substring 53, fuzzy below all of those); your
+  self-declared `score` is demoted to an intra-tier HINT that can
+  nudge a result up to +/-2 within its band -- it can never lift a row
+  across tiers, and it is never the emitted score.
+- **Triggered plugins** (a `prefix`/`regex` trigger that matched, or a
+  bang target): your plugin CLAIMED the query, so its results skip
+  text matching entirely and enter at the `triggered` tier (86..100,
+  scaled by your self-score hint) -- ABOVE every text-matched tier.
+  That is the sanctioned home for results that answer the query
+  rather than contain it: a calculator's `42` for `=6*7` can never
+  text-match and does not have to. Response order is preserved on
+  hint ties.
+- **Highlighting**: for text-matched results the engine computes
+  per-character `matchRanges` on the title; supply your own only when
+  your plugin did its own matching (they win). Triggered-tier results
+  get no engine highlight (provide `matchRanges` if you want one).
+
+**Migration notes for plugin authors** (pre-engine plugins keep
+working, with two behavior changes):
+
+1. If your plugin uses `all_queries` and returns results whose titles
+   do not literally contain the query, they used to render and now get
+   dropped -- either add `keywords`, or (better) claim your queries
+   with a `prefix`/`regex` trigger or a bang, which puts you on the
+   triggered tier with no text gating.
+2. `score` no longer sets the emitted score directly; it is the
+   intra-tier hint described above. On the triggered tier a self-score
+   of 100 still maps to an emitted 100.
 
 **Icons**: the built-in names are `calculator`, `globe`, `clock`,
 `star`, `info`, `warning`, `link`, `terminal`, `text`, `hash`, `bolt`,
@@ -1503,6 +1649,240 @@ line says why. A future option is a GNOME Shell extension that exports
 the window list over D-Bus (for example "Window Calls"), which the app
 could consume opt-in; nothing like that ships today.
 
+## System stats row
+
+The bar's bottom edge -- below the status bar -- carries a compact
+system-stats row with five tiny readouts: CPU busy % (`CPU 12%`), GPU
+busy % (`GPU 4%`), memory used/total (`RAM 6.2/15.9G`), swap
+used/total (`SWP 0.5/8.0G`), and network throughput received/sent
+(`NET` with down/up arrows, e.g. `1.2M 5.6K` bytes/second, summed
+over the real interfaces -- loopback, container veths, bridges,
+tunnels, and VPN interfaces are excluded). Sizes use binary units
+(`G`/`M`) with one decimal below 10.
+
+The design guarantee is that the stats can never slow the search
+experience down:
+
+- Sampling happens ONLY while the bar is visible, on a background
+  goroutine, every ~1.5s. A hidden app reads nothing at all.
+- Summoning the bar triggers one immediate sample plus a quick (~300ms)
+  follow-up so the delta-based rates (CPU, network) turn fresh right
+  away; everything the frontend touches is a cached snapshot, so
+  nothing on the search, render, or summon path ever waits on IO.
+- Rates come from counter deltas between two reads. Right at summon
+  the row briefly shows the previous values (or dashes on the first
+  ever summon) until the follow-up lands.
+
+Per metric honesty, on Linux:
+
+- **CPU, memory, swap, network** are read from `/proc/stat`,
+  `/proc/meminfo`, and `/proc/net/dev`. A swap total of zero (no swap
+  configured) renders as a dash.
+- **GPU** is best-effort per hardware: AMD exposes a cheap sysfs busy
+  file (`gpu_busy_percent`), read on the fast path; NVIDIA has no
+  sysfs equivalent, so `nvidia-smi` is polled on a separate slow loop
+  (every ~5s, bounded by a ~1s timeout that kills a hung child) --
+  the number can lag a few seconds behind. Intel exposes no cheap
+  busy-percent file, so Intel GPUs show a dash (running a whole
+  `intel_gpu_top` pipeline is not worth it here).
+
+Any metric whose source is missing or failing shows a dash instead of
+a stale or fake number, and the failure is logged once, not per
+sample. On Windows and macOS there are no sources wired up yet, so
+the whole row shows dashes there for now.
+
+`stats.disabled` in `config.json` turns the feature off entirely: no
+sampler is built and the row is removed from the bar (not dashes --
+gone), taking effect on the next launch.
+
+## Focus and raise on launch
+
+Everything launched from the bar -- Enter on a file or URL, Ctrl+Enter
+reveal, an app from the Apps sections -- ends with the target
+application's window focused and raised wherever the platform allows
+it, instead of GNOME's "<App> is ready" notification. macOS `open` and
+Windows ShellExecute activate the target natively, so the machinery
+below is Linux-only.
+
+How a launch runs:
+
+1. **Resolve** the default handler through gio (by content type for
+   files, by URI scheme for URLs, `inode/directory` for reveal) and
+   read its capabilities: `DBusActivatable`, `StartupNotify`,
+   `StartupWMClass`, `Terminal`.
+2. **Mint an activation credential** while the bar still holds focus:
+   an X11 startup-notification id (carrying the user time of the
+   Enter press), GDK's Wayland launch id (a `gtk_shell1.notify_launch`
+   uuid on GTK 3.24.33/GNOME, a real xdg-activation token on GTK >=
+   3.24.35), or a hand-rolled `xdg_activation_v1` token authenticated
+   by our own keyboard serial + surface (non-GNOME compositors).
+   Minting follows GLib's gating: a handler that declares neither
+   `StartupNotify=true` nor `DBusActivatable=true` gets no credential
+   -- it could never redeem one, and an unredeemed X11 sequence would
+   pin a busy cursor.
+3. **Dispatch** through the first transport that works, every tier
+   carrying the same credential:
+   - `dbus` -- `org.freedesktop.Application` Open/Activate with
+     `desktop-startup-id` AND `activation-token` in platform-data
+     (what raises an existing GApplication window);
+   - `exec` -- the handler's own Exec line, field codes expanded, with
+     `DESKTOP_STARTUP_ID` and `XDG_ACTIVATION_TOKEN` in the child's
+     environment;
+   - `xdg-open` -- the pre-existing candidate table, same environment
+     attached (reveal uses its ShowItems candidates with the minted
+     id in the startup-id argument).
+   A tier falling through changes HOW the launch is transported,
+   never what opens.
+4. **Watch and raise (X11 and XWayland)**: whenever an X display is
+   reachable, a bounded watcher (~6s, 200ms polls) looks for the
+   launched window -- by spawned pid, by the minted id in
+   `_NET_STARTUP_ID`, or by WM_CLASS -- and activates it with a
+   `_NET_ACTIVE_WINDOW` client message carrying a FRESH X server
+   timestamp: byte-identical in form to what a taskbar click sends
+   (libwnck's activate), so it passes mutter's focus-stealing checks
+   and may switch workspaces (a zero timestamp cannot). A target that
+   already took focus by itself is left alone. If no new window ever
+   appears -- the launch handed off to an already-running instance,
+   e.g. a tab into an open editor -- the most-recently-used existing
+   window matching the handler's WM_CLASS is raised at the deadline:
+   mechanically the taskbar click you would have made. When the watch
+   ends, the X11 startup sequence is reaped (the libsn `remove:`
+   broadcast), so launchees that never complete startup notification
+   (chromium-family apps) cannot pin the busy cursor for mutter's 15s
+   timeout. Wayland sequences have no remove API; for non-redeeming
+   apps they time out server-side exactly like GNOME Shell's own
+   app-grid launches do.
+
+There is no config knob for any of this, by design: every fallback
+level is a transport downgrade, never a behavior change.
+
+Every launch logs exactly one line naming what it did:
+
+    launch: open /home/u/report.pdf handler=org.gnome.Evince.desktop credential=wayland-gdk:1b9ac0ff transport=dbus watcher=off
+
+(`handler=-` means no default handler resolved; `credential=none`
+means minting was skipped or unavailable; `transport` is
+`dbus`/`exec`/`xdg-open` -- reveal logs `showitems`; `watcher=on`
+means the X raise watcher armed.) At startup, one
+`launch: activation credentials enabled (session=...)` line announces
+the machinery.
+
+### Capability matrix
+
+| Situation | Mechanism | Result |
+|-----------|-----------|--------|
+| X11 -- new window | credential carries the Enter press's user time; mutter focuses new windows with fresh (or absent) credentials; watcher verifies | focused + raised |
+| X11 -- existing instance takes the target (editor tab, running browser) | Firefox >= 108 forwards the credential itself (`STARTUP_TOKEN` in its remoting) and presents; everything else: the watcher's MRU WM_CLASS match + fresh-timestamp `_NET_ACTIVE_WINDOW` | focused + raised |
+| Wayland GNOME -- new window | credential redeemed on first activation: GTK3 consumes `DESKTOP_STARTUP_ID` (`gtk_surface1.request_focus`), GTK4/Qt6/Electron >= 31.5 consume `XDG_ACTIVATION_TOKEN` (mutter 42 accepts a notify_launch uuid on that path with only a recency check) | focused + raised |
+| Wayland GNOME -- existing GTK/GApplication instance (gedit, nautilus opening a file) | `dbus` transport: Open() with the credential in platform-data; `gtk_window_present` redeems it | focused + raised |
+| Wayland GNOME -- existing XWayland instance (VS Code <= 1.106, the VS Code snap, anything forced to `--ozone-platform=x11`) | the X raise watcher over XWayland: MRU WM_CLASS match, fresh timestamp | focused + raised |
+| Wayland GNOME -- existing native-Wayland instance that forwards the token (Firefox >= 121 is native Wayland and does since 108) | the app serializes our `XDG_ACTIVATION_TOKEN` through its own single-instance remoting and redeems it on the existing surface (this is why BOTH env variables carry the id) | focused + raised |
+| Wayland GNOME -- existing native-Wayland instance that drops the token (stock VS Code >= 1.107: Electron consumes and unsets both variables before any JS runs, and its own singleton does not forward them) | none exists: no compositor channel can raise a foreign Wayland window, and xdg-activation redemption requires the TARGET's own surface | "<App> is ready" notification (honest limitation; a GNOME shell-extension companion could close it some day) |
+| Wayland non-GNOME (sway, KDE Plasma, ...) | hand-rolled `xdg_activation_v1` token (serial + surface authenticated); XWayland apps additionally watcher-covered when DISPLAY is set | compositor/app dependent: honored where xdg-activation is respected |
+| Reveal on X11/XWayland | ShowItems with the minted startup id + the watcher on the file manager's WM_CLASS | focused + raised |
+| Reveal on Wayland with a RUNNING nautilus | nautilus 42 accepts the ShowItems startup-id argument and discards it (a bare `gtk_window_present` with no credential) | notification (upstream nautilus behavior; a freshly started nautilus still gets focus) |
+| macOS / Windows | `open` / ShellExecute | focused + raised (native OS behavior; none of this machinery runs) |
+
+### Launch caveats
+
+- **Reveal into a running nautilus on Wayland** stays a notification
+  until nautilus honors the startup id it is handed (it is passed
+  anyway -- fixing it upstream fixes this app for free). On X11 and
+  XWayland the raise watcher already compensates.
+- **Native-Wayland apps that drop activation tokens** (stock VS Code
+  >= 1.107 handing a file to a running instance) cannot be raised by
+  any launcher on GNOME. The XWayland builds (snap, `--ozone-platform
+  =x11`) do not have this limitation.
+- The bar's window now has a proper `WM_CLASS` / Wayland `app_id`
+  (`competent-search-thing`): wails never set a program name, which
+  also broke the startup-notification id prefix.
+
+## Preview pane
+
+An opt-in right-hand pane that previews the selected result as you
+move through the list, plus explicit web-search and AI-answer lookups.
+Off by default; enable it in `config.json`:
+
+```json
+{ "preview": { "enabled": true } }
+```
+
+With the pane enabled the window opens at `preview.windowWidth` x
+`preview.windowHeight` (defaults 1600 x 800, read once at startup):
+the classic 680-wide results column stays on the left, exactly as
+before, and the pane fills the remaining width behind a divider. With
+the pane disabled the window is the configured `window.width` x
+`window.height` (defaults 780 x 550 -- see
+[Configuration](#configuration)) and none of this exists -- no pane
+markup is active and no preview code runs.
+
+What the pane shows for the selected row:
+
+- **Text files** -- the first `textMaxKB` KiB (default 256) with
+  syntax highlighting (highlight.js, bundled grammars: Go, JS/TS,
+  Python, Rust, C/C++, C#, Java, Kotlin, Swift, Ruby, PHP, Lua,
+  bash/shell, JSON, YAML, TOML/INI, XML/HTML, CSS/SCSS, Markdown,
+  SQL, Dockerfile, Makefile, diff, Vim script, plain text). The
+  backend hints the language from the file name; small unhinted files
+  are auto-detected, and anything past the cap notes the truncation.
+- **Images** (png/jpg/gif/webp/bmp) -- a downscaled thumbnail
+  (longest edge `imageMaxEdge`, default 800) with pixel dimensions
+  and file size.
+- **Directories** -- the first `dirMaxEntries` entries (default 200),
+  directories first, with sizes.
+- **Everything else** -- a metadata card (size, modified time, mode,
+  kind). Binary files are sniffed and described, never dumped;
+  symlinks are described, never followed. Plugin rows get a card from
+  their own title/subtitle/source.
+
+A fast metadata card appears immediately while the content preview
+computes, and repeat visits are served from an in-memory cache that
+invalidates when the file's size or mtime changes. Browsing stays
+free: the pane paints an instant header from data already in memory,
+the disk-touching dispatch is debounced (~90ms) so a held arrow key
+never queues work, stale answers are dropped by generation, and a
+spinner appears only when a preview takes longer than ~150ms.
+
+Web search (Kagi) and AI answers (OpenAI) run ONLY on an explicit
+trigger: the two buttons at the bottom of the pane or their
+shortcuts, `Ctrl+K` (search the web for the current query) and
+`Ctrl+I` (ask AI). No keystroke, selection, or render path ever
+calls out to the network by itself. Each provider needs its API key:
+
+- Kagi: `preview.kagi.apiKey`, or the `KAGI_API_KEY` environment
+  variable; `preview.kagi.maxResults` (default 8) caps the hits.
+- OpenAI: `preview.openai.apiKey`, or `OPENAI_API_KEY`;
+  `preview.openai.model` (default `gpt-5-mini`) and
+  `preview.openai.maxOutputTokens` (default 1024) shape the answer.
+
+The keys are passed through verbatim and NEVER logged or exposed to
+the page -- the frontend only learns "configured or not", and an
+unconfigured provider's button renders disabled with a hint naming
+the config key.
+
+Web searches go to the Kagi Search API (v1: `GET
+https://kagi.com/api/v1/search`, `Authorization: Bot <key>`). Repeat
+queries are served from a 15-minute in-memory cache (marked `cached`
+in the pane, zero network), and a client-side courtesy rate limit --
+a burst of 3 requests refilling at 1 per second -- fails fast with
+"rate limited, retry shortly" instead of dialing. Searches time out
+hard at 10 seconds.
+
+AI answers go to the OpenAI Responses API (`POST /v1/responses` with
+your `model` and `maxOutputTokens`; answers cut off by the token cap
+end with a `[truncated by max_output_tokens]` marker line). Answers
+are cached PERSISTENTLY in `<configDir>/aicache.json` -- up to 128
+entries, least-recently-used evicted, file mode 0600 -- so asking the
+same question again (even across restarts) answers instantly with a
+`cached` badge and zero network; delete the file to clear the cache.
+Answers time out hard at 90 seconds.
+
+Both fetches share the preview pane's generation counter: answers
+that arrive after you moved on -- or after a newer fetch -- are
+dropped like any other stale preview, and provider failures render as
+a terse error card (HTTP status plus the provider's short message;
+never your key, never a raw response dump).
+
 ## Tray icon
 
 The app puts a small magnifier icon in the system tray -- on Ubuntu's
@@ -1625,7 +2005,13 @@ single instance around one unix socket (in `$XDG_RUNTIME_DIR`):
   just shows the already-running instance's bar and exits 0.
 - `competent-search-thing toggle` -- what the global hotkey does:
   hide when visible, summon when hidden. Starts the app when it is
-  not running (the bar shows once the frontend is ready).
+  not running (the bar shows once the frontend is ready). A toggle
+  landing moments after the bar was dismissed counts as that
+  dismissal instead of a re-summon: pressing a grabbed summon combo
+  on an open bar unfocuses it first (which already hides it, exactly
+  like clicking elsewhere), and the toggle -- on GNOME delivered
+  through a freshly spawned `competent-search-thing toggle` process
+  -- must not bounce the bar back open.
 - `competent-search-thing show` -- like toggle but never hides a
   visible bar (idempotent; also starts the app when needed).
 - `competent-search-thing hide` -- hides the running instance's bar;
@@ -1673,15 +2059,23 @@ the command (never the key) and logs the repair:
     hotkey: repaired the GNOME keybinding command: "/home/you/.linuxbrew/Cellar/competent-search-thing/1.0.0/bin/competent-search-thing toggle" -> "/home/you/.linuxbrew/bin/competent-search-thing toggle" (the stored command no longer launched this binary)
 
 Symlinked install layouts (Homebrew's versioned Cellar, Nix, stow)
-are why both rules exist: the app registers the stable path -- the
-PATH shim, e.g. `~/.linuxbrew/bin/competent-search-thing` -- rather
-than the resolved version-pinned path, so upgrading no longer breaks
-the shortcut, and an entry written by an older version heals to the
-stable path on the first launch after an upgrade. (The flip side: a
-command you pointed at some other program yourself is healed back to
-the app on the next launch -- the repair line above is the paper
-trail. A textually different command that still launches this binary
-is left alone.) To
+are why both rules exist: the app registers the upgrade-stable
+spelling of its own path, never the resolved version-pinned one. For
+a Homebrew install the stable spelling is derived structurally from
+the Cellar path itself -- `<prefix>/Cellar/<formula>/<version>/bin/...`
+maps to the linked `<prefix>/bin/...` (or `<prefix>/opt/<formula>/...`
+when the formula is unlinked) -- independent of PATH, argv[0] and the
+rest of the launch environment, and a candidate is only ever
+substituted when it is proven to be the very binary that is running.
+A stored command still pinned to a Cellar version self-heals to the
+stable spelling at startup (that is the migration path for bindings
+written by older builds), so after one launch of a build with this
+mapping the binding survives arbitrary future upgrades with zero user
+action and zero dead windows. (The flip side: a command you pointed
+at some other program yourself is healed back to the app on the next
+launch -- the repair line above is the paper trail. A working custom
+spelling of this binary -- your own symlink, say -- is left
+alone.) To
 remove it, delete the shortcut in GNOME Settings, or -- if it is your
 only custom shortcut -- reset the whole custom-keybindings list:
 
@@ -1723,13 +2117,13 @@ nothing? Work through these, in order:
    grab (step 2).
 
 4. **Moved, upgraded or deleted the binary?** The keybinding stores
-   an absolute path (preferring the stable PATH shim of a
-   Homebrew/Nix-style install over the resolved versioned path), and
-   a stored command whose executable is gone or no longer this binary
-   self-heals -- but only at app startup. Start the app once from the
-   new location and look for the `hotkey: repaired the GNOME
-   keybinding command: "..." -> "..."` line; the shortcut works again
-   from then on.
+   the upgrade-stable spelling of the binary's absolute path (for a
+   Homebrew install, derived structurally from the Cellar layout:
+   the linked `<prefix>/bin` path first, `<prefix>/opt/<formula>` as
+   the fallback), and a stored command that is dead, names a
+   different binary, or is still pinned to a Cellar version
+   self-heals at app startup -- the `hotkey: repaired the GNOME
+   keybinding command: "..." -> "..."` line is the paper trail.
 
 5. **Force a backend** for debugging with
    `COMPETENT_SEARCH_HOTKEY_BACKEND` (see

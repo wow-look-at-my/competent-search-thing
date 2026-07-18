@@ -44,6 +44,41 @@
           >index may be stale -- periodic rescan advised</span
         >
       </div>
+      <div id="stats" hidden>
+        <span class="stat"
+          ><span class="stat-label">CPU</span
+          ><span id="stat-cpu" class="stat-value"></span
+        ></span>
+        <span class="stat"
+          ><span class="stat-label">GPU</span
+          ><span id="stat-gpu" class="stat-value"></span
+        ></span>
+        <span class="stat"
+          ><span class="stat-label">RAM</span
+          ><span id="stat-ram" class="stat-value"></span
+        ></span>
+        <span class="stat"
+          ><span class="stat-label">SWP</span
+          ><span id="stat-swap" class="stat-value"></span
+        ></span>
+        <span class="stat"
+          ><span class="stat-label">NET</span
+          ><span id="stat-net" class="stat-value"></span
+        ></span>
+      </div>
+      <div id="preview-pane">
+        <div id="preview-spinner" class="preview-spinner" hidden></div>
+        <div id="preview-body" class="preview-body"></div>
+        <div id="preview-strip" class="preview-strip">
+          <span id="preview-flash" class="preview-flash" hidden></span>
+          <button id="preview-web-btn" class="preview-btn" type="button">
+            Search web (Ctrl+K)
+          </button>
+          <button id="preview-ai-btn" class="preview-btn" type="button">
+            Ask AI (Ctrl+I)
+          </button>
+        </div>
+      </div>
     </div>
 
     <template id="tpl-icon-folder">

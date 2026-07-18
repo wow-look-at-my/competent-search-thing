@@ -27,31 +27,41 @@ func TestAppsSearchProviderBasics(t *testing.T) {
 	_, _, ok = p.match(" f ", nil)
 	require.False(t, ok, "the minimum counts the STRIPPED query")
 
-	results, _, err := p.query(context.Background(), baseRequest("fire", "fire", 1, nil))
-	require.NoError(t, err)
+	results := srcResults(t, p, baseRequest("fire", "fire", 1, nil))
 	require.Empty(t, results, "nil InstalledApps getter yields nothing")
 }
 
 func TestAppsSearchScore(t *testing.T) {
-	score := appsSearchScore("fire")
+	// The bands are the shared engine's canonical tiers now; this pins
+	// their application per app-name shape.
+	score := func(app, needle string) (float64, bool) {
+		p := newAppsSearchProvider(func() []InstalledApp {
+			return []InstalledApp{{Name: app, Exec: "run"}}
+		})
+		res := srcResults(t, p, baseRequest(needle, needle, 1, nil))
+		if len(res) == 0 {
+			return 0, false
+		}
+		return *res[0].Score, true
+	}
 	tests := []struct {
 		name string
 		app  string
 		want float64
 		ok   bool
 	}{
-		{name: "exact", app: "Fire", want: 100, ok: true},
-		{name: "exact case-insensitive", app: "FIRE", want: 100, ok: true},
-		{name: "prefix", app: "Firefox", want: 90, ok: true},
-		{name: "word start space", app: "Amazon Fire TV", want: 75, ok: true},
-		{name: "word start hyphen", app: "gnome-fire-manager", want: 75, ok: true},
-		{name: "word start dot", app: "org.fire.Tool", want: 75, ok: true},
-		{name: "substring", app: "Campfire", want: 60, ok: true},
+		{name: "exact", app: "Fire", want: 83, ok: true},
+		{name: "exact case-insensitive", app: "FIRE", want: 83, ok: true},
+		{name: "prefix", app: "Firefox", want: 73, ok: true},
+		{name: "word start space", app: "Amazon Fire TV", want: 63, ok: true},
+		{name: "word start hyphen", app: "gnome-fire-manager", want: 63, ok: true},
+		{name: "word start dot", app: "org.fire.Tool", want: 63, ok: true},
+		{name: "substring", app: "Campfire", want: 53, ok: true},
 		{name: "no match", app: "GIMP", ok: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := score(tt.app)
+			got, ok := score(tt.app, "fire")
 			require.Equal(t, tt.ok, ok)
 			if tt.ok {
 				require.Equal(t, tt.want, got)
@@ -59,9 +69,14 @@ func TestAppsSearchScore(t *testing.T) {
 		})
 	}
 
-	multi, ok := appsSearchScore("visual studio")("Visual Studio Code")
+	multi, ok := score("Visual Studio Code", "visual studio")
 	require.True(t, ok)
-	require.Equal(t, float64(90), multi, "multi-word needles still rank prefix/substring")
+	require.Equal(t, float64(63), multi,
+		"multi-word queries split into terms; the worst term tier (studio = word start) decides")
+
+	fuzzy, ok := score("Firefox", "firefx")
+	require.True(t, ok, "the fuzzy tier reaches apps now")
+	require.Less(t, fuzzy, float64(53), "strictly below every literal band")
 }
 
 func TestAppsSearchRankingOrderAndShape(t *testing.T) {
@@ -76,23 +91,23 @@ func TestAppsSearchRankingOrderAndShape(t *testing.T) {
 	}
 	p := newAppsSearchProvider(func() []InstalledApp { return list })
 
-	results, _, err := p.query(context.Background(), baseRequest("FiRe", "FiRe", 1, nil))
-	require.NoError(t, err)
+	results := srcResults(t, p, baseRequest("FiRe", "FiRe", 1, nil))
 	require.Len(t, results, 5, "case-insensitive; non-matching and unlaunchable apps excluded")
 
 	require.Equal(t, "Fire", results[0].Title)
-	require.Equal(t, float64(100), *results[0].Score)
-	require.Equal(t, "Firebird", results[1].Title, "equal scores tie-break alphabetically")
-	require.Equal(t, float64(90), *results[1].Score)
+	require.Equal(t, float64(83), *results[0].Score)
+	require.Equal(t, "Firebird", results[1].Title, "equal tiers tie-break alphabetically")
+	require.Equal(t, float64(73), *results[1].Score)
 	require.Equal(t, "Firefox", results[2].Title)
 	require.Equal(t, "Amazon Fire TV", results[3].Title)
-	require.Equal(t, float64(75), *results[3].Score)
+	require.Equal(t, float64(63), *results[3].Score)
 	require.Equal(t, "Campfire", results[4].Title)
-	require.Equal(t, float64(60), *results[4].Score)
+	require.Equal(t, float64(53), *results[4].Score)
 
 	require.Equal(t, "fire --start", results[0].Subtitle, "subtitle is the cleaned exec line")
 	require.Equal(t, "app", results[0].Icon)
 	require.Equal(t, &Action{Type: ActionRunCommand, Argv: []string{"fire", "--start"}}, results[0].Action)
+	require.Equal(t, [][2]int{{0, 4}}, results[0].MatchRanges, "engine-minted highlight")
 }
 
 func TestAppsSearchCapAndEmptySnapshot(t *testing.T) {
@@ -102,14 +117,12 @@ func TestAppsSearchCapAndEmptySnapshot(t *testing.T) {
 	}
 	p := newAppsSearchProvider(func() []InstalledApp { return list })
 
-	results, _, err := p.query(context.Background(), baseRequest("tool", "tool", 1, nil))
-	require.NoError(t, err)
+	results := srcResults(t, p, baseRequest("tool", "tool", 1, nil))
 	require.Len(t, results, maxAppsSearchResults, "untargeted sections cap at 6")
 	require.Equal(t, "Tool 01", results[0].Title)
 
 	empty := newAppsSearchProvider(func() []InstalledApp { return nil })
-	results, _, err = empty.query(context.Background(), baseRequest("tool", "tool", 1, nil))
-	require.NoError(t, err)
+	results = srcResults(t, empty, baseRequest("tool", "tool", 1, nil))
 	require.Empty(t, results, "an empty snapshot emits nothing")
 }
 
@@ -134,8 +147,9 @@ func TestAppsSearchThroughDispatch(t *testing.T) {
 	require.Equal(t, int64(1), e.Gen)
 	require.Len(t, e.Results, 1)
 	require.Equal(t, "Firefox", e.Results[0].Title)
-	require.Equal(t, float64(90), *e.Results[0].Score)
-	require.Equal(t, &Action{Type: ActionRunCommand, Argv: []string{"firefox"}}, e.Results[0].Action)
+	require.Equal(t, float64(73), *e.Results[0].Score)
+	require.Equal(t, &Action{Type: ActionRunCommand, Argv: []string{"firefox"}, DesktopID: "firefox.desktop"},
+		e.Results[0].Action, "the desktop id rides along so the app can launch with activation credentials")
 	requireNoEmission(t, ch, 100*time.Millisecond)
 
 	info = r.Dispatch(context.Background(), "f", 2, nil, emit)
