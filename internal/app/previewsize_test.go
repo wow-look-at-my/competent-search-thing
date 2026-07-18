@@ -11,12 +11,12 @@ import (
 )
 
 func TestPreviewWindowSize(t *testing.T) {
-	t.Run("absent config means the classic size", func(t *testing.T) {
+	t.Run("absent config means the base defaults", func(t *testing.T) {
 		t.Setenv(config.EnvConfigDir, t.TempDir())
 		w, h, enabled := PreviewWindowSize()
 		require.False(t, enabled)
-		require.Equal(t, WindowWidth, w)
-		require.Equal(t, WindowHeight, h)
+		require.Equal(t, config.DefaultWindowWidth, w)
+		require.Equal(t, config.DefaultWindowHeight, h)
 	})
 
 	t.Run("enabled means the configured size", func(t *testing.T) {
@@ -41,25 +41,25 @@ func TestPreviewWindowSize(t *testing.T) {
 		require.Equal(t, config.DefaultPreviewWindowHeight, h)
 	})
 
-	t.Run("disabled ignores the configured size", func(t *testing.T) {
+	t.Run("disabled ignores the preview size but honors window size", func(t *testing.T) {
 		dir := t.TempDir()
 		t.Setenv(config.EnvConfigDir, dir)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"),
-			[]byte(`{"preview":{"enabled":false,"windowWidth":1440,"windowHeight":900}}`), 0o644))
+			[]byte(`{"window":{"width":900,"height":640},"preview":{"enabled":false,"windowWidth":1440,"windowHeight":900}}`), 0o644))
 		w, h, enabled := PreviewWindowSize()
 		require.False(t, enabled)
-		require.Equal(t, WindowWidth, w)
-		require.Equal(t, WindowHeight, h)
+		require.Equal(t, 900, w)
+		require.Equal(t, 640, h)
 	})
 
-	t.Run("corrupt config means the classic size", func(t *testing.T) {
+	t.Run("corrupt config means the base defaults", func(t *testing.T) {
 		dir := t.TempDir()
 		t.Setenv(config.EnvConfigDir, dir)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"),
 			[]byte(`{"preview":{"enabled":true`), 0o644))
 		w, h, enabled := PreviewWindowSize()
 		require.False(t, enabled)
-		require.Equal(t, WindowWidth, w)
-		require.Equal(t, WindowHeight, h)
+		require.Equal(t, config.DefaultWindowWidth, w)
+		require.Equal(t, config.DefaultWindowHeight, h)
 	})
 }

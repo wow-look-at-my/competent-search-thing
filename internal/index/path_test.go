@@ -70,6 +70,15 @@ func naivePathQuery(entries []refEntry, q string, limit int) []Result {
 	for i, m := range matches {
 		out[i] = Result{Path: m.path, Name: m.name, IsDir: m.isDir}
 	}
+	// Ranges through the same engine helper the store uses, on the
+	// separator-normalized pattern (pat from the top of the function;
+	// ql was materialized before this mutation).
+	for i, b := range pat {
+		if b == '/' {
+			pat[i] = sepByte
+		}
+	}
+	fillPathRanges(out, string(pat), ascii)
 	return out
 }
 

@@ -2,10 +2,9 @@ package plugin
 
 import (
 	"context"
-	"sort"
 	"strings"
-	"unicode"
-	"unicode/utf8"
+
+	"github.com/wow-look-at-my/competent-search-thing/internal/match"
 )
 
 // builtinFirefoxID is the provider id of the frequent-sites provider.
@@ -19,13 +18,8 @@ const defaultFrequentSitesMax = 6
 // shorter than this (in runes, trimmed) never reach the provider.
 const firefoxMinQueryLen = 2
 
-// Frequent-sites score ladder, most to least specific.
-const (
-	siteScoreHostPrefix float64 = 95
-	siteScoreTitleWord  float64 = 80
-	siteScoreHostSubstr float64 = 70
-	siteScoreAnySubstr  float64 = 60
-)
+// Scoring lives in the shared engine (canonical tier bands); the
+// host-first field order below preserves the old ladder's preference.
 
 // SiteInfo is one frequently-visited page supplied by the app layer's
 // FrequentSites getter (converted from internal/firefox's Site --
@@ -66,51 +60,34 @@ func (p *firefoxProvider) match(query string, _ *AppInfo) (string, int, bool) {
 	return allQueriesMatch(query)
 }
 
-func (p *firefoxProvider) query(_ context.Context, req Request) ([]Result, []string, error) {
-	needle := strings.ToLower(strings.TrimSpace(req.Stripped))
-	if needle == "" || p.sites == nil {
-		return nil, nil, nil
+func (p *firefoxProvider) limit() int { return p.max }
+
+// candidates hands the sites snapshot to the shared engine: match
+// fields [host (leading "www." stripped), title, URL] -- host hits
+// outrank title hits within a tier, mirroring the old ladder's
+// host-first preference -- with the visit count as the tie-break.
+func (p *firefoxProvider) candidates(_ context.Context, _ Request) ([]match.Candidate, error) {
+	if p.sites == nil {
+		return nil, nil
 	}
-	type scored struct {
-		site  SiteInfo
-		score float64
-	}
-	var matches []scored
-	for _, s := range p.sites() {
-		score, ok := scoreSite(s, needle)
-		if !ok {
-			continue
-		}
-		matches = append(matches, scored{site: s, score: score})
-	}
-	sort.SliceStable(matches, func(i, j int) bool {
-		if matches[i].score != matches[j].score {
-			return matches[i].score > matches[j].score
-		}
-		if matches[i].site.Visits != matches[j].site.Visits {
-			return matches[i].site.Visits > matches[j].site.Visits
-		}
-		ti, tj := strings.ToLower(siteTitle(matches[i].site)), strings.ToLower(siteTitle(matches[j].site))
-		if ti != tj {
-			return ti < tj
-		}
-		return matches[i].site.URL < matches[j].site.URL
-	})
-	if len(matches) > p.max {
-		matches = matches[:p.max]
-	}
-	results := make([]Result, 0, len(matches))
-	for _, m := range matches {
-		score := m.score
-		results = append(results, Result{
-			Title:    siteTitle(m.site),
-			Subtitle: m.site.URL,
-			Icon:     "globe",
-			Score:    &score,
-			Action:   &Action{Type: ActionOpenURL, Value: m.site.URL},
+	sites := p.sites()
+	out := make([]match.Candidate, 0, len(sites))
+	for _, s := range sites {
+		host := strings.TrimPrefix(strings.ToLower(s.Host), "www.")
+		out = append(out, match.Candidate{
+			Display:  siteTitle(s),
+			Texts:    []string{host, s.Title, s.URL},
+			TieBreak: int64(s.Visits),
+			SortKey:  s.URL,
+			Payload: Result{
+				Title:    siteTitle(s),
+				Subtitle: s.URL,
+				Icon:     "globe",
+				Action:   &Action{Type: ActionOpenURL, Value: s.URL},
+			},
 		})
 	}
-	return results, nil, nil
+	return out, nil
 }
 
 // siteTitle is the display title: the page title, or the host when
@@ -122,45 +99,6 @@ func siteTitle(s SiteInfo) string {
 	return s.Host
 }
 
-// scoreSite ranks one site against the lowercased needle: host prefix
-// ("www." ignored) beats a title word-start, beats a host substring,
-// beats a substring anywhere in the title or URL. No match: ok=false.
-func scoreSite(s SiteInfo, needle string) (float64, bool) {
-	host := strings.TrimPrefix(strings.ToLower(s.Host), "www.")
-	title := strings.ToLower(s.Title)
-	switch {
-	case strings.HasPrefix(host, needle):
-		return siteScoreHostPrefix, true
-	case wordStart(title, needle):
-		return siteScoreTitleWord, true
-	case strings.Contains(host, needle):
-		return siteScoreHostSubstr, true
-	case strings.Contains(title, needle) || strings.Contains(strings.ToLower(s.URL), needle):
-		return siteScoreAnySubstr, true
-	}
-	return 0, false
-}
-
-// wordStart reports whether needle occurs in s starting a word: at
-// index 0 or right after a rune that is not a letter or digit. Both
-// strings are expected lowercased.
-func wordStart(s, needle string) bool {
-	if needle == "" {
-		return false
-	}
-	for from := 0; ; {
-		i := strings.Index(s[from:], needle)
-		if i < 0 {
-			return false
-		}
-		at := from + i
-		if at == 0 {
-			return true
-		}
-		r, _ := utf8.DecodeLastRuneInString(s[:at])
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
-			return true
-		}
-		from = at + 1
-	}
-}
+// Matching and scoring live in the shared engine (internal/match):
+// the word-start semantics every section used to reimplement are now
+// one definition there.

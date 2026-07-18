@@ -74,7 +74,8 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 		},
 		Tray:    TrayConfig{Disabled: true},
 		History: HistoryConfig{PersistDisabled: true},
-		Window:  WindowConfig{Translucent: true},
+		Stats:   StatsConfig{Disabled: true},
+		Window:  WindowConfig{Translucent: true, Width: 900, Height: 640},
 		Firefox: FirefoxConfig{
 			FrequentSites: FrequentSitesConfig{
 				MinVisitsMonth: 20,
@@ -137,8 +138,13 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"non-bool tray disabled":           `{"tray":{"disabled":"yes"}}`,
 		"history persist typo":             `{"history":{"persistDisabld":true}}`,
 		"non-bool history persistDisabled": `{"history":{"persistDisabled":"yes"}}`,
+		"stats disabled typo":              `{"stats":{"disabld":true}}`,
+		"non-bool stats disabled":          `{"stats":{"disabled":"yes"}}`,
 		"window translucent typo":          `{"window":{"translucnet":true}}`,
 		"non-bool window translucent":      `{"window":{"translucent":"yes"}}`,
+		"zero window width":                `{"window":{"width":0}}`,
+		"too-small window height":          `{"window":{"height":100}}`,
+		"non-integer window width":         `{"window":{"width":"780"}}`,
 		"zero firefox month":               `{"firefox":{"frequentSites":{"minVisitsMonth":0}}}`,
 		"negative firefox week":            `{"firefox":{"frequentSites":{"minVisitsWeek":-1}}}`,
 		"zero firefox refresh":             `{"firefox":{"frequentSites":{"refreshMinutes":0}}}`,
@@ -240,6 +246,8 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json $defs/trayConfig out of sync with TrayConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(HistoryConfig{})), configSchemaProperties(t, "historyConfig"),
 		"config.schema.json $defs/historyConfig out of sync with HistoryConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(StatsConfig{})), configSchemaProperties(t, "statsConfig"),
+		"config.schema.json $defs/statsConfig out of sync with StatsConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(WindowConfig{})), configSchemaProperties(t, "windowConfig"),
 		"config.schema.json $defs/windowConfig out of sync with WindowConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(FirefoxConfig{})), configSchemaProperties(t, "firefoxConfig"),
@@ -248,6 +256,8 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json $defs/frequentSitesConfig out of sync with FrequentSitesConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(OpenTabsConfig{})), configSchemaProperties(t, "openTabsConfig"),
 		"config.schema.json $defs/openTabsConfig out of sync with OpenTabsConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(RewriteRule{})), configSchemaProperties(t, "rewriteRule"),
+		"config.schema.json $defs/rewriteRule out of sync with RewriteRule")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PreviewConfig{})), configSchemaProperties(t, "previewConfig"),
 		"config.schema.json $defs/previewConfig out of sync with PreviewConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PreviewKagiConfig{})), configSchemaProperties(t, "previewKagiConfig"),

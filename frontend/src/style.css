@@ -210,6 +210,54 @@ body {
   white-space: nowrap;
 }
 
+/* --- stats row ---------------------------------------------------- */
+/* The bottom-most chrome: five tiny label/value pairs (CPU GPU RAM
+   SWP NET) fed by stats.ts. One fixed-height single line (flex 0 0
+   auto + nowrap + hidden overflow), so it can never squeeze or shift
+   the results area beyond its own height. All colors/sizes flow
+   through the --sb-* tokens, so it tracks dark and light themes. */
+
+#stats {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sb-gap);
+  padding: 3px var(--sb-padding) 5px;
+  font-size: calc(var(--sb-font-size-small) * 0.85);
+  color: var(--sb-fg-dim);
+  border-top: 1px solid var(--sb-border);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* display: flex above would defeat the hidden attribute (author rules
+   beat the UA sheet's [hidden] { display: none }), so re-assert it:
+   the row vanishes entirely when stats are disabled. */
+#stats[hidden] {
+  display: none;
+}
+
+#stats .stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+#stats .stat-label {
+  flex: 0 0 auto;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+}
+
+#stats .stat-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* --- plugins (append-only, namespaced) ----------------------------- */
 /* Everything below is scoped to .plugin-*, .bang-chip, and
    .status-flash so the theming branch can restyle without conflicts.
@@ -280,6 +328,15 @@ body {
   text-align: center;
 }
 
+.plugin-title .hl {
+  /* Per-character match highlight: LETTER COLOR ONLY (same rule as
+     .result .name .hl) -- never a background rectangle. The token is
+     chosen to stay readable on both the normal row background and
+     --sb-selection-bg. */
+  color: var(--sb-highlight);
+  font-weight: 600;
+}
+
 .plugin-subtitle {
   /* Dim, ellipsizes first -- the same language as .result .dir. */
   flex: 1 1 auto;
@@ -340,16 +397,18 @@ body {
 }
 
 /* Wide-window layout: the classic bar becomes the left column at its
-   original 680px width (query row, results, status stacked exactly as
-   before) and the pane fills the remaining width at full height,
-   split off by the border-left divider. Grid rather than nested flex
-   so the existing #bar children need no new wrapper elements; the
-   minmax(0, ...) tracks keep long preview content scrolling inside
-   the pane instead of growing the window. */
+   original 680px width (query row, results, status and the stats row
+   stacked exactly as before) and the pane fills the remaining width
+   at full height, split off by the border-left divider. Grid rather
+   than nested flex so the existing #bar children need no new wrapper
+   elements; the minmax(0, ...) tracks keep long preview content
+   scrolling inside the pane instead of growing the window. The
+   fourth row is the stats row; hidden (display:none) it collapses
+   to zero height. */
 body.with-preview #bar {
   display: grid;
   grid-template-columns: 680px minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
 }
 
 body.with-preview #query-row {
@@ -368,11 +427,16 @@ body.with-preview #status {
   grid-row: 3;
 }
 
+body.with-preview #stats {
+  grid-column: 1;
+  grid-row: 4;
+}
+
 body.with-preview #preview-pane {
   display: flex;
   flex-direction: column;
   grid-column: 2;
-  grid-row: 1 / 4;
+  grid-row: 1 / 5;
   position: relative;
   min-width: 0;
   min-height: 0;

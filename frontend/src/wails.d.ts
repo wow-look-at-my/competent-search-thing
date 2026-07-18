@@ -11,6 +11,11 @@ interface WailsSearchResult {
   // Optional note rendered in place of the parent-dir line (the
   // outside-indexed-roots hint; internal/index Result.Hint).
   hint?: string;
+  // Per-character highlight ranges on name: half-open [start, end)
+  // RUNE (code point) index pairs, sorted and merged, minted by the
+  // Go matching engine (internal/index Result.MatchRanges). JS
+  // strings are UTF-16: convert while walking code points.
+  matchRanges?: [number, number][];
 }
 
 // Bang-target info returned by QueryPlugins (internal/plugin
@@ -39,6 +44,11 @@ interface PluginAction {
   value?: string; // every type except run_command and activate_window
   argv?: string[]; // run_command only
   window?: string; // activate_window only: the window id to focus
+  // run_command only, set by the builtin app launchers: the .desktop
+  // entry behind the launch; Go resolves it for launch capabilities
+  // (D-Bus activation, startup notification) so the launched app's
+  // window ends up focused. Echo it back unchanged.
+  desktop_id?: string;
 }
 
 // One virtual result in a "plugin:results" emission (internal/plugin
@@ -49,9 +59,16 @@ interface PluginResult {
   icon?: string; // builtin icon name [a-z0-9_-]+ OR literal glyph/emoji
   badge?: string;
   accent_color?: string; // "#rgb" | "#rrggbb" -- ONLY ever sets --plugin-accent
-  score?: number; // 0..100; in practice always present
+  score?: number; // 0..100; in practice always present (engine-minted)
   fields?: { label: string; value: string }[]; // <= 8
   action?: PluginAction; // absent => Enter/click is a no-op row
+  // Extra engine match texts (plugin authors' findability field);
+  // present on the wire but not rendered.
+  keywords?: string[];
+  // Per-character highlight ranges on title: half-open [start, end)
+  // RUNE index pairs (engine-minted, or plugin-supplied and
+  // sanitized). Same rendering as file-row matchRanges.
+  matchRanges?: [number, number][];
 }
 
 // Payload of the "plugin:results" event (internal/plugin Emission).
@@ -191,6 +208,10 @@ interface WailsAppBindings {
   GetTheme(): Promise<Record<string, string>>;
   // Contents of <configDir>/themes/custom.css (<= 64KB), else "".
   GetCustomCSS(): Promise<string>;
+  // The system-stats sampler's cached snapshot -- instant Go-side
+  // (never IO), so it is safe to call on the show path. enabled false
+  // (stats.disabled / no sampler) = hide the row entirely.
+  GetStats(): Promise<StatsSnapshot>;
   // Preview pane (internal/app preview.go). QueryPreview asks for
   // target under generation gen; answers arrive asynchronously as
   // "preview:result" events carrying gen. A {kind: "none"} target
@@ -226,6 +247,32 @@ interface WatchDegradedEvent {
   watched: number;
   dropped: number;
   overflows: number;
+}
+
+// Payload of the "stats:update" event AND the GetStats return
+// (internal/sysstats Snapshot; keep field names in lockstep with its
+// json tags). enabled false means the feature is off (stats.disabled):
+// hide the #stats row entirely and skip rendering. enabled true with a
+// metric's *Ok false means that one metric has no live value (missing
+// source, non-Linux, failed read, rate not accumulated yet): render a
+// dash. Sizes are bytes, rates bytes/second, percentages 0..100.
+// Events fire only while the bar is visible, every ~1.5s, plus one at
+// summon and a ~300ms follow-up.
+interface StatsSnapshot {
+  enabled: boolean;
+  cpuPct: number;
+  cpuOk: boolean;
+  gpuPct: number;
+  gpuOk: boolean;
+  memUsed: number;
+  memTotal: number;
+  memOk: boolean;
+  swapUsed: number;
+  swapTotal: number;
+  swapOk: boolean;
+  netRxBps: number;
+  netTxBps: number;
+  netOk: boolean;
 }
 
 interface WailsGo {

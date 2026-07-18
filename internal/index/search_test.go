@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/wow-look-at-my/competent-search-thing/internal/match"
 )
 
 // refEntry is the naive reference model of one indexed entry.
@@ -69,6 +70,10 @@ func naiveQuery(entries []refEntry, q string, limit int) []Result {
 	for i, m := range matches {
 		out[i] = Result{Path: m.path, Name: m.name, IsDir: m.isDir}
 	}
+	// Ranges through the same shared-engine helper the store uses:
+	// positions are pinned independently in internal/match, so the
+	// reference stays the authority on MATCHING and ORDERING only.
+	fillNameRanges(out, match.Terms(q), false)
 	return out
 }
 

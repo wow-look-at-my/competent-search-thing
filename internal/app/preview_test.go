@@ -237,21 +237,25 @@ func TestShutdownCancelsPreview(t *testing.T) {
 
 func TestWindowSizeDefaultsAndOverride(t *testing.T) {
 	a, _ := newTestApp(t, nil, Options{})
-	require.Equal(t, WindowWidth, a.winW)
-	require.Equal(t, WindowHeight, a.winH)
+	w, h := a.windowSize()
+	require.Equal(t, config.DefaultWindowWidth, w)
+	require.Equal(t, config.DefaultWindowHeight, h)
 
-	b, _ := newTestApp(t, nil, Options{WindowW: 1600, WindowH: 800})
-	require.Equal(t, 1600, b.winW)
-	require.Equal(t, 800, b.winH)
+	b, _ := newTestApp(t, nil, Options{WindowWidth: 1600, WindowHeight: 800})
+	w, h = b.windowSize()
+	require.Equal(t, 1600, w)
+	require.Equal(t, 800, h)
 
-	// A partial override (one dimension) keeps the safe defaults.
-	c, _ := newTestApp(t, nil, Options{WindowW: 1600})
-	require.Equal(t, WindowWidth, c.winW)
-	require.Equal(t, WindowHeight, c.winH)
+	// A partial override falls back to the config default per axis
+	// (see windowSize), so the unset dimension stays safe.
+	c, _ := newTestApp(t, nil, Options{WindowWidth: 1600})
+	w, h = c.windowSize()
+	require.Equal(t, 1600, w)
+	require.Equal(t, config.DefaultWindowHeight, h)
 }
 
 func TestShowPositionsWithConfiguredWindowSize(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{WindowW: 1600, WindowH: 800})
+	a, r := newTestApp(t, nil, Options{WindowWidth: 1600, WindowHeight: 800})
 	a.plat.goos = "linux"
 	r.cursorOK = true
 	r.cursorX, r.cursorY = 960, 540 // cursor on the primary

@@ -195,6 +195,8 @@ func TestResponseSchemaRejectsWhatTheSanitizerClamps(t *testing.T) {
 			`"action":{"type":"activate_window","window":"42"}}]}`,
 		"window on an external action": `{"v":1,"results":[{"title":"a",` +
 			`"action":{"type":"copy_text","value":"x","window":"42"}}]}`,
+		"desktop_id on an external action": `{"v":1,"results":[{"title":"a",` +
+			`"action":{"type":"run_command","argv":["code"],"desktop_id":"code.desktop"}}]}`,
 		"run_command no argv": `{"v":1,"results":[{"title":"a","action":{"type":"run_command"}}]}`,
 		"argv with 17 items": `{"v":1,"results":[{"title":"a","action":{"type":"run_command","argv":[` +
 			strings.Repeat(`"x",`, 16) + `"x"]}}]}`,

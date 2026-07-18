@@ -19,8 +19,12 @@ const builtinTimeout = 1500 * time.Millisecond
 const maxDebounce = 2 * time.Second
 
 // provider is one source of virtual results: an external plugin
-// (manifest + transport) or a builtin. Implementations are read-only
-// after registration and safe for concurrent use.
+// (manifest + transport) or a builtin candidate source. The answering
+// side lives in the two sub-interfaces (engine.go): candidateSource
+// for builtins (raw candidates minted by the shared engine) and
+// resultProvider for externals (wire results, sanitized then
+// engine-passed). Implementations are read-only after registration
+// and safe for concurrent use.
 type provider interface {
 	id() string
 	displayName() string
@@ -32,9 +36,6 @@ type provider interface {
 	bangNames() []string
 	// debounce is the extra delay before dispatch (0..maxDebounce).
 	debounce() time.Duration
-	// query produces results for one request. dropped carries
-	// sanitizer reasons worth logging even on success.
-	query(ctx context.Context, req Request) (results []Result, dropped []string, err error)
 }
 
 // externalProvider adapts a loaded Manifest + transport to the
@@ -78,6 +79,13 @@ func (p *externalProvider) query(ctx context.Context, req Request) ([]Result, []
 	}
 	results, dropped := SanitizeResponse(resp, p.m.AllowRunCommand)
 	return results, dropped, nil
+}
+
+// claims reports whether the plugin's trigger CLAIMED the query (its
+// prefix or regex path matched): such results enter the engine at the
+// triggered tier -- they answer the query rather than text-match it.
+func (p *externalProvider) claims(query string) bool {
+	return p.m.Trigger != nil && p.m.Trigger.Claims(query)
 }
 
 // filterContext narrows an app-context snapshot to the parts a
@@ -177,6 +185,15 @@ type Options struct {
 	// OpenTabsMax caps one firefox-tabs response (config
 	// firefox.openTabs.maxResults; non-positive = the default 6).
 	OpenTabsMax int
+	// FuzzyDisabled turns the engine's fuzzy (subsequence) tier off
+	// for every candidate source and text-matched external result
+	// (config search.fuzzyDisabled -- the same toggle that governs the
+	// file index). Term splitting applies regardless.
+	FuzzyDisabled bool
+	// Rewrites are the config "rewrites" rules for the builtin regex
+	// rewrite source; invalid rules are collected into Errors() and
+	// skipped.
+	Rewrites []RewriteRule
 	// Logf receives all registry logging (default log.Printf).
 	Logf func(format string, args ...any)
 }
@@ -188,12 +205,15 @@ type Options struct {
 type Registry struct {
 	providers []provider
 	byID      map[string]provider
-	suggest   provider // builtin bang-suggestions provider (nil when disabled)
+	suggest   candidateSource // builtin bang-suggestions source (nil when disabled)
 	bangs     *BangSet
 	client    *http.Client // shared by all HTTP plugins (nil when none)
 	logf      func(format string, args ...any)
 	throttle  *logThrottle
 	errs      []error
+	// fuzzyDisabled is Options.FuzzyDisabled, threaded into every
+	// engine Rank call.
+	fuzzyDisabled bool
 }
 
 // New builds a Registry from loaded manifests and config-shaped
@@ -205,10 +225,11 @@ func New(opts Options) *Registry {
 		logf = log.Printf
 	}
 	r := &Registry{
-		byID:     map[string]provider{},
-		bangs:    NewBangSet(opts.Sigils, opts.Aliases),
-		logf:     logf,
-		throttle: newLogThrottle(logf, logThrottleWindow, nil),
+		byID:          map[string]provider{},
+		bangs:         NewBangSet(opts.Sigils, opts.Aliases),
+		logf:          logf,
+		throttle:      newLogThrottle(logf, logThrottleWindow, nil),
+		fuzzyDisabled: opts.FuzzyDisabled,
 	}
 	r.errs = append(r.errs, opts.LoadErrors...)
 	r.errs = append(r.errs, r.bangs.Errors()...)
@@ -252,10 +273,10 @@ func New(opts Options) *Registry {
 }
 
 // builtinBase supplies the boring provider methods shared by the
-// builtin providers: fixed id/name/bangs, no debounce, and no
-// non-targeted matching (the builtins are bang-targeted or
-// registry-special-cased, except apps-search, which overrides match
-// with its all_queries trigger).
+// builtin candidate sources: fixed id/name/bangs, no debounce, no
+// non-targeted matching (overridden by the all-queries sources), and
+// not preRanked (overridden by the query-derived sources: bang
+// suggestions, app commands, rewrite rules).
 type builtinBase struct {
 	pid   string
 	name  string
@@ -267,6 +288,7 @@ func (b *builtinBase) displayName() string                        { return b.nam
 func (b *builtinBase) bangNames() []string                        { return b.bangs }
 func (b *builtinBase) debounce() time.Duration                    { return 0 }
 func (b *builtinBase) match(string, *AppInfo) (string, int, bool) { return "", 0, false }
+func (b *builtinBase) preRanked() bool                            { return false }
 
 // addBuiltins registers the builtin providers (bang suggestions, app
 // commands, installed-app launcher, untargeted app search,
@@ -302,6 +324,13 @@ func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
 	}
 	if opts.OpenTabs != nil && !disabled(builtinTabsID) {
 		r.register(newTabsProvider(opts.OpenTabs, opts.OpenTabsMax))
+	}
+	if len(opts.Rewrites) > 0 && !disabled(builtinRewritesID) {
+		rules, errs := compileRewrites(opts.Rewrites)
+		r.errs = append(r.errs, errs...)
+		if len(rules) > 0 {
+			r.register(newRewritesProvider(rules, r.logf))
+		}
 	}
 }
 
@@ -425,7 +454,7 @@ func (r *Registry) CheatSheet() Emission {
 		return Emission{}
 	}
 	sigil := r.bangs.Primary()
-	results, _, err := r.suggest.query(context.Background(), baseRequest(sigil, sigil, 0, nil))
+	results, err := sourceResults(r.suggest, context.Background(), baseRequest(sigil, sigil, 0, nil), r.fuzzyDisabled)
 	if err != nil {
 		r.logf("plugin %s: cheat sheet: %v", r.suggest.id(), err)
 		return Emission{}
@@ -456,7 +485,29 @@ func (r *Registry) dispatchOne(ctx context.Context, p provider, req Request, boo
 		}
 		qctx, cancel := context.WithTimeout(ctx, providerTimeout(p))
 		defer cancel()
-		results, dropped, err := p.query(qctx, req)
+		var results []Result
+		var dropped []string
+		var err error
+		switch src := p.(type) {
+		case candidateSource:
+			// Builtins: raw candidates through the engine mint.
+			results, err = sourceResults(src, qctx, req, r.fuzzyDisabled)
+		case *externalProvider:
+			// External plugins: sanitize, then the engine pass --
+			// triggered tier for claimed queries, text gating for the
+			// all-queries fan-out.
+			results, dropped, err = src.query(qctx, req)
+			if err == nil {
+				claimed := req.Targeted || src.claims(req.Query)
+				var engineDropped []string
+				results, engineDropped = rankExternal(results, req, claimed, r.fuzzyDisabled)
+				dropped = append(dropped, engineDropped...)
+			}
+		case resultProvider:
+			// Test doubles only: production providers are always one of
+			// the two shapes above (enforced by the routing test).
+			results, dropped, err = src.query(qctx, req)
+		}
 		if err != nil {
 			r.throttle.logf(p.id(), "plugin %s: %v", p.id(), err)
 			return
