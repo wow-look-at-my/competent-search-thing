@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,8 +16,10 @@ import (
 // derived from the request's cancellable context, so a hung filesystem
 // can delay one preview but never wedge the pane.
 const (
-	metaTimeout  = 2 * time.Second // metadata, directory and text previews
-	imageTimeout = 4 * time.Second // image decode + downscale
+	metaTimeout  = 2 * time.Second  // metadata, directory and text previews
+	imageTimeout = 4 * time.Second  // image decode + downscale
+	webTimeout   = 10 * time.Second // Kagi web search (network)
+	aiTimeout    = 90 * time.Second // OpenAI answer (network, slow models)
 )
 
 // headSniffBytes is how much of a file the binary sniff reads.
@@ -36,6 +39,28 @@ type Options struct {
 	// request goroutines and MUST be goroutine-safe; it is never
 	// called for a request whose context was already cancelled.
 	Emit func(Payload)
+
+	// KagiAPIKey enables the explicit web-search provider; empty
+	// leaves it unconfigured (FetchWeb answers with a no-key error).
+	// The key is confined to the provider client -- never logged or
+	// emitted.
+	KagiAPIKey string
+	// KagiMaxResults caps one web search (non-positive = 8).
+	KagiMaxResults int
+	// OpenAIAPIKey enables the explicit AI answer provider; empty
+	// leaves it unconfigured (FetchAI answers with a no-key error).
+	// Never logged or emitted.
+	OpenAIAPIKey string
+	// OpenAIModel names the answering model.
+	OpenAIModel string
+	// OpenAIMaxOutputTokens caps one answer.
+	OpenAIMaxOutputTokens int
+	// AICachePath is the persistent AI answer cache file ("" =
+	// memory-only for this run).
+	AICachePath string
+	// Logf receives provider-layer degradations (AI cache load/save
+	// problems); nil = silent. Never receives key material.
+	Logf func(format string, v ...any)
 }
 
 // Dispatcher serves preview requests: synchronous bookkeeping on the
@@ -54,13 +79,16 @@ type Dispatcher struct {
 	cancel context.CancelFunc
 
 	// Provider seams; New fills in the real implementations and unit
-	// tests inject slow or failing fakes.
+	// tests inject slow or failing fakes. webFn/aiFn stay nil while
+	// the matching API key is unconfigured.
 	lstat    func(path string) (os.FileInfo, error)
 	readlink func(path string) (string, error)
 	readHead func(path string, n int) ([]byte, error)
 	textFn   func(ctx context.Context, path string, maxKB int) (*TextPreview, error)
 	imageFn  func(ctx context.Context, path string, maxEdge int) (*ImagePreview, error)
 	dirFn    func(ctx context.Context, path string, maxEntries int) (*DirPreview, error)
+	webFn    func(ctx context.Context, query string) (*WebPreview, error)
+	aiFn     func(ctx context.Context, query string) (*AIPreview, error)
 }
 
 // New builds a Dispatcher. parent bounds every request the dispatcher
@@ -70,7 +98,7 @@ func New(parent context.Context, opt Options) *Dispatcher {
 	if parent == nil {
 		parent = context.Background()
 	}
-	return &Dispatcher{
+	d := &Dispatcher{
 		opt:      opt,
 		parent:   parent,
 		cache:    newPayloadCache(),
@@ -94,7 +122,51 @@ func New(parent context.Context, opt Options) *Dispatcher {
 			return ListCapped(path, maxEntries)
 		},
 	}
+	if opt.KagiAPIKey != "" {
+		kagi := NewKagiClient(opt.KagiAPIKey, opt.KagiMaxResults)
+		d.webFn = func(ctx context.Context, query string) (*WebPreview, error) {
+			results, cached, err := kagi.Search(ctx, query)
+			if err != nil {
+				return nil, err
+			}
+			return &WebPreview{Query: query, Results: results, Cached: cached}, nil
+		}
+	}
+	if opt.OpenAIAPIKey != "" {
+		openai := NewOpenAIClient(opt.OpenAIAPIKey, opt.OpenAIModel, opt.OpenAIMaxOutputTokens)
+		cache := NewAICache(opt.AICachePath)
+		cache.Logf = opt.Logf // one-shot corrupt-file note on the lazy load
+		d.aiFn = func(ctx context.Context, query string) (*AIPreview, error) {
+			// Cache lookups key on the CONFIGURED model, so a model
+			// change in config never serves another model's answer.
+			if answer, ok := cache.Get(openai.Model(), query); ok {
+				return &AIPreview{Query: query, Answer: answer, Model: openai.Model(), Cached: true}, nil
+			}
+			answer, model, err := openai.Ask(ctx, query)
+			if err != nil {
+				return nil, err
+			}
+			if err := cache.Put(openai.Model(), query, answer); err != nil {
+				d.logf("preview: AI cache: %v (answer not persisted)", err)
+			}
+			return &AIPreview{Query: query, Answer: answer, Model: model, Cached: false}, nil
+		}
+	}
+	return d
 }
+
+// logf logs through Options.Logf when set.
+func (d *Dispatcher) logf(format string, v ...any) {
+	if d.opt.Logf != nil {
+		d.opt.Logf(format, v...)
+	}
+}
+
+// WebConfigured reports whether the web-search provider has a key.
+func (d *Dispatcher) WebConfigured() bool { return d.webFn != nil }
+
+// AIConfigured reports whether the AI answer provider has a key.
+func (d *Dispatcher) AIConfigured() bool { return d.aiFn != nil }
 
 // readHead reads at most n bytes from the start of path.
 func readHead(path string, n int) ([]byte, error) {
@@ -346,4 +418,101 @@ func (d *Dispatcher) richPayload(ctx context.Context, providerKind, path, title 
 			return Payload{Kind: KindText, Title: title, Path: path, Text: tp}, nil
 		})
 	}
+}
+
+// arm is the shared bookkeeping for the explicit web/AI fetches: it
+// cancels the in-flight request (file preview or fetch alike -- both
+// live in the SAME cancel/generation space, so each supersedes the
+// other), stores gen, and returns the new request context.
+func (d *Dispatcher) arm(gen int) context.Context {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cancel != nil {
+		d.cancel()
+	}
+	d.gen = gen
+	ctx, cancel := context.WithCancel(d.parent)
+	d.cancel = cancel
+	return ctx
+}
+
+// FetchWeb starts one explicit web search for query under gen -- the
+// ONLY path that reaches the web-search provider (nothing automatic
+// ever calls it). Exactly one payload answers an accepted fetch: kind
+// "web" on success, kind "error" otherwise (blank query, missing key,
+// provider failure, timeout).
+func (d *Dispatcher) FetchWeb(query string, gen int) {
+	start := time.Now()
+	ctx := d.arm(gen)
+	if strings.TrimSpace(query) == "" {
+		d.emit(ctx, Payload{Gen: gen, Kind: KindError, Err: "empty query"})
+		return
+	}
+	if d.webFn == nil {
+		d.emit(ctx, Payload{Gen: gen, Kind: KindError, Title: query,
+			Err: "kagi: no API key (preview.kagi.apiKey or KAGI_API_KEY)"})
+		return
+	}
+	go d.serveWeb(ctx, query, gen, start)
+}
+
+// serveWeb runs the web-search provider under its hard timeout and
+// emits the single answer payload.
+func (d *Dispatcher) serveWeb(ctx context.Context, query string, gen int, start time.Time) {
+	tctx, cancel := context.WithTimeout(ctx, webTimeout)
+	defer cancel()
+	wp, err := runUnder(tctx, func() (*WebPreview, error) {
+		return d.webFn(tctx, query)
+	})
+	if err != nil {
+		d.emit(ctx, Payload{Gen: gen, Kind: KindError, Title: query,
+			Err: fetchErrMsg(err, "web search", webTimeout), DurMS: time.Since(start).Milliseconds()})
+		return
+	}
+	d.emit(ctx, Payload{Gen: gen, Kind: KindWeb, Title: query, Web: wp,
+		DurMS: time.Since(start).Milliseconds()})
+}
+
+// FetchAI starts one explicit AI answer for query under gen -- the
+// ONLY path that reaches the AI provider. Same contract as FetchWeb:
+// one payload per accepted fetch, kind "ai" or kind "error".
+func (d *Dispatcher) FetchAI(query string, gen int) {
+	start := time.Now()
+	ctx := d.arm(gen)
+	if strings.TrimSpace(query) == "" {
+		d.emit(ctx, Payload{Gen: gen, Kind: KindError, Err: "empty query"})
+		return
+	}
+	if d.aiFn == nil {
+		d.emit(ctx, Payload{Gen: gen, Kind: KindError, Title: query,
+			Err: "openai: no API key (preview.openai.apiKey or OPENAI_API_KEY)"})
+		return
+	}
+	go d.serveAI(ctx, query, gen, start)
+}
+
+// serveAI runs the AI provider under its hard timeout and emits the
+// single answer payload.
+func (d *Dispatcher) serveAI(ctx context.Context, query string, gen int, start time.Time) {
+	tctx, cancel := context.WithTimeout(ctx, aiTimeout)
+	defer cancel()
+	ap, err := runUnder(tctx, func() (*AIPreview, error) {
+		return d.aiFn(tctx, query)
+	})
+	if err != nil {
+		d.emit(ctx, Payload{Gen: gen, Kind: KindError, Title: query,
+			Err: fetchErrMsg(err, "AI answer", aiTimeout), DurMS: time.Since(start).Milliseconds()})
+		return
+	}
+	d.emit(ctx, Payload{Gen: gen, Kind: KindAI, Title: query, AI: ap,
+		DurMS: time.Since(start).Milliseconds()})
+}
+
+// fetchErrMsg turns a provider error into the pane message, spelling
+// the hard timeout out instead of "context deadline exceeded".
+func fetchErrMsg(err error, what string, limit time.Duration) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Sprintf("%s timed out after %s", what, limit)
+	}
+	return err.Error()
 }
