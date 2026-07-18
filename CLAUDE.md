@@ -583,9 +583,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Target {kind "file"|"plugin"|"none", path, isDir, title, subtitle,
   pluginName} and Payload {gen, kind
   "meta"|"text"|"image"|"dir"|"web"|"ai"|"error", title, path, meta,
-  text, image, dir, web, ai, err, durMs} -- web/ai are contract-only
-  until phase 3. dispatch.go: `New(parentCtx, Options{TextMaxKB,
-  ImageMaxEdge, DirMaxEntries, Emit})` -> Dispatcher;
+  text, image, dir, web, ai, err, durMs}. dispatch.go:
+  `New(parentCtx, Options{TextMaxKB, ImageMaxEdge, DirMaxEntries,
+  Emit, KagiAPIKey, KagiMaxResults, OpenAIAPIKey, OpenAIModel,
+  OpenAIMaxOutputTokens, AICachePath, Logf})` -> Dispatcher;
   `Preview(target, gen)` is synchronous bookkeeping only (mutex'd
   cancel of the previous request + gen store; kind none/"" =
   cancel-only) and spawns ONE goroutine per request; file targets
@@ -595,7 +596,48 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   runUnder racing the provider against the ctx); symlinks are
   described (readlink) and never followed; every emit is suppressed
   once the request ctx is cancelled; provider funcs are Dispatcher
-  seam fields for tests. cache.go: bytes-bounded LRU of rich payloads
+  seam fields for tests (webFn/aiFn stay nil while the matching key
+  is unconfigured -- WebConfigured()/AIConfigured() report it).
+  `FetchWeb(query, gen)` / `FetchAI(query, gen)` are the explicit
+  web/AI triggers sharing Preview's SAME cancel+generation space (a
+  fetch supersedes an in-flight file preview and vice versa, via
+  arm()): exactly ONE payload per accepted fetch -- kind "web"
+  {query, results, cached} / "ai" {query, answer, model, cached} /
+  "error" (blank query = "empty query"; no key = an error naming the
+  config key + env fallback; provider failure; 10s web / 90s ai hard
+  timeouts spelled out by fetchErrMsg). kagi.go: KagiClient
+  (NewKagiClient(key, maxResults); BaseURL/HTTPClient/Now exported
+  seams) -- Kagi Search API v1 verified 2026-07-18: GET
+  {base}/api/v1/search?q=&limit=, header `Authorization: Bot <key>`,
+  response data.search rows {url,title,snippet} (the deprecated v0
+  flat data array with t==0 rows is still accepted on parse);
+  Search(ctx, q) -> (results, cachedBool, err) with an exact-query
+  TTL cache (15min, 100 entries, oldest-inserted evicted; hits =
+  zero network + no token spend) and a client-side token bucket
+  (burst 3, refill 1/s; empty = "kagi: rate limited, retry shortly"
+  WITHOUT dialing); non-2xx = "kagi: HTTP <code>" + at most a
+  200-char parsed error message -- never the raw body, never the key.
+  openai.go: OpenAIClient (NewOpenAIClient(key, model,
+  maxOutputTokens); same exported seams) -- OpenAI Responses API
+  verified 2026-07-18: POST {base}/v1/responses `Authorization:
+  Bearer <key>` {"model","input","max_output_tokens"}; Ask(ctx,
+  prompt) -> (answer, resolvedModel, err) concatenating output[]
+  "message" items' "output_text" parts (top-level output_text is
+  SDK-only per the docs; read as a defensive fallback), status
+  "incomplete" appends a "[truncated by max_output_tokens]" marker
+  line ("[truncated: content_filter]" for that reason; marker-only
+  answers are legal -- reasoning models can spend every token before
+  emitting text), API-error JSON {"error":{"message"}} -> terse
+  capped error. aicache.go: AICache -- the persistent AI answer LRU
+  on internal/history's atomic pattern (lazy one-shot Load: missing =
+  empty+nil, corrupt = empty + error, logged once via the Logf seam;
+  temp-file+rename 0600 writes, MkdirAll parent; in-memory updates
+  even when the write fails; "" path = memory-only): {"v":1,
+  "entries":[{k,model,prompt,answer,at}]} at Options.AICachePath, k =
+  sha256 hex of model+NUL+FULL prompt (the stored prompt is capped
+  2KB, answer 32KB), Get(model,prompt) refreshes recency (At),
+  Put evicts past 128 entries by oldest At; hits emit Cached:true
+  with zero network. cache.go: bytes-bounded LRU of rich payloads
   (16 MiB / 64 entries; key = path + mtime + size + provider kind);
   hits skip the meta emission. text.go: IsBinary (NUL or >30% bad
   bytes), ReadCapped (maxKB, ToValidUTF8-sanitized), LangHint (~35
@@ -608,11 +650,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   case-insensitive, capped, entry.Info sizes, never recurses).
   meta.go: MetaFor (humanized size, mtime, mode, kind guess, path +
   extra rows). Wired by internal/app's preview.go: Options.Preview
-  (config section) gates startPreview; bound methods
-  QueryPreview(target, gen) / GetPreviewConfig() (enabled +
-  kagi/openai configured via config key or KAGI_API_KEY /
-  OPENAI_API_KEY env, keys never exposed) / FetchWebPreview /
-  FetchAIPreview (phase-3 stubs answering kind "error"); emissions
+  (config section) gates startPreview, which resolves each API key
+  ONCE -- config value, else the env var through the getenv seam
+  (KAGI_API_KEY / OPENAI_API_KEY), exactly the resolution
+  GetPreviewConfig reports -- and passes <configDir>/aicache.json
+  (config.Dir() failure = one log line + memory-only cache); the
+  keys flow only into preview.Options, never into logs or payloads;
+  bound methods QueryPreview(target, gen) / GetPreviewConfig()
+  (enabled + kagi/openai configured, keys never exposed) /
+  FetchWebPreview / FetchAIPreview (gen store + dispatcher FetchWeb/
+  FetchAI; nil dispatcher = no-op, so the frontend's Ctrl+K / Ctrl+I
+  strip is the ONLY call path and nothing automatic ever dials);
+  emissions
   ride the "preview:result" event behind the previewGen atomic gate
   (the QueryPlugins pattern); Shutdown cancels the dispatcher's
   parent ctx. previewsize.go `PreviewWindowSize()` (translucent.go

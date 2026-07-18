@@ -1437,11 +1437,30 @@ calls out to the network by itself. Each provider needs its API key:
 The keys are passed through verbatim and NEVER logged or exposed to
 the page -- the frontend only learns "configured or not", and an
 unconfigured provider's button renders disabled with a hint naming
-the config key. Web/AI answers are cached in-memory for the session
-(repeat queries mark themselves `cached`), and answers that arrive
-after you moved on are dropped like any other stale preview. In this
-build the two triggers answer with a placeholder error -- the
-providers land later in this PR series.
+the config key.
+
+Web searches go to the Kagi Search API (v1: `GET
+https://kagi.com/api/v1/search`, `Authorization: Bot <key>`). Repeat
+queries are served from a 15-minute in-memory cache (marked `cached`
+in the pane, zero network), and a client-side courtesy rate limit --
+a burst of 3 requests refilling at 1 per second -- fails fast with
+"rate limited, retry shortly" instead of dialing. Searches time out
+hard at 10 seconds.
+
+AI answers go to the OpenAI Responses API (`POST /v1/responses` with
+your `model` and `maxOutputTokens`; answers cut off by the token cap
+end with a `[truncated by max_output_tokens]` marker line). Answers
+are cached PERSISTENTLY in `<configDir>/aicache.json` -- up to 128
+entries, least-recently-used evicted, file mode 0600 -- so asking the
+same question again (even across restarts) answers instantly with a
+`cached` badge and zero network; delete the file to clear the cache.
+Answers time out hard at 90 seconds.
+
+Both fetches share the preview pane's generation counter: answers
+that arrive after you moved on -- or after a newer fetch -- are
+dropped like any other stale preview, and provider failures render as
+a terse error card (HTTP status plus the provider's short message;
+never your key, never a raw response dump).
 
 ## Tray icon
 
