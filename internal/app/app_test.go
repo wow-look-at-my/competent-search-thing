@@ -182,6 +182,10 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// No session-bus IO either: the tray seam yields nothing, so
 	// startTray is a no-op. Tray tests inject a recording fake.
 	a.newTray = func() trayHandle { return nil }
+	// No stats goroutines or /proc//sys probes: the stats seam yields
+	// nothing. Stats tests inject a recording fake (or restore
+	// a.buildStats explicitly).
+	a.newStats = func() statsSource { return nil }
 	return a, r
 }
 

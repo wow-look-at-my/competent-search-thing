@@ -32,7 +32,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/app` -- the Wails-bound App object and its methods
   (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/DomReady/
   Shutdown/QueryPlugins/RunPluginAction/CheatSheet/GetHistory/
-  AddHistory). Bound methods
+  AddHistory/GetStats). Bound methods
   appear in JS as `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
   saves the runtime ctx, brings up the global hotkey once through a
   session-dependent backend plan (hotkey.go: empty spec = skip, parse
@@ -95,7 +95,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   error), Open config -> openConfigFile (the !config behavior minus
   the bar-hide), Quit -> runBuiltin("quit"); the tooltip getter wraps
   hotkeyDescription(), so no shortcut is promised until one is
-  proven), wires the
+  proven), starts the system-stats sampler once (stats.go in this
+  package: the `newStats` builder seam -- production buildStats does a
+  fresh config.Load (translucent.go pattern), stats.disabled = one
+  "stats: disabled in config" log + nil, else sysstats.New wired with
+  OnUpdate = emitStats (the guarded "stats:update" emit) and
+  log.Printf -- and a non-nil sampler is Start()ed under a dedicated
+  ctx cancelled in Shutdown; the sampler idles until the bar first
+  shows, so startup cost is zero and newTestApp-stubbed apps spawn
+  nothing), wires the
   single-instance IPC handlers when Options.IPC is set (Toggle =
   toggle, Show = showIfHidden, Hide = Hide; Options.ShowOnStartup
   latches a pending show), brings the plugin
@@ -136,7 +144,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   active portal handle -- a handle the chain stores after Shutdown
   ran is closed by the chain itself), closes the tray (cancels a
   Start still waiting on the bus, then the nil-safe idempotent
-  Close), cancels the in-flight plugin
+  Close), cancels the stats sampler's goroutines (statsCancel +
+  detach; nothing else to close), cancels the in-flight plugin
   generation + Close()s the registry + cancels the firefox refresh
   context (an in-flight places.sqlite copy/query aborts between
   chunks), cancels a still-running
@@ -195,7 +204,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   and the app runs on -- nil store = GetHistory returns a non-nil
   empty slice and AddHistory no-ops, so newTestApp needs no extra
   wiring. The frontend commits a query only after its activation
-  actually ran. `RunPluginAction(pluginID
+  actually ran. `GetStats() sysstats.Snapshot` (stats.go) returns the
+  sampler's cached snapshot -- instant, never IO on this path; nil
+  sampler (disabled, pre-Startup, post-Shutdown) = zero Snapshot,
+  every OK flag false = the frontend's placeholder state. Bar
+  visibility drives the sampler through nil-safe statsVisible:
+  showOnCursorDisplay -- the ONE shared show helper every summon path
+  funnels through (hotkey toggle, IPC showIfHidden's hidden branch,
+  the DomReady deferred show) -- calls SetVisible(true) right before
+  WindowShow (the kick's baseline sample is in flight while the
+  window maps), and Hide() calls SetVisible(false); both are flag
+  flips + a non-blocking kick, never IO. `RunPluginAction(pluginID
   string, action plugin.Action) error` RE-validates every action the
   frontend echoes back (defense in depth), logs it, then executes:
   copy_text -> ClipboardSetText (bar stays open); open_path (abs
@@ -213,15 +232,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   {watched,dropped,overflows}, "app:shown", "theme:changed" (no
   payload; frontend refetches GetTheme/GetCustomCSS),
   "plugin:results" (payload plugin.Emission
-  {plugin,name,gen,results}). ALL Wails
+  {plugin,name,gen,results}), "stats:update" (payload
+  sysstats.Snapshot {cpuPct,cpuOk,gpuPct,gpuOk,memUsed,memTotal,
+  memOk,swapUsed,swapTotal,swapOk,netRxBps,netTxBps,netOk}). ALL Wails
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
   incl. run/activateWindow/appSource plus getenv/executable/args0/detectSession/
   startPortal/ensureGnomeBinding, in window.go; defaults in New, plus
-  the `newRegistry` and `newTray` seams); unit tests MUST replace
-  them (see
-  newTestApp, which also nils appSource, stubs newRegistry AND
-  newTray so no config, X11 or session-bus IO happens, pins getenv to
+  the `newRegistry`, `newTray` and `newStats` seams); unit tests MUST
+  replace them (see
+  newTestApp, which also nils appSource, stubs newRegistry, newTray
+  AND newStats so no config, X11, session-bus or /proc//sys IO
+  happens, pins getenv to
   "" and detectSession to
   the unknown session -- keeping every test on the native
   hotkey/positioning path unless it overrides detectSession -- and
@@ -388,7 +410,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   convention; main.go wires it to Manager.SetFuzzyDisabled},
   theme, plugins {disabled, entries
   {<id>: {disabled, settings}}}, bangs {sigils, aliases}, tray
-  {disabled}, history {persistDisabled}, window {translucent -- the
+  {disabled}, history {persistDisabled}, stats {disabled -- the
+  system-stats sampler kill switch, zero value = on per the
+  tray.disabled convention; internal/app's buildStats reads it, so it
+  applies on the next launch}, window {translucent -- the
   per-pixel-alpha window flag main.go reads via
   app.WindowTranslucent(); zero value = opaque = the safe default,
   needs a compositor, README "Translucent window" holds the measured
@@ -447,6 +472,57 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Persist format: a plain JSON array of strings at
   <configDir>/history.json (wired by internal/app history.go;
   config.json's history.persistDisabled opts out).
+- `internal/sysstats` -- the system-stats sampler behind the
+  frontend's stats row, pure and headless-tested (fixture proc/sys
+  trees, injectable clock + gpuExec seams). `Snapshot` is the wire
+  contract (json tags cpuPct/cpuOk/gpuPct/gpuOk/memUsed/memTotal/
+  memOk/swapUsed/swapTotal/swapOk/netRxBps/netTxBps/netOk; bytes for
+  mem/swap, bytes/sec for net, 0..100 pcts; *Ok=false = "render a
+  dash"). `New(Options{ProcRoot "/proc", SysRoot "/sys", GOOS
+  runtime.GOOS, Interval 1500ms, GPUInterval 5s, GPUTimeout 1s,
+  LookPath exec.LookPath, OnUpdate, Logf; unexported test seams
+  gpuExec + now})` probes sources ONCE, cheaply (no subprocess
+  spawns): GOOS != linux = zero sources + one "placeholders" log;
+  linux = the three proc files assumed present, GPU = first readable
+  glob hit of SysRoot/class/drm/card*/device/gpu_busy_percent
+  (amdgpu) else LookPath("nvidia-smi") else none (intel: deliberately
+  absent, no cheap sysfs busy%), all summarized in ONE "stats:
+  sources: cpu=... gpu=..." line. THE invariant: nothing outside the
+  sampler goroutines ever does IO -- Snapshot() is a mutex-guarded
+  copy, SetVisible(v) is a flag flip (+ non-blocking 1-buffered kick
+  send on true), and while hidden the loops sample NOTHING, so the
+  start-hidden app reads zero bytes until first summon. Start(ctx):
+  zero sources = log + return, else ONE fast goroutine (select ctx /
+  kick / Interval ticker / one-shot follow-up timer) + ONE slow
+  nvidia goroutine only for the nvidia source (GPUInterval ticker,
+  exec via gpuExec seam under a GPUTimeout CommandContext with 250ms
+  WaitDelay -- a hung nvidia-smi is killed -- parse leading int,
+  store value+timestamp; the fast loop folds it in and expires it to
+  GPUOK=false past 3*GPUInterval; no summon kick here by design, an
+  exec has no business on the summon path). A kick = immediate
+  baseline sample (point-in-time mem/swap/amdgpu published; previous
+  RATE values kept, never blanked) then a one-shot follow-up at
+  Interval/5 (~300ms) so cpu/net rates turn fresh right away. Rates
+  (cpu pct, net Bps) come from counter deltas ONLY when the stored
+  counters are <= 3*Interval old (rateWindow) -- older = re-store +
+  keep previous values -- and negative/zero deltas (wrap) skip the
+  update; cpu busy = total - idle - iowait over the first 8 "cpu "
+  aggregate fields (guest/guest_nice excluded, already inside
+  user/nice), pct clamped 0..100; mem used = MemTotal - MemAvailable
+  (missing MemAvailable = MemOK false; kB * 1024 = bytes); swap =
+  SwapTotal/SwapFree, total 0 valid (SwapOK true, dash); net = sum of
+  rx/tx bytes over real interfaces -- "lo" exact plus the virtual
+  prefixes veth/docker/br-/virbr/vnet/tap/tun/wg/zt/dummy/ifb/kube/
+  cni/flannel/cali skipped, eth/en/wl/ww/bond kept. Per-metric
+  failures = that metric OK=false + one log per distinct message
+  (bounded map, 64), everything else unaffected; OnUpdate fires on
+  the sampler goroutine after each published sample while visible
+  (nil tolerated). Exhaustively table-tested (parsers incl. malformed
+  input + wrap + the iface filter, probe variants, direct-sample rate
+  math on a fake clock, full lifecycle over a real loop, nvidia fake
+  incl. ctx-deadline + real /bin/sh subprocess kill) plus
+  BenchmarkSample: one full fast-path sample against the real /proc
+  (skips where unreadable). Consumed by internal/app's stats.go.
 - `internal/theme` -- design-token resolution. WARNING: the 22
   `TokenNames` (bg, bg-elevated, fg, fg-dim, accent, accent-fg,
   selection-bg, selection-fg, border, highlight, warning, badge-bg,

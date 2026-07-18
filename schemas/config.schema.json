@@ -56,6 +56,7 @@
     "bangs": { "$ref": "#/$defs/bangsConfig" },
     "tray": { "$ref": "#/$defs/trayConfig" },
     "history": { "$ref": "#/$defs/historyConfig" },
+    "stats": { "$ref": "#/$defs/statsConfig" },
     "window": { "$ref": "#/$defs/windowConfig" },
     "firefox": { "$ref": "#/$defs/firefoxConfig" }
   },
@@ -217,6 +218,18 @@
       },
       "additionalProperties": false
     },
+    "statsConfig": {
+      "title": "System stats row configuration",
+      "type": "object",
+      "properties": {
+        "disabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "true turns the system-stats row's sampler off (the row then shows placeholders only). The default keeps it on; sampling happens only while the bar is visible, and metrics without a source on this machine (no GPU busy file, non-Linux platforms) degrade to placeholders by themselves."
+        }
+      },
+      "additionalProperties": false
+    },
     "historyConfig": {
       "title": "Query history configuration",
       "type": "object",
@@ -276,6 +289,7 @@
       },
       "tray": { "disabled": false },
       "history": { "persistDisabled": false },
+      "stats": { "disabled": false },
       "window": { "translucent": false, "width": 780, "height": 550 },
       "firefox": {
         "frequentSites": {

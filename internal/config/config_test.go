@@ -319,6 +319,25 @@ func TestTrayConfig(t *testing.T) {
 	require.True(t, got.Tray.Disabled)
 }
 
+func TestStatsConfig(t *testing.T) {
+	setConfigDir(t)
+	require.False(t, Default().Stats.Disabled, "the stats row is on by default")
+
+	// A config predating the stats block loads as enabled...
+	var c Config
+	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
+	c.Normalize()
+	require.False(t, c.Stats.Disabled)
+
+	// ...and an explicit opt-out round-trips.
+	in := Default()
+	in.Stats.Disabled = true
+	require.NoError(t, Save(in))
+	got, err := Load()
+	require.NoError(t, err)
+	require.True(t, got.Stats.Disabled)
+}
+
 func TestWindowConfig(t *testing.T) {
 	setConfigDir(t)
 	require.False(t, Default().Window.Translucent, "the window is opaque by default")

@@ -90,6 +90,8 @@ type Config struct {
 	// History configures the query history behind the bar's Up/Down
 	// recall (see internal/history).
 	History HistoryConfig `json:"history"`
+	// Stats configures the system-stats row (see internal/sysstats).
+	Stats StatsConfig `json:"stats"`
 	// Window configures the native window layer (read by main.go
 	// before the Wails runtime starts).
 	Window WindowConfig `json:"window"`
@@ -168,6 +170,18 @@ type WindowConfig struct {
 	// Height is the bar window's height in pixels; repaired against
 	// DefaultWindowHeight / MinWindowHeight the same way.
 	Height int `json:"height"`
+}
+
+// StatsConfig configures the system-stats row (see internal/sysstats
+// and internal/app's stats wiring). The zero value -- the default --
+// means enabled, matching the tray.disabled convention: the sampler
+// only ever runs while the bar is visible and degrades missing
+// sources to placeholders by itself, so only users who actively
+// dislike the row need the switch.
+type StatsConfig struct {
+	// Disabled turns the system-stats sampler (and with it the
+	// frontend's stats row data) off.
+	Disabled bool `json:"disabled"`
 }
 
 // HistoryConfig configures the query history (see internal/history).

@@ -370,6 +370,7 @@ The file is created with defaults on first run:
   "bangs": { "sigils": ["!", "/", "@"], "aliases": {} },
   "tray": { "disabled": false },
   "history": { "persistDisabled": false },
+  "stats": { "disabled": false },
   "window": { "translucent": false, "width": 780, "height": 550 },
   "firefox": {
     "frequentSites": {
@@ -467,6 +468,10 @@ Field reference:
   history in memory only: nothing is read from or written to
   `history.json`, while in-session Up/Down recall keeps working.
   Delete `history.json` to forget previously saved entries.
+- `stats` -- the [system stats row](#system-stats-row). `disabled`
+  (default `false`) turns its sampler off; the row then shows
+  placeholders only. Leaving it on costs nothing while the bar is
+  hidden: sampling only ever happens while the bar is on screen.
 - `window` -- the native window layer. `translucent` (default `false`)
   requests a per-pixel-alpha (RGBA) window so the area outside the
   bar's rounded corners is truly see-through instead of a squared-off
@@ -1361,6 +1366,46 @@ So on a Wayland session the section simply never appears, and one log
 line says why. A future option is a GNOME Shell extension that exports
 the window list over D-Bus (for example "Window Calls"), which the app
 could consume opt-in; nothing like that ships today.
+
+## System stats row
+
+The bar carries a compact system-stats row: CPU busy %, GPU busy %,
+memory used/total, swap used/total, and network throughput (received
+and sent bytes/second summed over the real interfaces -- loopback,
+container veths, bridges, tunnels, and VPN interfaces are excluded).
+
+The design guarantee is that the stats can never slow the search
+experience down:
+
+- Sampling happens ONLY while the bar is visible, on a background
+  goroutine, every ~1.5s. A hidden app reads nothing at all.
+- Summoning the bar triggers one immediate sample plus a quick (~300ms)
+  follow-up so the delta-based rates (CPU, network) turn fresh right
+  away; everything the frontend touches is a cached snapshot, so
+  nothing on the search, render, or summon path ever waits on IO.
+- Rates come from counter deltas between two reads. Right at summon
+  the row briefly shows the previous values (or dashes on the first
+  ever summon) until the follow-up lands.
+
+Per metric honesty, on Linux:
+
+- **CPU, memory, swap, network** are read from `/proc/stat`,
+  `/proc/meminfo`, and `/proc/net/dev`. A swap total of zero (no swap
+  configured) renders as a dash.
+- **GPU** is best-effort per hardware: AMD exposes a cheap sysfs busy
+  file (`gpu_busy_percent`), read on the fast path; NVIDIA has no
+  sysfs equivalent, so `nvidia-smi` is polled on a separate slow loop
+  (every ~5s, bounded by a ~1s timeout that kills a hung child) --
+  the number can lag a few seconds behind. Intel exposes no cheap
+  busy-percent file, so Intel GPUs show a dash (running a whole
+  `intel_gpu_top` pipeline is not worth it here).
+
+Any metric whose source is missing or failing shows a dash instead of
+a stale or fake number, and the failure is logged once, not per
+sample. On Windows and macOS there are no sources wired up yet, so
+the whole row shows dashes there for now.
+
+`stats.disabled` in `config.json` turns the sampler off entirely.
 
 ## Tray icon
 

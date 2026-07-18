@@ -98,7 +98,7 @@ type App struct {
 	hkOnce    sync.Once
 	notesOnce sync.Once
 
-	mu         sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, lastThemeErr, domReady, pendingShow, history
+	mu         sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, history
 	ctx        context.Context
 	visible    bool
 	lastToggle time.Time
@@ -162,6 +162,15 @@ type App struct {
 	trayOnce sync.Once
 	newTray  func() trayHandle
 
+	// System-stats sampler (see stats.go in this package): the running
+	// source and the cancel func bounding its goroutines. newStats is
+	// a seam over buildStats so unit tests never read config.json or
+	// probe /proc//sys.
+	statsOnce   sync.Once
+	newStats    func() statsSource
+	stats       statsSource
+	statsCancel context.CancelFunc
+
 	// Query history (see history.go): built once at Startup, nil
 	// before that -- the bound methods degrade to no-ops, which keeps
 	// newTestApp working without extra wiring.
@@ -188,13 +197,15 @@ func New(m *index.Manager, opt Options) *App {
 	}
 	a.newRegistry = a.buildRegistry
 	a.newTray = a.buildTray
+	a.newStats = a.buildStats
 	return a
 }
 
 // Startup is wired to the Wails OnStartup hook: it saves the runtime
 // context, brings up the global hotkey through the session's backend
 // plan (best effort; see hotkey.go), starts the tray icon (linux
-// only, async, best effort; see tray.go), wires the
+// only, async, best effort; see tray.go), starts the system-stats
+// sampler (idle until the bar first shows; see stats.go), wires the
 // single-instance IPC handlers (when Options.IPC is set), brings the
 // plugin layer up (app-context cache + registry; cheap file IO),
 // builds the query-history store (best effort; see history.go),
@@ -217,6 +228,7 @@ func (a *App) Startup(ctx context.Context) {
 	})
 	a.hkOnce.Do(a.registerHotkey)
 	a.trayOnce.Do(a.startTray)
+	a.statsOnce.Do(a.startStats)
 	if a.opt.IPC != nil {
 		a.opt.IPC.SetHandlers(ipc.Handlers{
 			Toggle: a.toggle,
@@ -338,6 +350,7 @@ func (a *App) emitDegraded(s watch.Stats) {
 // portal/gsettings backend chain, and closing an active portal
 // shortcut), closes the tray icon (aborting a Start still waiting on
 // the bus; closing the tray's connection unregisters the icon),
+// cancels the system-stats sampler's goroutines,
 // cancels the in-flight plugin generation, closes the registry, and
 // cancels the firefox context (aborting a frequent-sites history
 // refresh mid-copy), cancels a still-running initial build (its walk aborts
@@ -367,6 +380,9 @@ func (a *App) Shutdown(_ context.Context) {
 	a.trayH = nil
 	trayCancel := a.trayCancel
 	a.trayCancel = nil
+	statsCancel := a.statsCancel
+	a.statsCancel = nil
+	a.stats = nil
 	a.mu.Unlock()
 	if hkCancel != nil {
 		hkCancel()
@@ -386,6 +402,9 @@ func (a *App) Shutdown(_ context.Context) {
 		if err := th.Close(); err != nil {
 			log.Printf("tray: close: %v", err)
 		}
+	}
+	if statsCancel != nil {
+		statsCancel()
 	}
 
 	a.pluginMu.Lock()

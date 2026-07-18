@@ -157,6 +157,9 @@ func (a *App) Hide() {
 	// hidden.
 	a.pendingShow = false
 	a.mu.Unlock()
+	// The stats sampler goes idle with the bar (a flag flip, no IO;
+	// runs even pre-Startup, where it is a nil-safe no-op).
+	a.statsVisible(false)
 	ctx := a.runtimeCtx()
 	if ctx == nil {
 		return
@@ -244,6 +247,11 @@ func (a *App) showOnCursorDisplay() {
 	a.mu.Lock()
 	a.visible = true
 	a.mu.Unlock()
+	// Wake the stats sampler BEFORE the window maps: the kick's
+	// baseline sample is then already in flight while the show
+	// happens, and every show path (hotkey toggle, IPC show, the
+	// DomReady deferred show) funnels through here.
+	a.statsVisible(true)
 	a.rt.show(ctx)
 	a.emitEvent(eventShown)
 }
