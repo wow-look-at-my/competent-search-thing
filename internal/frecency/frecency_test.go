@@ -98,7 +98,9 @@ func TestRecordOpenSkipsEmptyPathAndKeepsWhitespaceVerbatim(t *testing.T) {
 
 	spaced := "/home/u/dir with  spaces/f "
 	require.NoError(t, s.RecordOpen(spaced))
-	require.Equal(t, 1.0, s.Boost(spaced), "paths are never trimmed")
+	// The real clock ticks between record and read: allow the tiny
+	// decay.
+	require.InDelta(t, 1.0, s.Boost(spaced), 1e-6, "paths are never trimmed")
 }
 
 func TestBoostIsReadOnly(t *testing.T) {
@@ -193,7 +195,7 @@ func TestPersistCreatesParentDirs(t *testing.T) {
 func TestMemoryOnlyNeverTouchesDisk(t *testing.T) {
 	s, path := tempStore(t, Options{})
 	require.NoError(t, s.RecordOpen("/p"))
-	require.Equal(t, 1.0, s.Boost("/p"))
+	require.InDelta(t, 1.0, s.Boost("/p"), 1e-6)
 	names, err := os.ReadDir(filepath.Dir(path))
 	require.NoError(t, err)
 	require.Empty(t, names)
@@ -307,7 +309,8 @@ func TestRecordOpenSaveFailureKeepsMemoryEntry(t *testing.T) {
 	// The parent "directory" is a regular file, so MkdirAll fails.
 	s := New(filepath.Join(blocker, "sub", "frecency.json"), Options{Persist: true})
 	require.Error(t, s.RecordOpen("/p"))
-	require.Equal(t, 1.0, s.Boost("/p"), "in-session ranking survives disk problems")
+	require.InDelta(t, 1.0, s.Boost("/p"), 1e-6,
+		"in-session ranking survives disk problems")
 }
 
 func TestEntriesReturnsDefensiveCopy(t *testing.T) {
@@ -316,7 +319,7 @@ func TestEntriesReturnsDefensiveCopy(t *testing.T) {
 	got := s.Entries()
 	got["/p"] = Entry{Count: 99}
 	got["/injected"] = Entry{Count: 1}
-	require.Equal(t, 1.0, s.Boost("/p"), "callers cannot mutate the store")
+	require.InDelta(t, 1.0, s.Boost("/p"), 1e-6, "callers cannot mutate the store")
 	require.Len(t, s.Entries(), 1)
 }
 

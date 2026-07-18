@@ -224,7 +224,7 @@ func (s *Store) Load() error {
 		return nil
 	}
 	data, err := os.ReadFile(s.path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
