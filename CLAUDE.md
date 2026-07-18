@@ -972,7 +972,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   upsert that plugin's section (keyed by id) and re-render the plugin
   area BELOW the file rows, never displacing them; selection is one
   flat list, file rows then plugin rows: ArrowUp/Down wrap, Home/End,
-  hover; file rows Enter=Open / Ctrl/Cmd+Enter=Reveal; plugin rows run
+  hover -- selection scrollIntoView fires ONLY for keyboard/auto-
+  select navigation (applySelection/select carry a scroll flag;
+  hover and the plugin-area re-render select without scrolling, so
+  they never move the viewport), and wheel input on #results is
+  handled manually: a non-passive listener preventDefault()s and
+  applies deltaMode-normalized deltas (40px/line, clientHeight/page;
+  WebKitGTK sends pixels) straight to scrollTop -- WebKitGTK's
+  default-on smooth-scroll animator otherwise eats fast detents and
+  Wails exposes no setting for it; ctrl+wheel stays native; file
+  rows Enter=Open / Ctrl/Cmd+Enter=Reveal; plugin rows run
   their action on Enter/click (Ctrl+Enter identical): set_query stays
   frontend-local (replace input, caret to end, re-run the pipeline),
   everything else goes to RunPluginAction -- Go owns bar-hide per

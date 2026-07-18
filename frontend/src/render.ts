@@ -93,12 +93,22 @@ export function renderResults(
   return rows;
 }
 
-// applySelection toggles the .selected class and keeps the selected
-// row scrolled into view.
-export function applySelection(rows: HTMLDivElement[], selected: number): void {
+// applySelection toggles the .selected class and, when scroll is
+// true, keeps the selected row scrolled into view. Only intentional
+// navigation (keyboard, auto-select-first) scrolls: hover-selection
+// and plugin-area re-renders pass false, so they can never move the
+// viewport under the user's wheel scrolling.
+export function applySelection(
+  rows: HTMLDivElement[],
+  selected: number,
+  scroll = true,
+): void {
   rows.forEach((row, i) => {
     row.classList.toggle("selected", i === selected);
   });
+  if (!scroll) {
+    return;
+  }
   const row = rows[selected];
   if (row !== undefined) {
     row.scrollIntoView({ block: "nearest" });
