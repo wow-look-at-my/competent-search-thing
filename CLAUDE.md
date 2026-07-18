@@ -984,7 +984,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `frontend/` -- vanilla TypeScript + Vite. No framework. `index.html`
   (query row with inline SVG magnifier + hidden bang chip; #results
   split into #file-results / static #empty ("No matches") /
-  #plugin-results zones; status bar + degraded chip; <template>s for
+  #plugin-results zones; status bar + degraded chip; #preview-pane
+  (spinner + #preview-body + command strip with the web/AI buttons
+  and the pane flash) as one more #bar child, display:none unless
+  body.with-preview; <template>s for
   folder/file icons AND plugin section/row skeletons) + `src/main.ts`
   (search as-you-type: 15ms debounce + sequence-number stale-response
   drop; every generation also fire-and-forgets QueryPlugins(query,
@@ -1056,12 +1059,64 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   consumes var(--plugin-accent, var(--accent, #89b4fa)) and a :root
   bridge defines --accent: var(--sb-accent, #89b4fa), so the theming
   design tokens apply when present and the standalone default
-  otherwise, merge order irrelevant) + `src/wails.d.ts` (ambient
+  otherwise, merge order irrelevant; plus the appended .preview-* /
+  body.with-preview block: with-preview turns #bar into a grid --
+  680px left column holding query row/results/status exactly as
+  before, pane in the rest behind a border-left divider, minmax(0,..)
+  tracks so pane content scrolls instead of growing the window --
+  and without the class every preview rule is inert, so flag-off
+  layout is behavior-identical to the classic bar; CI screenshots run
+  preview-off and must stay that way, the 680x460 window regex in
+  screenshots.ts depends on it) + `src/preview.ts` (ALL pane logic;
+  initPreview is called from wire() with the GetPreviewConfig answer
+  and installs NOTHING when enabled is false -- no body class, no
+  listeners, hooks no-op; enabled: sets body.with-preview, subscribes
+  "preview:result" (drop unless payload.gen === its own previewGen
+  counter, cancel the 150ms-delayed spinner on the first accepted
+  payload, REPLACE the pane content per emission -- a fast meta card
+  precedes the rich payload, cache hits skip it), and registers its
+  OWN window keydown handler for Ctrl/Cmd+K (web) / Ctrl/Cmd+I (AI)
+  -- main.ts's document handler is untouched, Tab and Ctrl+Enter
+  stay reserved. previewOnSelectionChange (called from select(), the
+  single selection choke point) paints an instant zero-IO header and
+  debounces QueryPreview 90ms so held arrows stay free, dedupes
+  same-row re-selects by target key, and maps rows to targets: file
+  -> {kind:"file", path, isDir}, plugin -> {kind:"plugin", title,
+  subtitle, pluginName}, null -> idle card + a debounced
+  {kind:"none"} cancel; previewOnQueryChange feeds the strip labels
+  ('Search web for "<q>"') and idles the pane on a cleared query.
+  The strip buttons + hotkeys are the ONLY FetchWebPreview /
+  FetchAIPreview call sites (never automatic; unconfigured providers
+  render disabled with a hint naming the config key). Renderers are
+  text-node-only: meta dl, text (header + highlighted <pre><code> +
+  truncation footer), image (<img src=dataUri> + WxH/size caption),
+  dir (rows cloning the folder/file icon templates + "N more..."),
+  web (rows whose click runs RunPluginAction("preview", open_url) --
+  Go validates, opens, hides the bar), ai (answer + model/cached
+  badges + a Copy button through copy_text, <= 8 KiB Go-side, with a
+  "Copied"/error flash in the pane strip), error card) +
+  `src/highlight.ts` (hljs lib/core + explicitly registered grammars
+  covering every LangHint name in the hljs distribution plus
+  shell/plaintext -- never import the full highlight.js bundle;
+  highlightInto: hinted registered language first, highlightAuto only
+  for unhinted content <= 64KB, plain text beyond or on any error;
+  `setHighlighted` is the frontend's ONE sanctioned innerHTML-style
+  sink -- createContextualFragment into the single <code> node, fed
+  EXCLUSIVELY hljs output, which HTML-escapes all content text by
+  documented contract; the invariant comment on it is load-bearing,
+  never route other strings through it) + `src/hljs-theme.css` (hljs
+  token classes -> var(--sb-*) with literal dark fallbacks, scoped
+  under .preview-code, imported from highlight.ts; NO new --sb-*
+  token -- the :root block is a sync_test.go contract) +
+  `src/wails.d.ts` (ambient
   types for the Wails-injected `window.go` / `window.runtime` incl.
   EventsOn, the event payload shapes, and the plugin wire contract
   TargetInfo/PluginAction (incl. activate_window + its window
-  field)/PluginResult/PluginEmission -- keep in sync
-  with internal/app + internal/plugin payload structs).
+  field)/PluginResult/PluginEmission plus the preview contract
+  Preview{Target,Payload,ConfigInfo,MetaRow,Text,Image,Dir,DirEntry,
+  Web,WebResult,AI} and the four preview bound methods -- keep in
+  sync with internal/app + internal/plugin + internal/preview payload
+  structs).
 - `examples/plugins/` -- three shipped example plugins, INERT until a
   user copies one into `<configDir>/plugins/` (each has a README with
   install/usage): `calc` (python3 command plugin: trigger prefix "=",
@@ -1153,6 +1208,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the theming tokens apply when present. Never apply plugin data
   as literal inline color/background styles, and never widen the
   whitelisted styling knobs without updating the sanitizer + README.
+- No innerHTML anywhere in the frontend, with EXACTLY ONE sanctioned
+  exception: highlight.ts's `setHighlighted`, which parses
+  highlight.js output (hljs HTML-escapes all content text by
+  documented contract) into the preview pane's single <code> node via
+  createContextualFragment. Every other render path builds text
+  nodes; never add a second markup sink.
 - Changing any JSON-carrying struct (config, manifest/trigger, wire
   Request/Response, themeFile) or its validator means updating the
   matching schema in `schemas/` in the same commit -- the lockstep
