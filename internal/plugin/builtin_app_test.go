@@ -33,9 +33,7 @@ func TestAppCommandProviderOneResultPerBang(t *testing.T) {
 	}
 	for _, bang := range p.bangNames() {
 		t.Run(bang, func(t *testing.T) {
-			results, dropped, err := p.query(context.Background(), targetedReq(bang, ""))
-			require.NoError(t, err)
-			require.Empty(t, dropped)
+			results := srcResults(t, p, targetedReq(bang, ""))
 			require.Len(t, results, 1)
 			r := results[0]
 			require.NotEmpty(t, r.Title)
@@ -49,25 +47,21 @@ func TestAppCommandProviderOneResultPerBang(t *testing.T) {
 
 func TestAppCommandProviderVersionSubtitle(t *testing.T) {
 	p := newAppCommandProvider("v9.9")
-	results, _, err := p.query(context.Background(), targetedReq("version", ""))
-	require.NoError(t, err)
+	results := srcResults(t, p, targetedReq("version", ""))
 	require.Contains(t, results[0].Subtitle, "v9.9")
 
 	dev := newAppCommandProvider("")
-	results, _, err = dev.query(context.Background(), targetedReq("version", ""))
-	require.NoError(t, err)
+	results = srcResults(t, dev, targetedReq("version", ""))
 	require.Contains(t, results[0].Subtitle, "dev", "empty version reads as a dev build")
 }
 
 func TestAppCommandProviderIgnoresNonTargetedAndUnknown(t *testing.T) {
 	p := newAppCommandProvider("x")
 
-	results, _, err := p.query(context.Background(), baseRequest("rescan", "rescan", 1, nil))
-	require.NoError(t, err)
+	results := srcResults(t, p, baseRequest("rescan", "rescan", 1, nil))
 	require.Empty(t, results, "non-targeted requests yield nothing")
 
-	results, _, err = p.query(context.Background(), targetedReq("nonsense", ""))
-	require.NoError(t, err)
+	results = srcResults(t, p, targetedReq("nonsense", ""))
 	require.Empty(t, results, "unknown bang yields nothing")
 }
 

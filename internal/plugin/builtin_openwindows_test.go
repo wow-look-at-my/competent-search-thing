@@ -1,7 +1,6 @@
 package plugin
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -47,7 +46,7 @@ func TestWindowsProviderMatchMinLength(t *testing.T) {
 
 func TestWindowsProviderRanking(t *testing.T) {
 	wins := []WindowInfo{
-		{ID: "1", Title: "main.go - Code", App: "code", PID: 10},         // "main": title word start
+		{ID: "1", Title: "main.go - Code", App: "code", PID: 10},         // "main": title prefix
 		{ID: "2", Title: "domain-list.txt", App: "mainapp", PID: 20},     // "main": app prefix (title hit is mid-word)
 		{ID: "3", Title: "the domain overview", App: "firefox", PID: 30}, // "main": title substring only
 		{ID: "4", Title: "notes", App: "xmainx", PID: 40},                // "main": app substring only
@@ -55,9 +54,7 @@ func TestWindowsProviderRanking(t *testing.T) {
 	}
 	p := newWindowsProvider(func() []WindowInfo { return wins })
 
-	results, dropped, err := p.query(context.Background(), windowsRequest("MAIN"))
-	require.NoError(t, err)
-	require.Empty(t, dropped)
+	results := srcResults(t, p, windowsRequest("MAIN"))
 	require.Len(t, results, 4, "matching is case-insensitive; non-matches dropped")
 
 	var titles []string
@@ -68,16 +65,15 @@ func TestWindowsProviderRanking(t *testing.T) {
 		scores = append(scores, *r.Score)
 	}
 	require.Equal(t, []string{"main.go - Code", "domain-list.txt", "the domain overview", "notes"}, titles,
-		"title word-start > app prefix > title substring > app substring")
-	require.Equal(t, []float64{85, 80, 65, 60}, scores)
+		"within a tier the TITLE field outranks the app field")
+	require.Equal(t, []float64{73, 73, 53, 53}, scores, "the engine's canonical prefix/substring bands")
 }
 
 func TestWindowsProviderResultShape(t *testing.T) {
 	p := newWindowsProvider(func() []WindowInfo {
 		return []WindowInfo{{ID: "4294967295", Title: "Mozilla Firefox", App: "firefox", PID: 7}}
 	})
-	results, _, err := p.query(context.Background(), windowsRequest("fire"))
-	require.NoError(t, err)
+	results := srcResults(t, p, windowsRequest("fire"))
 	require.Len(t, results, 1)
 	r := results[0]
 	require.Equal(t, "Mozilla Firefox", r.Title)
@@ -97,37 +93,27 @@ func TestWindowsProviderTieBreakAlphabeticalAndCap(t *testing.T) {
 		})
 	}
 	p := newWindowsProvider(func() []WindowInfo { return wins })
-	results, _, err := p.query(context.Background(), windowsRequest("term"))
-	require.NoError(t, err)
+	results := srcResults(t, p, windowsRequest("term"))
 	require.Len(t, results, maxWindowResults, "capped at 8")
 	for i, r := range results {
-		require.Equal(t, fmt.Sprintf("term %d", i), r.Title, "equal scores sort alphabetically by title")
+		require.Equal(t, fmt.Sprintf("term %d", i), r.Title, "equal ranks sort alphabetically by title")
 	}
 }
 
 func TestWindowsProviderEmptyAndDegenerateInputs(t *testing.T) {
 	// Empty snapshot: no results, so dispatch emits nothing.
 	p := newWindowsProvider(func() []WindowInfo { return nil })
-	results, dropped, err := p.query(context.Background(), windowsRequest("fire"))
-	require.NoError(t, err)
-	require.Empty(t, dropped)
-	require.Empty(t, results)
+	require.Empty(t, srcResults(t, p, windowsRequest("fire")))
 
 	// Nil getter (never happens via New, which requires the seam): safe.
 	p = &windowsProvider{builtinBase: builtinBase{pid: builtinWindowsID, name: "Open Windows"}}
-	results, _, err = p.query(context.Background(), windowsRequest("fire"))
-	require.NoError(t, err)
-	require.Empty(t, results)
+	require.Empty(t, srcResults(t, p, windowsRequest("fire")))
 
 	// Defensive: an empty stripped query yields nothing rather than
 	// matching everything, and untitled windows are skipped.
 	p = newWindowsProvider(func() []WindowInfo {
 		return []WindowInfo{{ID: "1", Title: "", App: "fireplace"}}
 	})
-	results, _, err = p.query(context.Background(), windowsRequest(""))
-	require.NoError(t, err)
-	require.Empty(t, results)
-	results, _, err = p.query(context.Background(), windowsRequest("fire"))
-	require.NoError(t, err)
-	require.Empty(t, results, "untitled windows never become results")
+	require.Empty(t, srcResults(t, p, windowsRequest("")))
+	require.Empty(t, srcResults(t, p, windowsRequest("fire")), "untitled windows never become results")
 }

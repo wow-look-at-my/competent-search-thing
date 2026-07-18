@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/wow-look-at-my/competent-search-thing/internal/match"
 )
 
 func TestDispatchFastEmissionBeatsSlow(t *testing.T) {
@@ -186,6 +187,26 @@ func suggestFake() *fakeProvider {
 	return &fakeProvider{pid: "bangs", name: "Commands", queryFn: answer("suggestion", 0)}
 }
 
+// fakeSource adapts a fakeProvider to the candidateSource shape (for
+// stubbing the suggestions slot): candidates delegate to queryFn and
+// mint through the engine preRanked, keeping the fake's order.
+type fakeSource struct{ *fakeProvider }
+
+func (f *fakeSource) limit() int      { return 50 }
+func (f *fakeSource) preRanked() bool { return true }
+
+func (f *fakeSource) candidates(ctx context.Context, req Request) ([]match.Candidate, error) {
+	results, _, err := f.query(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]match.Candidate, 0, len(results))
+	for _, res := range results {
+		out = append(out, match.Candidate{Display: res.Title, Texts: []string{res.Title}, Payload: res})
+	}
+	return out, nil
+}
+
 func TestDispatchBangShapedQueriesRouteToSuggestions(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -202,7 +223,7 @@ func TestDispatchBangShapedQueriesRouteToSuggestions(t *testing.T) {
 			cfg := &fakeProvider{pid: "cfg", bangs: []string{"cfg"}, matchFn: matchAll, queryFn: answer("c", 0)}
 			r, _ := newTestRegistry(t, nil, nil, calc, cfg)
 			sg := suggestFake()
-			r.suggest = sg
+			r.suggest = &fakeSource{sg}
 			emit, ch := collectEmissions()
 
 			info := r.Dispatch(context.Background(), tt.query, 1, nil, emit)
@@ -232,7 +253,7 @@ func TestDispatchSuggestionsDisabledIsSilent(t *testing.T) {
 func TestDispatchUnknownBangFallsBackToNormalPath(t *testing.T) {
 	p := &fakeProvider{pid: "p", bangs: []string{"other"}, matchFn: matchAll, queryFn: answer("x", 0)}
 	r, _ := newTestRegistry(t, nil, nil, p)
-	r.suggest = suggestFake()
+	r.suggest = &fakeSource{suggestFake()}
 	emit, ch := collectEmissions()
 
 	info := r.Dispatch(context.Background(), "!zzz find me", 1, nil, emit)

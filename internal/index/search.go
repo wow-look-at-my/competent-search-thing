@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
+	"unicode/utf8"
+
+	"github.com/wow-look-at-my/competent-search-thing/internal/match"
 )
 
 // Match classes, in ranking order.
@@ -64,13 +68,106 @@ func (s *Store) QueryWith(q string, limit int, opts QueryOptions) []Result {
 		return nil
 	}
 	if hasPathSep(pat) {
-		return s.queryPath(pat, ascii, limit)
+		// Path mode stays literal single-pattern: paths legitimately
+		// contain spaces, so a separator disables term splitting.
+		// (queryPath normalizes '/' to the native separator IN pat.)
+		res := s.queryPath(pat, ascii, limit)
+		fillPathRanges(res, string(pat), ascii)
+		return res
 	}
-	qs := string(pat)
-	if opts.FuzzyDisabled {
-		return s.queryNamesSub(qs, ascii, n, limit)
+	terms := match.Terms(q)
+	var res []Result
+	switch len(terms) {
+	case 0:
+		return nil // all-whitespace query
+	case 1:
+		// The single-term path IS the pre-multi engine, byte-identical
+		// for queries without surrounding whitespace; a padded query
+		// (" report ") behaves as its trimmed term.
+		t := terms[0]
+		if opts.FuzzyDisabled {
+			res = s.queryNamesSub(t.Pat, t.ASCII, n, limit)
+		} else {
+			res = s.queryNamesFuzzy(t.Pat, t.ASCII, n, limit)
+		}
+	default:
+		res = s.queryNamesMulti(terms, n, limit, opts.FuzzyDisabled)
 	}
-	return s.queryNamesFuzzy(qs, ascii, n, limit)
+	fillNameRanges(res, terms, !opts.FuzzyDisabled)
+	return res
+}
+
+// fillNameRanges computes the per-character highlight ranges on each
+// returned row's Name via the shared engine -- for the (at most limit)
+// selected rows only, never during the scan.
+func fillNameRanges(res []Result, terms []match.Term, allowFuzzy bool) {
+	for i := range res {
+		res[i].MatchRanges = match.Positions(res[i].Name, terms, allowFuzzy)
+	}
+}
+
+// fillPathRanges is the path-mode highlight: when the normalized
+// folded query's final segment (after its last separator) fold-matches
+// the start of a row's name, that name prefix lights up; a query
+// ending in a separator, or a match lying entirely within the
+// directory, highlights nothing. Best-effort display sugar, not a
+// match-classification replay.
+func fillPathRanges(res []Result, qs string, ascii bool) {
+	cut := strings.LastIndexByte(qs, sepByte)
+	rem := qs[cut+1:]
+	if rem == "" {
+		return
+	}
+	for i := range res {
+		name := res[i].Name
+		matched := -1
+		if ascii {
+			if ciHasPrefixASCII(name, rem) {
+				matched = len(rem)
+			}
+		} else {
+			matched = foldPrefixLen(name, rem)
+		}
+		if matched < 0 {
+			continue
+		}
+		runes := utf8.RuneCountInString(name[:matched])
+		res[i].MatchRanges = [][2]int{{0, runes}}
+	}
+}
+
+// shardWorkers picks the scan fan-out for n entries, keeping tiny
+// stores single-threaded (see minShardEntries).
+func shardWorkers(n int) int {
+	workers := runtime.NumCPU()
+	if max := (n + minShardEntries - 1) / minShardEntries; workers > max {
+		workers = max
+	}
+	return workers
+}
+
+// runShards runs shard(w, lo, hi) for the workers-way split of [0, n)
+// in per-sized ranges, in parallel past one worker. Empty tail shards
+// are skipped (their heap slot stays nil; selectTop tolerates that).
+func runShards(workers, per, n int, shard func(w, lo, hi int)) {
+	if workers == 1 {
+		shard(0, 0, n)
+		return
+	}
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		lo := w * per
+		hi := min(lo+per, n)
+		if lo >= hi {
+			continue
+		}
+		wg.Add(1)
+		go func(w, lo, hi int) {
+			defer wg.Done()
+			shard(w, lo, hi)
+		}(w, lo, hi)
+	}
+	wg.Wait()
 }
 
 // queryNamesSub is the substring-only name scan: the pre-fuzzy engine,
@@ -215,6 +312,9 @@ func (s *Store) makeCand(e int32, pos uint32, patLen int) cand {
 func (s *Store) selectTop(heaps []*topK, limit int) []Result {
 	var all []cand
 	for _, h := range heaps {
+		if h == nil {
+			continue // an empty tail shard never armed its heap
+		}
 		all = append(all, h.items...)
 	}
 	if len(all) == 0 {

@@ -24,20 +24,18 @@ func TestBangSuggestAmbiguousPreservesRest(t *testing.T) {
 	calc := &fakeProvider{pid: "calc-plugin", name: "Calculator", bangs: []string{"calc", "calx"}}
 	_, s := newSuggestRig(t, nil, nil, calc)
 
-	results, dropped, err := s.query(context.Background(), baseRequest("!ca 2+2", "!ca 2+2", 1, nil))
-	require.NoError(t, err)
-	require.Empty(t, dropped)
+	results := srcResults(t, s, baseRequest("!ca 2+2", "!ca 2+2", 1, nil))
 	require.Len(t, results, 2)
 
 	require.Equal(t, "!calc", results[0].Title)
 	require.Equal(t, "Calculator", results[0].Subtitle)
 	require.Equal(t, "hash", results[0].Icon)
-	require.Equal(t, float64(90), *results[0].Score)
+	require.Equal(t, float64(100), *results[0].Score, "preRanked: top of the triggered band")
 	require.Equal(t, &Action{Type: ActionSetQuery, Value: "!calc 2+2"}, results[0].Action,
 		"completing the bang preserves the rest of the query")
 
 	require.Equal(t, "!calx", results[1].Title)
-	require.Equal(t, float64(89), *results[1].Score, "stable descending order")
+	require.Equal(t, float64(99), *results[1].Score, "stable descending order")
 	require.Equal(t, "!calx 2+2", results[1].Action.Value)
 }
 
@@ -49,21 +47,19 @@ func TestBangSuggestBareSigilListsAllCapped(t *testing.T) {
 	many := &fakeProvider{pid: "many", name: "Many", bangs: bangs}
 	_, s := newSuggestRig(t, nil, nil, many)
 
-	results, _, err := s.query(context.Background(), baseRequest("!", "!", 1, nil))
-	require.NoError(t, err)
+	results := srcResults(t, s, baseRequest("!", "!", 1, nil))
 	require.Len(t, results, maxBangSuggestions)
 	require.Equal(t, "!b01", results[0].Title)
 	require.Equal(t, "!b01 ", results[0].Action.Value, "empty rest leaves a trailing space ready to type")
 	require.Equal(t, "!b12", results[11].Title)
-	require.Equal(t, float64(79), *results[11].Score)
+	require.Equal(t, float64(89), *results[11].Score)
 }
 
 func TestBangSuggestResolvedWithoutSpace(t *testing.T) {
 	calc := &fakeProvider{pid: "calc", name: "Calculator", bangs: []string{"calc", "calx"}}
 	_, s := newSuggestRig(t, nil, nil, calc)
 
-	results, _, err := s.query(context.Background(), baseRequest("!calc", "!calc", 1, nil))
-	require.NoError(t, err)
+	results := srcResults(t, s, baseRequest("!calc", "!calc", 1, nil))
 	require.Len(t, results, 1)
 	require.Equal(t, "!calc", results[0].Title)
 	require.Equal(t, "!calc ", results[0].Action.Value)
@@ -76,8 +72,7 @@ func TestBangSuggestAliasResolvedListedFirst(t *testing.T) {
 	calc := &fakeProvider{pid: "calc-plugin", name: "Calculator", bangs: []string{"calc"}}
 	_, s := newSuggestRig(t, nil, map[string]string{"a": "calc"}, apple, calc)
 
-	results, _, err := s.query(context.Background(), baseRequest("!a", "!a", 1, nil))
-	require.NoError(t, err)
+	results := srcResults(t, s, baseRequest("!a", "!a", 1, nil))
 	require.Len(t, results, 2)
 	require.Equal(t, "!calc", results[0].Title, "alias-resolved bang first")
 	require.Equal(t, "Calculator", results[0].Subtitle)
@@ -89,8 +84,7 @@ func TestBangSuggestCustomSigils(t *testing.T) {
 	calc := &fakeProvider{pid: "calc", name: "Calculator", bangs: []string{"calc", "calx"}}
 	_, s := newSuggestRig(t, []string{"$", "?"}, nil, calc)
 
-	results, _, err := s.query(context.Background(), baseRequest("?ca 2+2", "?ca 2+2", 1, nil))
-	require.NoError(t, err)
+	results := srcResults(t, s, baseRequest("?ca 2+2", "?ca 2+2", 1, nil))
 	require.Len(t, results, 2)
 	require.Equal(t, "$calc", results[0].Title, "titles use the primary (first configured) sigil")
 	require.Equal(t, "?calc 2+2", results[0].Action.Value, "set_query keeps the sigil the user typed")
@@ -98,8 +92,7 @@ func TestBangSuggestCustomSigils(t *testing.T) {
 
 func TestBangSuggestNonBangQueryYieldsNothing(t *testing.T) {
 	_, s := newSuggestRig(t, nil, nil)
-	results, _, err := s.query(context.Background(), baseRequest("plain", "plain", 1, nil))
-	require.NoError(t, err)
+	results := srcResults(t, s, baseRequest("plain", "plain", 1, nil))
 	require.Empty(t, results)
 }
 
@@ -148,7 +141,7 @@ func TestCheatSheetDefaultBuiltins(t *testing.T) {
 		require.Equal(t, "!"+b, res.Title, "titles use the primary sigil, sorted order")
 		require.Equal(t, subtitles[b], res.Subtitle, "subtitle names the providing builtin")
 		require.Equal(t, "hash", res.Icon)
-		require.Equal(t, float64(90-i), *res.Score, "scores descend by list position")
+		require.Equal(t, float64(100-i), *res.Score, "scores descend by list position")
 		require.Equal(t, &Action{Type: ActionSetQuery, Value: "!" + b + " "}, res.Action,
 			"completion leaves a trailing space ready to type")
 	}
@@ -223,8 +216,9 @@ func TestCheatSheetProviderErrorYieldsZero(t *testing.T) {
 			return nil, nil, errors.New("boom")
 		},
 	}
-	r.suggest = boom
-	r.byID[builtinSuggestID] = boom
+	src := &fakeSource{boom}
+	r.suggest = src
+	r.byID[builtinSuggestID] = src
 
 	require.Equal(t, Emission{}, r.CheatSheet())
 	require.Contains(t, lc.joined(), "cheat sheet: boom")

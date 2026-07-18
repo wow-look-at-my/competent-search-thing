@@ -241,6 +241,8 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json $defs/frequentSitesConfig out of sync with FrequentSitesConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(OpenTabsConfig{})), configSchemaProperties(t, "openTabsConfig"),
 		"config.schema.json $defs/openTabsConfig out of sync with OpenTabsConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(RewriteRule{})), configSchemaProperties(t, "rewriteRule"),
+		"config.schema.json $defs/rewriteRule out of sync with RewriteRule")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PreviewConfig{})), configSchemaProperties(t, "previewConfig"),
 		"config.schema.json $defs/previewConfig out of sync with PreviewConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PreviewKagiConfig{})), configSchemaProperties(t, "previewKagiConfig"),

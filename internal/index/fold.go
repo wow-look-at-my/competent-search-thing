@@ -1,58 +1,31 @@
 package index
 
-// Case-folded matching over the single original-case storage. The store
-// keeps exactly ONE copy of every name and dir path (original case);
-// case-insensitivity is produced at scan time by folding the stored
-// bytes against a pre-folded pattern, instead of storing lowercased
-// twins of every blob.
+// Case-folded matching over the single original-case storage. The
+// store keeps exactly ONE copy of every name and dir path (original
+// case); case-insensitivity is produced at scan time by folding the
+// stored bytes against a pre-folded pattern, instead of storing
+// lowercased twins of every blob.
 //
-// Two folding regimes, chosen per query by foldPattern:
-//
-//   - ASCII fast path (all-ASCII query): the pattern is folded byte-wise
-//     through foldTable ('A'-'Z' -> lowercase, every other byte
-//     identity) and matched with byte compares that fold the haystack
-//     side through the same table. ciIndexASCII is the engine hot loop:
-//     a rarest-byte anchor search over the contiguous name blob.
-//   - Rune slow path (query with any non-ASCII byte): the pattern is
-//     folded per rune with unicode.ToLower and matched rune-wise,
-//     folding each haystack rune with unicode.ToLower. O(hay * pat)
-//     per entry -- correct but linear-scan slow (hundreds of ms over
-//     tens of millions of entries).
-//
-// SEMANTICS (pinned by fold_test.go, documented in CLAUDE.md): for
-// all-ASCII queries against all-ASCII data this is byte-for-byte the
-// old strings.ToLower behavior. Exotic Unicode edges changed with the
-// storage slimming: an ASCII query no longer matches the two Unicode
-// runes whose unicode.ToLower IS an ASCII letter -- U+0130 (Turkish
-// dotted capital I -> 'i') and U+212A (Kelvin sign -> 'k') -- because
-// the ASCII fast path folds single bytes and never decodes the stored
-// UTF-8. Queries CONTAINING such runes take the rune path and still
-// match both forms (a U+0130 "ISTANBUL" query finds the U+0130 name
-// AND the plain-ASCII one). Invalid UTF-8 in stored names keeps the
-// old semantics: each invalid byte compares as U+FFFD, so a query
-// carrying U+FFFD matches it.
+// The FOLD DEFINITION (fold table, rune folding, pattern preparation,
+// per-string fold helpers) lives in internal/match -- the one shared
+// matching engine -- and is re-exported here under the engine's
+// historical names so the scan machinery and the test references read
+// unchanged. What stays index-local is the BLOB machinery: the
+// rarest-byte anchored scans (ciScan / ciIndexASCII and friends) that
+// exploit the contiguous name blob and the static name-byte frequency
+// table. Semantics (regimes, the U+0130/U+212A pins, invalid UTF-8 as
+// U+FFFD) are documented in internal/match/fold.go and pinned by
+// fold_test.go here.
 
 import (
 	"bytes"
 	"strings"
-	"unicode"
-	"unicode/utf8"
+
+	"github.com/wow-look-at-my/competent-search-thing/internal/match"
 )
 
-// foldTable maps 'A'-'Z' to their lowercase forms and every other byte
-// to itself. It is the single ASCII case-folding definition shared by
-// the engine and the test reference models.
-var foldTable = buildFoldTable()
-
-func buildFoldTable() (t [256]byte) {
-	for i := range t {
-		t[i] = byte(i)
-	}
-	for c := 'A'; c <= 'Z'; c++ {
-		t[c] = byte(c) + ('a' - 'A')
-	}
-	return t
-}
+// foldTable is the shared ASCII fold definition (see match.FoldTable).
+var foldTable = match.FoldTable
 
 // nameByteFreq scores how common each byte is in file names (higher =
 // more common). ciIndexASCII anchors its scan on the LEAST common
@@ -105,41 +78,16 @@ func anchorOffset(pat string) int {
 	return best
 }
 
-// foldRune is the rune-path folding definition: Unicode simple
-// lowercase mapping, matching what strings.ToLower applies per rune.
-func foldRune(r rune) rune { return unicode.ToLower(r) }
+// foldRune is the rune-path folding definition (match.FoldRune).
+func foldRune(r rune) rune { return match.FoldRune(r) }
 
-// foldPattern lowers a query into its match pattern. An all-ASCII query
-// folds byte-wise through foldTable and reports ascii=true (the byte
-// fast path); anything else folds per rune with foldRune (invalid UTF-8
-// becomes U+FFFD, like strings.ToLower) and reports false (the rune
-// slow path). The returned slice is freshly allocated and mutable.
-func foldPattern(q string) (pat []byte, ascii bool) {
-	for i := 0; i < len(q); i++ {
-		if q[i] >= utf8.RuneSelf {
-			pat = make([]byte, 0, len(q))
-			for _, r := range q {
-				pat = utf8.AppendRune(pat, foldRune(r))
-			}
-			return pat, false
-		}
-	}
-	pat = make([]byte, len(q))
-	for i := 0; i < len(q); i++ {
-		pat[i] = foldTable[q[i]]
-	}
-	return pat, true
-}
+// foldPattern lowers a query into its match pattern and regime
+// (match.FoldPattern).
+func foldPattern(q string) (pat []byte, ascii bool) { return match.FoldPattern(q) }
 
-// upperVariant returns the second byte the anchor scan must look for:
-// the uppercase form of a folded lowercase letter, or c itself when the
-// byte has no ASCII case twin (the caller then runs a single stream).
-func upperVariant(c byte) byte {
-	if c >= 'a' && c <= 'z' {
-		return c - ('a' - 'A')
-	}
-	return c
-}
+// upperVariant returns the second byte the anchor scan must look for
+// (match.UpperVariant).
+func upperVariant(c byte) byte { return match.UpperVariant(c) }
 
 // ciScan is a resumable anchor scan for one pre-folded ASCII pattern
 // over one blob: the engine's hot loop. It looks for the rarest
@@ -296,7 +244,7 @@ func ciMatchAround[T []byte | string](s T, start int, pat string, skip int) bool
 }
 
 // ciContainsASCII reports whether s fold-contains the pre-folded ASCII
-// pattern.
+// pattern (anchored scan; the short-string form lives in match).
 func ciContainsASCII(s, pat string) bool {
 	if len(pat) == 0 {
 		return true
@@ -305,99 +253,39 @@ func ciContainsASCII(s, pat string) bool {
 }
 
 // ciHasPrefixASCII reports whether s fold-starts with the pre-folded
-// ASCII pattern.
+// ASCII pattern (match.HasPrefixASCII).
 func ciHasPrefixASCII[T []byte | string](s T, pat string) bool {
-	if len(s) < len(pat) {
-		return false
-	}
-	for i := 0; i < len(pat); i++ {
-		if foldTable[s[i]] != pat[i] {
-			return false
-		}
-	}
-	return true
+	return match.HasPrefixASCII(s, pat)
 }
 
 // ciHasSuffixASCII reports whether s fold-ends with the pre-folded
-// ASCII pattern.
-func ciHasSuffixASCII(s, pat string) bool {
-	return len(s) >= len(pat) && ciHasPrefixASCII(s[len(s)-len(pat):], pat)
-}
+// ASCII pattern (match.HasSuffixASCII).
+func ciHasSuffixASCII(s, pat string) bool { return match.HasSuffixASCII(s, pat) }
 
-// decodeRuneAt decodes the rune starting at byte i of s, with exact
-// utf8.DecodeRune semantics for invalid encodings (RuneError, size 1).
-// The multi-byte case copies at most utf8.UTFMax bytes to a stack
-// buffer, so both string and []byte callers stay allocation-free.
+// decodeRuneAt decodes the rune starting at byte i of s
+// (match.DecodeRuneAt).
 func decodeRuneAt[T []byte | string](s T, i int) (rune, int) {
-	if c := s[i]; c < utf8.RuneSelf {
-		return rune(c), 1
-	}
-	var buf [utf8.UTFMax]byte
-	end := i + utf8.UTFMax
-	if end > len(s) {
-		end = len(s)
-	}
-	n := copy(buf[:], s[i:end])
-	return utf8.DecodeRune(buf[:n])
+	return match.DecodeRuneAt(s, i)
 }
 
-// foldPrefixLen returns the byte length of the prefix of s that
-// fold-matches the pre-folded pattern (foldPattern rune output), or -1
-// when s does not fold-start with it. A return of len(s) therefore
-// means s fold-EQUALS the pattern.
+// foldPrefixLen returns the byte length of the fold-matching prefix,
+// or -1 (match.FoldPrefixLen).
 func foldPrefixLen[T []byte | string](s T, pat string) int {
-	i := 0
-	for j := 0; j < len(pat); {
-		if i >= len(s) {
-			return -1
-		}
-		pr, pn := decodeRuneAt(pat, j)
-		sr, sn := decodeRuneAt(s, i)
-		if foldRune(sr) != pr {
-			return -1
-		}
-		i += sn
-		j += pn
-	}
-	return i
+	return match.FoldPrefixLen(s, pat)
 }
 
-// foldEquals reports whether s fold-equals the pre-folded pattern.
+// foldEquals reports whether s fold-equals the pre-folded pattern
+// (match.FoldEquals).
 func foldEquals[T []byte | string](s T, pat string) bool {
-	return foldPrefixLen(s, pat) == len(s)
+	return match.FoldEquals(s, pat)
 }
 
 // foldContains reports whether s fold-contains the pre-folded pattern
-// at any rune boundary. O(len(s) * len(pat)); rune-path only.
+// at any rune boundary (match.FoldContains).
 func foldContains[T []byte | string](s T, pat string) bool {
-	if len(pat) == 0 {
-		return true
-	}
-	for i := 0; i < len(s); {
-		if foldPrefixLen(s[i:], pat) >= 0 {
-			return true
-		}
-		_, n := decodeRuneAt(s, i)
-		i += n
-	}
-	return false
+	return match.FoldContains(s, pat)
 }
 
 // foldHasSuffix reports whether s fold-ends with the pre-folded
-// pattern, comparing runes backward from both ends.
-func foldHasSuffix(s, pat string) bool {
-	i, j := len(s), len(pat)
-	for j > 0 {
-		if i == 0 {
-			return false
-		}
-		pr, pn := utf8.DecodeLastRuneInString(pat[:j])
-		sr, sn := utf8.DecodeLastRuneInString(s[:i])
-		if foldRune(sr) != pr {
-			return false
-		}
-		i -= sn
-		j -= pn
-	}
-	return true
-}
+// pattern (match.FoldHasSuffix).
+func foldHasSuffix(s, pat string) bool { return match.FoldHasSuffix(s, pat) }

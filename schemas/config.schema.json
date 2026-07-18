@@ -11,8 +11,13 @@
     },
     "roots": {
       "type": "array",
-      "items": { "type": "string", "minLength": 1 },
-      "default": ["/"],
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "default": [
+        "/"
+      ],
       "description": "Directories to index. Default: the whole filesystem, Everything-style ('/' on Linux/macOS, the system drive -- usually 'C:\\' -- on Windows). Relative paths are made absolute on load; an empty or missing list falls back to the default. Symlinks are indexed as entries but never descended. Network and virtual filesystem mountpoints under a root are skipped automatically at scan time; add such a mountpoint as an explicit root to index it anyway (see the README's 'Indexing scope')."
     },
     "rootsVersion": {
@@ -23,8 +28,22 @@
     },
     "excludes": {
       "type": "array",
-      "items": { "type": "string", "minLength": 1 },
-      "default": [".git", "node_modules", ".cache", "/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"],
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "default": [
+        ".git",
+        "node_modules",
+        ".cache",
+        "/proc",
+        "/sys",
+        "/dev",
+        "/run",
+        "/tmp",
+        "/var/tmp",
+        "lost+found"
+      ],
       "description": "Patterns pruned from indexing. A pattern WITHOUT a path separator matches each entry's base name ('node_modules', '*.tmp'): matching directories are pruned, matching files skipped. A pattern WITH a separator matches the full path ('/home/*/secret'). '*' never crosses a separator and there is no '**'. An explicitly empty list means 'exclude nothing'. The same semantics apply to the initial walk, live filesystem events, and rescans. The default adds the Linux/macOS system entries (/proc, /sys, /dev, /run, /tmp, /var/tmp, lost+found) so a whole-filesystem walk skips virtual and volatile trees; on Windows the default is just the three base-name patterns."
     },
     "hotkey": {
@@ -58,7 +77,14 @@
     "history": { "$ref": "#/$defs/historyConfig" },
     "window": { "$ref": "#/$defs/windowConfig" },
     "firefox": { "$ref": "#/$defs/firefoxConfig" },
-    "preview": { "$ref": "#/$defs/previewConfig" }
+    "preview": { "$ref": "#/$defs/previewConfig" },
+    "rewrites": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rewriteRule"
+      },
+      "description": "Regex rewrite rules: each rule turns a query matching its pattern into one instant top result opening the expanded URL (e.g. a pasted Jira key XY-12345 -> https://my.jira.com/XY-12345). Rules run in config order; several can match at once."
+    }
   },
   "additionalProperties": false,
   "$defs": {
@@ -87,7 +113,9 @@
           "type": "object",
           "description": "Per-plugin overrides keyed by provider id (the built-in ids 'bangs', 'app', 'apps', 'apps-search', 'firefox-frequent' and 'firefox-tabs' work here too).",
           "patternProperties": {
-            "^[a-z0-9][a-z0-9_-]{0,31}$": { "$ref": "#/$defs/pluginEntry" }
+            "^[a-z0-9][a-z0-9_-]{0,31}$": {
+              "$ref": "#/$defs/pluginEntry"
+            }
           },
           "additionalProperties": false
         }
@@ -126,8 +154,12 @@
       "title": "Firefox integration configuration",
       "type": "object",
       "properties": {
-        "frequentSites": { "$ref": "#/$defs/frequentSitesConfig" },
-        "openTabs": { "$ref": "#/$defs/openTabsConfig" }
+        "frequentSites": {
+          "$ref": "#/$defs/frequentSitesConfig"
+        },
+        "openTabs": {
+          "$ref": "#/$defs/openTabsConfig"
+        }
       },
       "additionalProperties": false
     },
@@ -200,7 +232,11 @@
             "pattern": "^[^\\p{L}\\p{Nd}\\s]$",
             "description": "Exactly one character that is not a letter, digit, or space."
           },
-          "default": ["!", "/", "@"],
+          "default": [
+            "!",
+            "/",
+            "@"
+          ],
           "description": "Characters that may start a bang query. Invalid sigils are logged and skipped by the app; an empty or all-invalid list falls back to the defaults."
         },
         "aliases": {
@@ -328,31 +364,101 @@
         }
       },
       "additionalProperties": false
+    },
+    "rewriteRule": {
+      "title": "One regex rewrite rule",
+      "type": "object",
+      "required": [
+        "name",
+        "pattern",
+        "replacement"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Display name, shown as the result's subtitle."
+        },
+        "pattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Go regexp (RE2: no backtracking, linear time) matched against the trimmed query. FULL-MATCH by default: compiled as ^(?:pattern)$ unless you anchor it yourself (a leading ^ or trailing $ disables the wrapping); write looser rules with explicit .* . An invalid pattern is logged once at startup and the rule is skipped."
+        },
+        "replacement": {
+          "type": "string",
+          "minLength": 1,
+          "description": "URL template expanded with the stdlib capture-group syntax: $1, ${name}, $$ for a literal $. Must expand to an absolute http(s) URL with a host or the result is dropped (open_url is the only action rewrites can produce)."
+        },
+        "title": {
+          "type": "string",
+          "description": "Optional result title template (same expansion); defaults to the expanded URL."
+        },
+        "icon": {
+          "type": "string",
+          "description": "Optional icon (builtin name or literal glyph); defaults to \"link\"."
+        },
+        "disabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Turns the rule off without deleting it."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "examples": [
     {
-      "roots": ["/"],
+      "roots": [
+        "/"
+      ],
       "rootsVersion": 2,
-      "excludes": [".git", "node_modules", ".cache", "/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"],
+      "excludes": [
+        ".git",
+        "node_modules",
+        ".cache",
+        "/proc",
+        "/sys",
+        "/dev",
+        "/run",
+        "/tmp",
+        "/var/tmp",
+        "lost+found"
+      ],
       "hotkey": "alt+space",
       "rescanIntervalMinutes": 0,
       "maxResults": 50,
-      "search": { "fuzzyDisabled": false },
+      "search": {
+        "fuzzyDisabled": false
+      },
       "theme": "dark",
       "plugins": {
         "disabled": false,
         "entries": {
-          "calc": { "disabled": false, "settings": {} }
+          "calc": {
+            "disabled": false,
+            "settings": {}
+          }
         }
       },
       "bangs": {
-        "sigils": ["!", "/", "@"],
-        "aliases": { "math": "calc" }
+        "sigils": [
+          "!",
+          "/",
+          "@"
+        ],
+        "aliases": {
+          "math": "calc"
+        }
       },
-      "tray": { "disabled": false },
-      "history": { "persistDisabled": false },
-      "window": { "translucent": false },
+      "tray": {
+        "disabled": false
+      },
+      "history": {
+        "persistDisabled": false
+      },
+      "window": {
+        "translucent": false
+      },
       "firefox": {
         "frequentSites": {
           "minVisitsMonth": 11,

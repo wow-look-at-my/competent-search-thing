@@ -2,8 +2,9 @@ package plugin
 
 import (
 	"context"
-	"sort"
 	"strings"
+
+	"github.com/wow-look-at-my/competent-search-thing/internal/match"
 )
 
 // builtinAppsID is the provider id of the installed-apps launcher.
@@ -17,9 +18,10 @@ const maxAppResults = 15
 const desktopFieldCodes = "fFuUdDnNickvm"
 
 // appsProvider is the installed-application launcher, reachable only
-// via its bangs (!app / !launch). It searches the snapshot supplied by
-// the InstalledApps getter (the getter pre-filters terminal apps);
-// results launch via a run_command action with the parsed Exec argv.
+// via its bangs (!app / !launch). It is a candidate SOURCE: the whole
+// snapshot goes to the engine, which lists everything for an empty
+// rest (ScoreListed, alphabetical) and text-gates/ranks a needle --
+// launch actions carry the parsed Exec argv.
 type appsProvider struct {
 	builtinBase
 	installed func() []InstalledApp
@@ -32,81 +34,42 @@ func newAppsProvider(installed func() []InstalledApp) *appsProvider {
 	}
 }
 
-func (p *appsProvider) query(_ context.Context, req Request) ([]Result, []string, error) {
+func (p *appsProvider) limit() int { return maxAppResults }
+
+func (p *appsProvider) candidates(_ context.Context, req Request) ([]match.Candidate, error) {
 	if !req.Targeted || p.installed == nil {
-		return nil, nil, nil
+		return nil, nil
 	}
-	// An empty search lists everything at the default score, which the
-	// name tiebreak in collectAppResults turns into "first N
-	// alphabetically".
-	needle := strings.ToLower(req.Stripped)
-	score := func(name string) (float64, bool) {
-		if needle == "" {
-			return DefaultScore, true
-		}
-		lower := strings.ToLower(name)
-		switch {
-		case strings.HasPrefix(lower, needle):
-			return 100, true
-		case strings.Contains(lower, needle):
-			return 80, true
-		}
-		return 0, false
-	}
-	return collectAppResults(p.installed(), score, maxAppResults), nil, nil
+	return appCandidates(p.installed()), nil
 }
 
-// collectAppResults builds the launch results shared by the targeted
-// launcher (!app / !launch) and the untargeted apps-search provider:
-// score decides inclusion (ok=false skips the app) and ranking,
-// entries whose Exec parses to nothing launchable are dropped,
-// ordering is score descending with a case-insensitive (then exact)
-// name tiebreak, the list is capped at limit, and every result
-// launches its app via a run_command action carrying the parsed
-// .desktop Exec argv.
-func collectAppResults(installed []InstalledApp, score func(name string) (float64, bool), limit int) []Result {
-	type entry struct {
-		app   InstalledApp
-		argv  []string
-		score float64
-	}
-	var matches []entry
+// appCandidates builds the launch candidates shared by the targeted
+// launcher (!app / !launch) and the untargeted apps-search source:
+// the match field is the app NAME, entries whose Exec parses to
+// nothing launchable are dropped, and every row launches its app via
+// a run_command action carrying the parsed .desktop Exec argv. No
+// scores, no filtering -- the engine owns both.
+func appCandidates(installed []InstalledApp) []match.Candidate {
+	out := make([]match.Candidate, 0, len(installed))
 	for _, a := range installed {
-		s, ok := score(a.Name)
-		if !ok {
-			continue
-		}
 		argv := parseDesktopExec(a.Exec)
 		if len(argv) == 0 || argv[0] == "" {
 			continue // nothing launchable
 		}
-		matches = append(matches, entry{app: a, argv: argv, score: s})
-	}
-	sort.SliceStable(matches, func(i, j int) bool {
-		if matches[i].score != matches[j].score {
-			return matches[i].score > matches[j].score
-		}
-		ni, nj := strings.ToLower(matches[i].app.Name), strings.ToLower(matches[j].app.Name)
-		if ni != nj {
-			return ni < nj
-		}
-		return matches[i].app.Name < matches[j].app.Name
-	})
-	if len(matches) > limit {
-		matches = matches[:limit]
-	}
-	results := make([]Result, 0, len(matches))
-	for _, m := range matches {
-		s := m.score
-		results = append(results, Result{
-			Title:    m.app.Name,
-			Subtitle: strings.Join(m.argv, " "),
-			Icon:     "app",
-			Score:    &s,
-			Action:   &Action{Type: ActionRunCommand, Argv: m.argv, DesktopID: m.app.ID},
+		exec := strings.Join(argv, " ")
+		out = append(out, match.Candidate{
+			Display: a.Name,
+			Texts:   []string{a.Name},
+			SortKey: exec,
+			Payload: Result{
+				Title:    a.Name,
+				Subtitle: exec,
+				Icon:     "app",
+				Action:   &Action{Type: ActionRunCommand, Argv: argv, DesktopID: a.ID},
+			},
 		})
 	}
-	return results
+	return out
 }
 
 // parseDesktopExec splits a freedesktop .desktop Exec line into argv:
