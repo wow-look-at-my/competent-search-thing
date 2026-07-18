@@ -214,7 +214,8 @@ func TestFileRecencyRealFileAtimeMtime(t *testing.T) {
 			"off linux only mtime is consulted")
 	}
 
-	// mtime newer than atime: every OS answers mtime.
+	// Swapped stamps put the newer time in mtime, so every OS --
+	// with or without atime support -- answers that newer stamp.
 	require.NoError(t, os.Chtimes(path, mtime, atime))
 	fi, err = os.Lstat(path)
 	require.NoError(t, err)
