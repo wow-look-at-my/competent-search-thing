@@ -989,6 +989,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   "Copied" ~1.2s in the status bar, action errors -- plugin actions
   AND file-row open/reveal failures -- flash ~2s; #empty
   shows only when a non-blank query has neither files nor sections;
+  Tab/Shift+Tab are preventDefaulted no-ops reserved for future use
+  (the default focus traversal would leave the input -- the bar's
+  only focusable element -- and the webview, tripping the blur-hide);
   Esc + window blur -> Hide; runtime events: "app:shown" -> CLEAR
   the input (the bar always summons empty; the pre-hide text is
   deliberately dropped) + reset histCursor + focus + refresh (renders

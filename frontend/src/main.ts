@@ -500,6 +500,12 @@ function onKeydown(app: WailsAppBindings, ev: KeyboardEvent): void {
         activate(state.selected, ev.ctrlKey || ev.metaKey);
       }
       break;
+    case "Tab":
+      // Tab/Shift+Tab are reserved for future use: the default focus
+      // traversal would leave the input (the bar's only focusable
+      // element) and the webview, tripping the blur -> Hide path.
+      ev.preventDefault();
+      break;
     case "Escape":
       ev.preventDefault();
       hideBar(app);
