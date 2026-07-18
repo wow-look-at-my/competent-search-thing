@@ -54,6 +54,9 @@ func runGUI(opts cli.RunOptions) error {
 	}
 	mgr := index.NewManager(cfg.Roots, cfg.Excludes, cfg.MaxResults)
 	mgr.SetFuzzyDisabled(cfg.Search.FuzzyDisabled)
+	// The preview pane (preview.enabled) widens the window; with the
+	// flag off this stays exactly WindowWidth x WindowHeight.
+	winW, winH, _ := app.PreviewWindowSize()
 	a := app.New(mgr, app.Options{
 		RescanEvery:            time.Duration(cfg.RescanIntervalMinutes) * time.Minute,
 		Hotkey:                 cfg.Hotkey,
@@ -63,12 +66,15 @@ func runGUI(opts cli.RunOptions) error {
 		HistoryPersistDisabled: cfg.History.PersistDisabled,
 		ConfigNotes:            cfg.MigrationNotes,
 		Frecency:               cfg.Search.Frecency,
+		Preview:                cfg.Preview,
+		WindowW:                winW,
+		WindowH:                winH,
 	})
 
 	wailsOpts := &options.App{
 		Title:             "competent-search-thing",
-		Width:             app.WindowWidth,
-		Height:            app.WindowHeight,
+		Width:             winW,
+		Height:            winH,
 		Frameless:         true,
 		AlwaysOnTop:       true,
 		StartHidden:       true,

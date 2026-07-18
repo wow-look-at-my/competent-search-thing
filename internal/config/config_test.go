@@ -470,3 +470,75 @@ func TestFrecencyConfig(t *testing.T) {
 	require.Equal(t, 7.0, got.Search.Frecency.HalfLifeDays)
 	require.Equal(t, 5.0, got.Search.Frecency.TierJumpCount)
 }
+
+func TestPreviewConfig(t *testing.T) {
+	setConfigDir(t)
+	require.Equal(t, PreviewConfig{
+		Enabled:       false,
+		WindowWidth:   1600,
+		WindowHeight:  800,
+		TextMaxKB:     256,
+		ImageMaxEdge:  800,
+		DirMaxEntries: 200,
+		Kagi:          PreviewKagiConfig{MaxResults: 8},
+		OpenAI:        PreviewOpenAIConfig{Model: "gpt-5-mini", MaxOutputTokens: 1024},
+	}, Default().Preview, "the preview pane defaults off with every knob populated")
+
+	// A config predating the preview block normalizes to the defaults
+	// (still disabled).
+	var c Config
+	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
+	c.Normalize()
+	require.Equal(t, DefaultPreview(), c.Preview)
+
+	// Zero and negative knobs and an empty model are repaired; real
+	// values -- the API keys verbatim included -- survive.
+	c = Config{Preview: PreviewConfig{
+		Enabled:       true,
+		WindowWidth:   0,
+		WindowHeight:  -1,
+		TextMaxKB:     512,
+		ImageMaxEdge:  0,
+		DirMaxEntries: 50,
+		Kagi:          PreviewKagiConfig{APIKey: "kagi-secret", MaxResults: 0},
+		OpenAI:        PreviewOpenAIConfig{APIKey: "sk-secret", Model: "", MaxOutputTokens: -5},
+	}}
+	c.Normalize()
+	require.True(t, c.Preview.Enabled)
+	require.Equal(t, DefaultPreviewWindowWidth, c.Preview.WindowWidth)
+	require.Equal(t, DefaultPreviewWindowHeight, c.Preview.WindowHeight)
+	require.Equal(t, 512, c.Preview.TextMaxKB)
+	require.Equal(t, DefaultPreviewImageMaxEdge, c.Preview.ImageMaxEdge)
+	require.Equal(t, 50, c.Preview.DirMaxEntries)
+	require.Equal(t, "kagi-secret", c.Preview.Kagi.APIKey, "the key is never touched")
+	require.Equal(t, DefaultPreviewKagiMax, c.Preview.Kagi.MaxResults)
+	require.Equal(t, "sk-secret", c.Preview.OpenAI.APIKey, "the key is never touched")
+	require.Equal(t, DefaultPreviewOpenAIModel, c.Preview.OpenAI.Model)
+	require.Equal(t, DefaultPreviewOpenAITokens, c.Preview.OpenAI.MaxOutputTokens)
+
+	// Real values survive Normalize untouched.
+	c = Config{Preview: PreviewConfig{
+		WindowWidth:  1920,
+		WindowHeight: 1080,
+		OpenAI:       PreviewOpenAIConfig{Model: "gpt-5"},
+	}}
+	c.Normalize()
+	require.Equal(t, 1920, c.Preview.WindowWidth)
+	require.Equal(t, 1080, c.Preview.WindowHeight)
+	require.Equal(t, "gpt-5", c.Preview.OpenAI.Model)
+
+	// The block round-trips through Save/Load.
+	in := Default()
+	in.Preview.Enabled = true
+	in.Preview.WindowWidth = 1440
+	in.Preview.Kagi.APIKey = "kagi-secret"
+	in.Preview.OpenAI.APIKey = "sk-secret"
+	require.NoError(t, Save(in))
+	got, err := Load()
+	require.NoError(t, err)
+	require.True(t, got.Preview.Enabled)
+	require.Equal(t, 1440, got.Preview.WindowWidth)
+	require.Equal(t, "kagi-secret", got.Preview.Kagi.APIKey)
+	require.Equal(t, "sk-secret", got.Preview.OpenAI.APIKey)
+	require.Equal(t, DefaultPreviewOpenAIModel, got.Preview.OpenAI.Model)
+}

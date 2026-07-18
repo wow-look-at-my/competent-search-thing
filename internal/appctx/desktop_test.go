@@ -16,16 +16,21 @@ func writeDesktop(t *testing.T, dir, name, content string) {
 
 func TestScanDesktopDirsParsesValidEntries(t *testing.T) {
 	dir := t.TempDir()
+	// firefox: themed icon name; editor: absolute icon path; plain: no
+	// Icon key at all (stays empty). Icon values are kept verbatim.
 	writeDesktop(t, dir, "firefox.desktop",
-		"[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\n")
+		"[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\nIcon=firefox\n")
 	writeDesktop(t, dir, "editor.desktop",
-		"# a comment\n\n[Desktop Entry]\nType=Application\nName=Editor\nExec=/usr/bin/editor --new \"%f\"\nTerminal=false\nNoDisplay=false\n")
+		"# a comment\n\n[Desktop Entry]\nType=Application\nName=Editor\nExec=/usr/bin/editor --new \"%f\"\nIcon=/usr/share/pixmaps/editor.png\nTerminal=false\nNoDisplay=false\n")
+	writeDesktop(t, dir, "plain.desktop",
+		"[Desktop Entry]\nType=Application\nName=Plain\nExec=plain\n")
 
 	got := ScanDesktopDirs([]string{dir})
 	require.Equal(t, []InstalledApp{
-		{Name: "Editor", Exec: `/usr/bin/editor --new "%f"`, ID: "editor.desktop"},
-		{Name: "Firefox", Exec: "firefox %u", ID: "firefox.desktop"},
-	}, got, "sorted by Name, Exec kept raw, ID = file name")
+		{Name: "Editor", Exec: `/usr/bin/editor --new "%f"`, ID: "editor.desktop", Icon: "/usr/share/pixmaps/editor.png"},
+		{Name: "Firefox", Exec: "firefox %u", ID: "firefox.desktop", Icon: "firefox"},
+		{Name: "Plain", Exec: "plain", ID: "plain.desktop"},
+	}, got, "sorted by Name, Exec and Icon kept raw, ID = file name")
 }
 
 func TestScanDesktopDirsSkipsUndesirableEntries(t *testing.T) {

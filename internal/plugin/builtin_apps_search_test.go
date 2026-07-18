@@ -148,7 +148,8 @@ func TestAppsSearchThroughDispatch(t *testing.T) {
 	require.Len(t, e.Results, 1)
 	require.Equal(t, "Firefox", e.Results[0].Title)
 	require.Equal(t, float64(73), *e.Results[0].Score)
-	require.Equal(t, &Action{Type: ActionRunCommand, Argv: []string{"firefox"}}, e.Results[0].Action)
+	require.Equal(t, &Action{Type: ActionRunCommand, Argv: []string{"firefox"}, DesktopID: "firefox.desktop"},
+		e.Results[0].Action, "the desktop id rides along so the app can launch with activation credentials")
 	requireNoEmission(t, ch, 100*time.Millisecond)
 
 	info = r.Dispatch(context.Background(), "f", 2, nil, emit)

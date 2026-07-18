@@ -65,7 +65,7 @@ func appCandidates(installed []InstalledApp) []match.Candidate {
 				Title:    a.Name,
 				Subtitle: exec,
 				Icon:     "app",
-				Action:   &Action{Type: ActionRunCommand, Argv: argv},
+				Action:   &Action{Type: ActionRunCommand, Argv: argv, DesktopID: a.ID},
 			},
 		})
 	}

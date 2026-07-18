@@ -213,7 +213,9 @@ buildhost (see [Install](#install)):
       to centering when the platform cannot say, e.g. Wayland)
 - [x] Open / Reveal: Enter opens the selection with the OS default
       handler, Ctrl+Enter (Cmd+Enter on macOS) reveals it in the file
-      manager; both hide the bar on success
+      manager; both hide the bar on success, and on Linux the target
+      application's window ends focused and raised (see
+      [Focus and raise on launch](#focus-and-raise-on-launch))
 - [x] Search UI: as-you-type results with match highlighting, dimmed
       parent paths, folder/file glyphs, keyboard + mouse selection,
       live index status bar and a staleness warning chip
@@ -503,6 +505,16 @@ The file is created with defaults on first run:
       "profileDir": ""
     }
   },
+  "preview": {
+    "enabled": false,
+    "windowWidth": 1600,
+    "windowHeight": 800,
+    "textMaxKB": 256,
+    "imageMaxEdge": 800,
+    "dirMaxEntries": 200,
+    "kagi": { "apiKey": "", "maxResults": 8 },
+    "openai": { "apiKey": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 }
+  },
   "rewrites": [
     {
       "name": "jira",
@@ -623,6 +635,20 @@ Field reference:
 - `rewrites` -- regex -> URL rewrite rules; see
   [Rewrite rules](#rewrite-rules). Empty by default; disable all at
   once via `plugins.entries["rewrites"].disabled`.
+- `preview` -- the preview pane (opt-in). `enabled` (default `false`)
+  turns on a right-hand pane showing the selected result and widens
+  the window to `windowWidth` x `windowHeight` (defaults 1600 x 800;
+  read once at startup). `textMaxKB` (default 256) caps how much of a
+  text file one preview reads; `imageMaxEdge` (default 800) caps a
+  thumbnail's longest edge; `dirMaxEntries` (default 200) caps a
+  directory listing. `kagi.apiKey` / `openai.apiKey` are SECRETS
+  (passed through verbatim, never logged; the `KAGI_API_KEY` /
+  `OPENAI_API_KEY` environment variables work too) enabling the
+  explicit-trigger web-search and answer previews; `kagi.maxResults`
+  (default 8), `openai.model` (default `gpt-5-mini`) and
+  `openai.maxOutputTokens` (default 1024) tune them. Zero or negative
+  numbers and an empty model are repaired to the defaults. See
+  [Preview pane](#preview-pane).
 
 The full format is formally described by
 [`schemas/config.schema.json`](schemas/config.schema.json) -- add a
@@ -1533,6 +1559,192 @@ line says why. A future option is a GNOME Shell extension that exports
 the window list over D-Bus (for example "Window Calls"), which the app
 could consume opt-in; nothing like that ships today.
 
+## Focus and raise on launch
+
+Everything launched from the bar -- Enter on a file or URL, Ctrl+Enter
+reveal, an app from the Apps sections -- ends with the target
+application's window focused and raised wherever the platform allows
+it, instead of GNOME's "<App> is ready" notification. macOS `open` and
+Windows ShellExecute activate the target natively, so the machinery
+below is Linux-only.
+
+How a launch runs:
+
+1. **Resolve** the default handler through gio (by content type for
+   files, by URI scheme for URLs, `inode/directory` for reveal) and
+   read its capabilities: `DBusActivatable`, `StartupNotify`,
+   `StartupWMClass`, `Terminal`.
+2. **Mint an activation credential** while the bar still holds focus:
+   an X11 startup-notification id (carrying the user time of the
+   Enter press), GDK's Wayland launch id (a `gtk_shell1.notify_launch`
+   uuid on GTK 3.24.33/GNOME, a real xdg-activation token on GTK >=
+   3.24.35), or a hand-rolled `xdg_activation_v1` token authenticated
+   by our own keyboard serial + surface (non-GNOME compositors).
+   Minting follows GLib's gating: a handler that declares neither
+   `StartupNotify=true` nor `DBusActivatable=true` gets no credential
+   -- it could never redeem one, and an unredeemed X11 sequence would
+   pin a busy cursor.
+3. **Dispatch** through the first transport that works, every tier
+   carrying the same credential:
+   - `dbus` -- `org.freedesktop.Application` Open/Activate with
+     `desktop-startup-id` AND `activation-token` in platform-data
+     (what raises an existing GApplication window);
+   - `exec` -- the handler's own Exec line, field codes expanded, with
+     `DESKTOP_STARTUP_ID` and `XDG_ACTIVATION_TOKEN` in the child's
+     environment;
+   - `xdg-open` -- the pre-existing candidate table, same environment
+     attached (reveal uses its ShowItems candidates with the minted
+     id in the startup-id argument).
+   A tier falling through changes HOW the launch is transported,
+   never what opens.
+4. **Watch and raise (X11 and XWayland)**: whenever an X display is
+   reachable, a bounded watcher (~6s, 200ms polls) looks for the
+   launched window -- by spawned pid, by the minted id in
+   `_NET_STARTUP_ID`, or by WM_CLASS -- and activates it with a
+   `_NET_ACTIVE_WINDOW` client message carrying a FRESH X server
+   timestamp: byte-identical in form to what a taskbar click sends
+   (libwnck's activate), so it passes mutter's focus-stealing checks
+   and may switch workspaces (a zero timestamp cannot). A target that
+   already took focus by itself is left alone. If no new window ever
+   appears -- the launch handed off to an already-running instance,
+   e.g. a tab into an open editor -- the most-recently-used existing
+   window matching the handler's WM_CLASS is raised at the deadline:
+   mechanically the taskbar click you would have made. When the watch
+   ends, the X11 startup sequence is reaped (the libsn `remove:`
+   broadcast), so launchees that never complete startup notification
+   (chromium-family apps) cannot pin the busy cursor for mutter's 15s
+   timeout. Wayland sequences have no remove API; for non-redeeming
+   apps they time out server-side exactly like GNOME Shell's own
+   app-grid launches do.
+
+There is no config knob for any of this, by design: every fallback
+level is a transport downgrade, never a behavior change.
+
+Every launch logs exactly one line naming what it did:
+
+    launch: open /home/u/report.pdf handler=org.gnome.Evince.desktop credential=wayland-gdk:1b9ac0ff transport=dbus watcher=off
+
+(`handler=-` means no default handler resolved; `credential=none`
+means minting was skipped or unavailable; `transport` is
+`dbus`/`exec`/`xdg-open` -- reveal logs `showitems`; `watcher=on`
+means the X raise watcher armed.) At startup, one
+`launch: activation credentials enabled (session=...)` line announces
+the machinery.
+
+### Capability matrix
+
+| Situation | Mechanism | Result |
+|-----------|-----------|--------|
+| X11 -- new window | credential carries the Enter press's user time; mutter focuses new windows with fresh (or absent) credentials; watcher verifies | focused + raised |
+| X11 -- existing instance takes the target (editor tab, running browser) | Firefox >= 108 forwards the credential itself (`STARTUP_TOKEN` in its remoting) and presents; everything else: the watcher's MRU WM_CLASS match + fresh-timestamp `_NET_ACTIVE_WINDOW` | focused + raised |
+| Wayland GNOME -- new window | credential redeemed on first activation: GTK3 consumes `DESKTOP_STARTUP_ID` (`gtk_surface1.request_focus`), GTK4/Qt6/Electron >= 31.5 consume `XDG_ACTIVATION_TOKEN` (mutter 42 accepts a notify_launch uuid on that path with only a recency check) | focused + raised |
+| Wayland GNOME -- existing GTK/GApplication instance (gedit, nautilus opening a file) | `dbus` transport: Open() with the credential in platform-data; `gtk_window_present` redeems it | focused + raised |
+| Wayland GNOME -- existing XWayland instance (VS Code <= 1.106, the VS Code snap, anything forced to `--ozone-platform=x11`) | the X raise watcher over XWayland: MRU WM_CLASS match, fresh timestamp | focused + raised |
+| Wayland GNOME -- existing native-Wayland instance that forwards the token (Firefox >= 121 is native Wayland and does since 108) | the app serializes our `XDG_ACTIVATION_TOKEN` through its own single-instance remoting and redeems it on the existing surface (this is why BOTH env variables carry the id) | focused + raised |
+| Wayland GNOME -- existing native-Wayland instance that drops the token (stock VS Code >= 1.107: Electron consumes and unsets both variables before any JS runs, and its own singleton does not forward them) | none exists: no compositor channel can raise a foreign Wayland window, and xdg-activation redemption requires the TARGET's own surface | "<App> is ready" notification (honest limitation; a GNOME shell-extension companion could close it some day) |
+| Wayland non-GNOME (sway, KDE Plasma, ...) | hand-rolled `xdg_activation_v1` token (serial + surface authenticated); XWayland apps additionally watcher-covered when DISPLAY is set | compositor/app dependent: honored where xdg-activation is respected |
+| Reveal on X11/XWayland | ShowItems with the minted startup id + the watcher on the file manager's WM_CLASS | focused + raised |
+| Reveal on Wayland with a RUNNING nautilus | nautilus 42 accepts the ShowItems startup-id argument and discards it (a bare `gtk_window_present` with no credential) | notification (upstream nautilus behavior; a freshly started nautilus still gets focus) |
+| macOS / Windows | `open` / ShellExecute | focused + raised (native OS behavior; none of this machinery runs) |
+
+### Launch caveats
+
+- **Reveal into a running nautilus on Wayland** stays a notification
+  until nautilus honors the startup id it is handed (it is passed
+  anyway -- fixing it upstream fixes this app for free). On X11 and
+  XWayland the raise watcher already compensates.
+- **Native-Wayland apps that drop activation tokens** (stock VS Code
+  >= 1.107 handing a file to a running instance) cannot be raised by
+  any launcher on GNOME. The XWayland builds (snap, `--ozone-platform
+  =x11`) do not have this limitation.
+- The bar's window now has a proper `WM_CLASS` / Wayland `app_id`
+  (`competent-search-thing`): wails never set a program name, which
+  also broke the startup-notification id prefix.
+
+## Preview pane
+
+An opt-in right-hand pane that previews the selected result as you
+move through the list, plus explicit web-search and AI-answer lookups.
+Off by default; enable it in `config.json`:
+
+```json
+{ "preview": { "enabled": true } }
+```
+
+With the pane enabled the window opens at `preview.windowWidth` x
+`preview.windowHeight` (defaults 1600 x 800, read once at startup):
+the classic 680-wide results column stays on the left, exactly as
+before, and the pane fills the remaining width behind a divider. With
+the pane disabled the window is the classic 680 x 460 and none of
+this exists -- no pane markup is active and no preview code runs.
+
+What the pane shows for the selected row:
+
+- **Text files** -- the first `textMaxKB` KiB (default 256) with
+  syntax highlighting (highlight.js, bundled grammars: Go, JS/TS,
+  Python, Rust, C/C++, C#, Java, Kotlin, Swift, Ruby, PHP, Lua,
+  bash/shell, JSON, YAML, TOML/INI, XML/HTML, CSS/SCSS, Markdown,
+  SQL, Dockerfile, Makefile, diff, Vim script, plain text). The
+  backend hints the language from the file name; small unhinted files
+  are auto-detected, and anything past the cap notes the truncation.
+- **Images** (png/jpg/gif/webp/bmp) -- a downscaled thumbnail
+  (longest edge `imageMaxEdge`, default 800) with pixel dimensions
+  and file size.
+- **Directories** -- the first `dirMaxEntries` entries (default 200),
+  directories first, with sizes.
+- **Everything else** -- a metadata card (size, modified time, mode,
+  kind). Binary files are sniffed and described, never dumped;
+  symlinks are described, never followed. Plugin rows get a card from
+  their own title/subtitle/source.
+
+A fast metadata card appears immediately while the content preview
+computes, and repeat visits are served from an in-memory cache that
+invalidates when the file's size or mtime changes. Browsing stays
+free: the pane paints an instant header from data already in memory,
+the disk-touching dispatch is debounced (~90ms) so a held arrow key
+never queues work, stale answers are dropped by generation, and a
+spinner appears only when a preview takes longer than ~150ms.
+
+Web search (Kagi) and AI answers (OpenAI) run ONLY on an explicit
+trigger: the two buttons at the bottom of the pane or their
+shortcuts, `Ctrl+K` (search the web for the current query) and
+`Ctrl+I` (ask AI). No keystroke, selection, or render path ever
+calls out to the network by itself. Each provider needs its API key:
+
+- Kagi: `preview.kagi.apiKey`, or the `KAGI_API_KEY` environment
+  variable; `preview.kagi.maxResults` (default 8) caps the hits.
+- OpenAI: `preview.openai.apiKey`, or `OPENAI_API_KEY`;
+  `preview.openai.model` (default `gpt-5-mini`) and
+  `preview.openai.maxOutputTokens` (default 1024) shape the answer.
+
+The keys are passed through verbatim and NEVER logged or exposed to
+the page -- the frontend only learns "configured or not", and an
+unconfigured provider's button renders disabled with a hint naming
+the config key.
+
+Web searches go to the Kagi Search API (v1: `GET
+https://kagi.com/api/v1/search`, `Authorization: Bot <key>`). Repeat
+queries are served from a 15-minute in-memory cache (marked `cached`
+in the pane, zero network), and a client-side courtesy rate limit --
+a burst of 3 requests refilling at 1 per second -- fails fast with
+"rate limited, retry shortly" instead of dialing. Searches time out
+hard at 10 seconds.
+
+AI answers go to the OpenAI Responses API (`POST /v1/responses` with
+your `model` and `maxOutputTokens`; answers cut off by the token cap
+end with a `[truncated by max_output_tokens]` marker line). Answers
+are cached PERSISTENTLY in `<configDir>/aicache.json` -- up to 128
+entries, least-recently-used evicted, file mode 0600 -- so asking the
+same question again (even across restarts) answers instantly with a
+`cached` badge and zero network; delete the file to clear the cache.
+Answers time out hard at 90 seconds.
+
+Both fetches share the preview pane's generation counter: answers
+that arrive after you moved on -- or after a newer fetch -- are
+dropped like any other stale preview, and provider failures render as
+a terse error card (HTTP status plus the provider's short message;
+never your key, never a raw response dump).
+
 ## Tray icon
 
 The app puts a small magnifier icon in the system tray -- on Ubuntu's
@@ -1655,7 +1867,13 @@ single instance around one unix socket (in `$XDG_RUNTIME_DIR`):
   just shows the already-running instance's bar and exits 0.
 - `competent-search-thing toggle` -- what the global hotkey does:
   hide when visible, summon when hidden. Starts the app when it is
-  not running (the bar shows once the frontend is ready).
+  not running (the bar shows once the frontend is ready). A toggle
+  landing moments after the bar was dismissed counts as that
+  dismissal instead of a re-summon: pressing a grabbed summon combo
+  on an open bar unfocuses it first (which already hides it, exactly
+  like clicking elsewhere), and the toggle -- on GNOME delivered
+  through a freshly spawned `competent-search-thing toggle` process
+  -- must not bounce the bar back open.
 - `competent-search-thing show` -- like toggle but never hides a
   visible bar (idempotent; also starts the app when needed).
 - `competent-search-thing hide` -- hides the running instance's bar;
@@ -1703,15 +1921,23 @@ the command (never the key) and logs the repair:
     hotkey: repaired the GNOME keybinding command: "/home/you/.linuxbrew/Cellar/competent-search-thing/1.0.0/bin/competent-search-thing toggle" -> "/home/you/.linuxbrew/bin/competent-search-thing toggle" (the stored command no longer launched this binary)
 
 Symlinked install layouts (Homebrew's versioned Cellar, Nix, stow)
-are why both rules exist: the app registers the stable path -- the
-PATH shim, e.g. `~/.linuxbrew/bin/competent-search-thing` -- rather
-than the resolved version-pinned path, so upgrading no longer breaks
-the shortcut, and an entry written by an older version heals to the
-stable path on the first launch after an upgrade. (The flip side: a
-command you pointed at some other program yourself is healed back to
-the app on the next launch -- the repair line above is the paper
-trail. A textually different command that still launches this binary
-is left alone.) To
+are why both rules exist: the app registers the upgrade-stable
+spelling of its own path, never the resolved version-pinned one. For
+a Homebrew install the stable spelling is derived structurally from
+the Cellar path itself -- `<prefix>/Cellar/<formula>/<version>/bin/...`
+maps to the linked `<prefix>/bin/...` (or `<prefix>/opt/<formula>/...`
+when the formula is unlinked) -- independent of PATH, argv[0] and the
+rest of the launch environment, and a candidate is only ever
+substituted when it is proven to be the very binary that is running.
+A stored command still pinned to a Cellar version self-heals to the
+stable spelling at startup (that is the migration path for bindings
+written by older builds), so after one launch of a build with this
+mapping the binding survives arbitrary future upgrades with zero user
+action and zero dead windows. (The flip side: a command you pointed
+at some other program yourself is healed back to the app on the next
+launch -- the repair line above is the paper trail. A working custom
+spelling of this binary -- your own symlink, say -- is left
+alone.) To
 remove it, delete the shortcut in GNOME Settings, or -- if it is your
 only custom shortcut -- reset the whole custom-keybindings list:
 
@@ -1753,13 +1979,13 @@ nothing? Work through these, in order:
    grab (step 2).
 
 4. **Moved, upgraded or deleted the binary?** The keybinding stores
-   an absolute path (preferring the stable PATH shim of a
-   Homebrew/Nix-style install over the resolved versioned path), and
-   a stored command whose executable is gone or no longer this binary
-   self-heals -- but only at app startup. Start the app once from the
-   new location and look for the `hotkey: repaired the GNOME
-   keybinding command: "..." -> "..."` line; the shortcut works again
-   from then on.
+   the upgrade-stable spelling of the binary's absolute path (for a
+   Homebrew install, derived structurally from the Cellar layout:
+   the linked `<prefix>/bin` path first, `<prefix>/opt/<formula>` as
+   the fallback), and a stored command that is dead, names a
+   different binary, or is still pinned to a Cellar version
+   self-heals at app startup -- the `hotkey: repaired the GNOME
+   keybinding command: "..." -> "..."` line is the paper trail.
 
 5. **Force a backend** for debugging with
    `COMPETENT_SEARCH_HOTKEY_BACKEND` (see
