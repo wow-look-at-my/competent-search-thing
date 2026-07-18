@@ -161,6 +161,88 @@ func BenchmarkSearchFuzzy(b *testing.B) {
 	}
 }
 
+// Multi-term benchmark rows. "sel2" is the selective conjunction: the
+// literal phrase "zzqx marker" has ZERO substring hits (no name holds
+// the space) while the term conjunction hits exactly the planted rare
+// markers, and the rare driver term bounds the whole scan. "common2"
+// is the degenerate all-common conjunction whose all-substring hits
+// fill the limit (the skip rule keeps the fuzzy sweep off). "fuzzy2"
+// makes the DRIVER subsequence-only ("zqxr" threads through
+// zzqx_marker names), forcing the phase-B sweep. "disabled2" is the
+// pure substring conjunction with the fuzzy tier off.
+var multiBenchRows = []struct {
+	name, q  string
+	disabled bool
+}{
+	{"sel2", "zzqx marker", false},
+	{"common2", "data report", false},
+	{"fuzzy2", "zqxr marker", false},
+	{"disabled2", "data report", true},
+}
+
+// countMultiMatches is the naive reference count of live entries the
+// multi-term engine should match (the hits metric, outside timing).
+func countMultiMatches(st *Store, q string, fuzzyOff bool) int {
+	type termPat struct {
+		qs    string
+		ascii bool
+	}
+	var pats []termPat
+	for _, f := range strings.Fields(q) {
+		pat, ascii := foldPattern(f)
+		pats = append(pats, termPat{qs: string(pat), ascii: ascii})
+	}
+	n := 0
+	st.ForEachLive(func(id int32) bool {
+		name := st.Name(id)
+		for _, tp := range pats {
+			folded := testFold(name, tp.ascii)
+			if strings.Contains(folded, tp.qs) {
+				continue
+			}
+			if !fuzzyOff && naiveSubseq(folded, tp.qs, tp.ascii) {
+				continue
+			}
+			return true // this entry fails; keep iterating
+		}
+		n++
+		return true
+	})
+	return n
+}
+
+// BenchmarkSearchMulti measures the multi-term engine: the selective
+// and degenerate conjunctions, the driver-fuzzy sweep, and the
+// fuzzy-disabled twin (see multiBenchRows).
+func BenchmarkSearchMulti(b *testing.B) {
+	s100k, s1M := searchFixtures()
+	sizes := []struct {
+		name string
+		st   *Store
+	}{
+		{"100k", s100k},
+		{"1M", s1M},
+	}
+	for _, size := range sizes {
+		require.Zero(b, countMatches(size.st, "zzqx marker"),
+			"the literal phrase must have no substring hits (the space bug this fixes)")
+		require.Positive(b, countMultiMatches(size.st, "zzqx marker", false),
+			"the term conjunction must hit the planted markers")
+		for _, row := range multiBenchRows {
+			b.Run(size.name+"/"+row.name, func(b *testing.B) {
+				hits := countMultiMatches(size.st, row.q, row.disabled)
+				opts := QueryOptions{FuzzyDisabled: row.disabled}
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					_ = size.st.QueryWith(row.q, 50, opts)
+				}
+				b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N), "ms/query")
+				b.ReportMetric(float64(hits), "hits")
+			})
+		}
+	}
+}
+
 // benchPathQueries covers the path-mode query shapes. "1/data"
 // straddles the dir/name join deep in the tree (dirs named *_1 whose
 // children start with "data"); "bench/" and "/b" hit every entry
@@ -362,6 +444,20 @@ func BenchmarkSearchHuge(b *testing.B) {
 			b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N), "ms/query")
 			b.ReportMetric(float64(hits), "hits")
 			b.ReportMetric(float64(fhits), "fhits")
+		})
+	}
+
+	// The multi-term rows (see multiBenchRows for the scenarios).
+	for _, row := range multiBenchRows {
+		b.Run("multi/"+row.name, func(b *testing.B) {
+			hits := countMultiMatches(st, row.q, row.disabled)
+			opts := QueryOptions{FuzzyDisabled: row.disabled}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = st.QueryWith(row.q, 50, opts)
+			}
+			b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N), "ms/query")
+			b.ReportMetric(float64(hits), "hits")
 		})
 	}
 }

@@ -48,7 +48,6 @@ package index
 // off the hot path. Tests pin score ORDERINGS, not absolute values.
 
 import (
-	"runtime"
 	"sort"
 	"sync"
 	"unicode/utf8"
@@ -63,39 +62,16 @@ const fuzzyMaxDPUnits = match.MaxDPUnits
 // phase (identical results to queryNamesSub) followed, when the
 // substring hits leave room under limit, by the subsequence phase.
 func (s *Store) queryNamesFuzzy(qs string, ascii bool, n, limit int) []Result {
-	workers := runtime.NumCPU()
-	if max := (n + minShardEntries - 1) / minShardEntries; workers > max {
-		workers = max
-	}
-	// Round the shard size up to a multiple of 64 entries: shards then
-	// touch disjoint bitset words, so phase 1 needs no atomics.
-	per := ((n+workers-1)/workers + 63) &^ 63
-	workers = (n + per - 1) / per
+	// 64-aligned shards touch disjoint bitset words, so phase 1 needs
+	// no atomics (shardPlanMarked, shared with the multi-term scans).
+	workers, per := shardPlanMarked(n)
 
 	marks := fuzzyMarksGet(n)
 	defer fuzzyMarksPut(marks)
 	heaps := make([]*topK, workers)
 	counts := make([]int, workers)
 
-	runPhase := func(shard func(w, lo, hi int)) {
-		if workers == 1 {
-			shard(0, 0, n)
-			return
-		}
-		var wg sync.WaitGroup
-		for w := 0; w < workers; w++ {
-			lo := w * per
-			hi := min(lo+per, n)
-			wg.Add(1)
-			go func(w, lo, hi int) {
-				defer wg.Done()
-				shard(w, lo, hi)
-			}(w, lo, hi)
-		}
-		wg.Wait()
-	}
-
-	runPhase(func(w, lo, hi int) {
+	runShards(workers, per, n, func(w, lo, hi int) {
 		h := newTopK(s, limit)
 		counts[w] = s.scanNames(qs, ascii, lo, hi, h, marks)
 		heaps[w] = h
@@ -119,7 +95,7 @@ func (s *Store) queryNamesFuzzy(qs string, ascii bool, n, limit int) []Result {
 			}
 		}
 		patUnits := fuzzyPatternUnits(qs, ascii)
-		runPhase(func(w, lo, hi int) {
+		runShards(workers, per, n, func(w, lo, hi int) {
 			sc := fuzzyScratchGet()
 			defer fuzzyScratchPut(sc)
 			sc.pat = patUnits
