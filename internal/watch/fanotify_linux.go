@@ -382,20 +382,44 @@ func (n *fanotifyNotifier) sendOverflow() {
 	}
 }
 
+// newFanotifyFn is the fanotify constructor the auto and strict
+// selections probe -- a package seam so unit tests can script
+// success/failure without CAP_SYS_ADMIN. Production never swaps it.
+var newFanotifyFn = newFanotifyNotifier
+
 // newAutoNotifier picks the production notifier for the configured
 // roots: fanotify whole-filesystem marks when the kernel, privileges,
 // and filesystems allow, else the per-directory fsnotify backend --
 // behavior is identical either way (the contract every tier shares),
-// only event latency and syscall count differ. An explicit config
-// knob arrives in a later stage; this is the "auto" behavior.
+// only event latency and syscall count differ. This is the
+// watcher.backend="auto" (and unset) behavior; see newBackendNotifier.
 func newAutoNotifier(roots []string) func() (notifier, error) {
 	return func() (notifier, error) {
-		n, err := newFanotifyNotifier(roots)
+		n, err := newFanotifyFn(roots)
 		if err == nil {
 			return n, nil
 		}
 		log.Printf("watch: fanotify unavailable (%v); falling back to per-directory inotify watches", err)
 		return newFSNotifier()
+	}
+}
+
+// newStrictFanotifyNotifier is the watcher.backend="fanotify" path:
+// fanotify or NOTHING. When the whole-filesystem backend cannot start
+// (a missing CAP_SYS_ADMIN grant being the usual reason) the watcher
+// gets the no-op "none" notifier instead of an inotify fallback -- the
+// config demanded no per-directory watches, so live watching is
+// plainly DISABLED, announced loudly here, and the sweep tier keeps
+// the index converging on its interval (the tier contract holds:
+// identical final index state, sweep-bounded latency).
+func newStrictFanotifyNotifier(roots []string) func() (notifier, error) {
+	return func() (notifier, error) {
+		n, err := newFanotifyFn(roots)
+		if err == nil {
+			return n, nil
+		}
+		log.Printf("watch: backend \"fanotify\" required by config but unavailable (%v); live watching DISABLED, sweeps keep the index converging", err)
+		return newNoopNotifier(), nil
 	}
 }
 

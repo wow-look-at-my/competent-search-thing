@@ -74,8 +74,14 @@ func (w *Watcher) addInitialWatches(ctx context.Context) {
 		// Whole-filesystem marks already cover every directory: no
 		// fill, no enumeration, no bookkeeping. Stats keep zero
 		// watched/indexed counts -- there is no watch set to count.
-		log.Printf("watch: backend %s: whole-filesystem marks active; per-directory watches not needed",
-			w.Stats().Backend)
+		// The no-op "none" backend is wide for the opposite reason
+		// (live watching is OFF, so there is still no watch set); its
+		// refusal was already logged loudly by the strict selection,
+		// so nothing here may claim marks are active.
+		if name := w.Stats().Backend; name != "none" {
+			log.Printf("watch: backend %s: whole-filesystem marks active; per-directory watches not needed",
+				name)
+		}
 		return
 	}
 	home, rest, total := w.desiredSplit(ctx, w.budgetVal())

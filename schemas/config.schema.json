@@ -100,6 +100,12 @@
           "items": { "type": "string", "minLength": 1 },
           "default": [],
           "description": "Exclude patterns (same syntax as 'excludes') applied ONLY to live watching: matching directories never get a per-directory watch, but they are still indexed and still swept, so changes inside them appear within one sweep interval instead of ~1s. Use it to keep high-churn trees you still want searchable from consuming watch budget."
+        },
+        "backend": {
+          "type": "string",
+          "enum": ["auto", "fanotify", "inotify"],
+          "default": "auto",
+          "description": "Notification backend selection. 'auto' (the default) uses fanotify whole-filesystem marks when the binary can (needs CAP_SYS_ADMIN; see the README's 'Enable full-filesystem watching') and falls back to the per-directory inotify hot set otherwise. 'fanotify' is STRICT: when fanotify cannot start, live watching is disabled outright -- no inotify fallback; reconcile sweeps keep the index converging -- announced loudly in-app and in the log. 'inotify' skips the fanotify probe entirely (debugging). The app repairs an empty or unknown value to 'auto'."
         }
       },
       "additionalProperties": false
@@ -282,7 +288,7 @@
       "rescanIntervalMinutes": 0,
       "maxResults": 50,
       "search": { "fuzzyDisabled": false },
-      "watcher": { "maxWatches": 0, "sweepMinutes": 0, "sweepDisabled": false, "watchExcludes": [] },
+      "watcher": { "maxWatches": 0, "sweepMinutes": 0, "sweepDisabled": false, "watchExcludes": [], "backend": "auto" },
       "theme": "dark",
       "plugins": {
         "disabled": false,

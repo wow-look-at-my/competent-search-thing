@@ -156,7 +156,7 @@ func TestNormalize(t *testing.T) {
 		Hotkey:                "",
 		RescanIntervalMinutes: -5,
 		MaxResults:            0,
-		Watcher:               WatcherConfig{MaxWatches: -1, SweepMinutes: -3},
+		Watcher:               WatcherConfig{MaxWatches: -1, SweepMinutes: -3, Backend: " FaNoTiFy "},
 	}
 	c.Normalize()
 	require.Len(t, c.Roots, 2)
@@ -170,14 +170,23 @@ func TestNormalize(t *testing.T) {
 	require.Equal(t, 0, c.Watcher.SweepMinutes, "negative sweepMinutes repairs to 0 (the default cadence)")
 	require.Equal(t, -1, c.Watcher.MaxWatches, "negative maxWatches means unlimited and is kept")
 	require.Nil(t, c.Watcher.WatchExcludes, "watchExcludes are not defaulted on normalize")
+	require.Equal(t, WatcherBackendFanotify, c.Watcher.Backend,
+		"watcher.backend is trimmed and lowercased to its canonical spelling")
 
-	keep := Config{Theme: "light"}
+	keep := Config{Theme: "light", Watcher: WatcherConfig{Backend: WatcherBackendInotify}}
 	keep.Normalize()
 	require.Equal(t, "light", keep.Theme, "a configured theme is preserved")
+	require.Equal(t, WatcherBackendInotify, keep.Watcher.Backend, "a valid backend is preserved")
+
+	unknown := Config{Watcher: WatcherConfig{Backend: "kqueue"}}
+	unknown.Normalize()
+	require.Equal(t, WatcherBackendAuto, unknown.Watcher.Backend,
+		"an unknown watcher.backend is repaired to auto")
 
 	var empty Config
 	empty.Normalize()
 	require.Equal(t, Default().Roots, empty.Roots, "no roots falls back to default root")
+	require.Equal(t, WatcherBackendAuto, empty.Watcher.Backend, "an empty watcher.backend means auto")
 
 	allEmpty := Config{Roots: []string{""}}
 	allEmpty.Normalize()

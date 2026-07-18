@@ -66,6 +66,7 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 			SweepMinutes:  45,
 			SweepDisabled: true,
 			WatchExcludes: []string{"node_modules", "/home/*/scratch"},
+			Backend:       WatcherBackendFanotify,
 		},
 		Theme: "light",
 		Plugins: PluginsConfig{
@@ -122,6 +123,10 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"non-bool sweepDisabled":           `{"watcher":{"sweepDisabled":"yes"}}`,
 		"non-array watchExcludes":          `{"watcher":{"watchExcludes":"node_modules"}}`,
 		"empty watchExcludes pattern":      `{"watcher":{"watchExcludes":[""]}}`,
+		"unknown watcher backend":          `{"watcher":{"backend":"kqueue"}}`,
+		"misspelled watcher backend":       `{"watcher":{"backend":"inotfy"}}`,
+		"empty watcher backend":            `{"watcher":{"backend":""}}`,
+		"non-string watcher backend":       `{"watcher":{"backend":true}}`,
 		"bad theme name":                   `{"theme":"../evil"}`,
 		"bad plugin entry id":              `{"plugins":{"entries":{"Bad ID":{}}}}`,
 		"non-object settings":              `{"plugins":{"entries":{"calc":{"settings":"loud"}}}}`,

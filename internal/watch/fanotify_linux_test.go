@@ -1,10 +1,12 @@
 package watch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -475,4 +477,63 @@ func TestFanotifyProductionReadFn(t *testing.T) {
 	time.Sleep(20 * time.Millisecond) // let the goroutine reach the poll (best-effort)
 	require.NoError(t, stopW.Close())
 	require.ErrorIs(t, <-done, errFanoClosed)
+}
+
+func TestBackendSelectionScriptedConstructors(t *testing.T) {
+	// Drives newBackendNotifier through a scripted fanotify
+	// constructor, so all three watcher.backend selections are pinned
+	// without CAP_SYS_ADMIN: strict mode never falls back to inotify
+	// (fanotify or the "none" notifier, loudly), auto falls back
+	// cleanly, and the pinned inotify mode never even probes fanotify.
+	orig := newFanotifyFn
+	defer func() { newFanotifyFn = orig }()
+	roots := []string{t.TempDir()}
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	// Constructor failure (the unprivileged reality).
+	newFanotifyFn = func([]string) (notifier, error) { return nil, errors.New("EPERM: no CAP_SYS_ADMIN") }
+
+	n, err := newBackendNotifier("fanotify", roots)()
+	require.NoError(t, err, "strict mode degrades to the none notifier, never an error")
+	bi, ok := n.(backendInfo)
+	require.True(t, ok)
+	name, wide := bi.kind()
+	require.Equal(t, "none", name, "strict mode must NOT fall back to inotify")
+	require.True(t, wide)
+	require.NoError(t, n.Close())
+	require.Contains(t, buf.String(),
+		`watch: backend "fanotify" required by config but unavailable (EPERM: no CAP_SYS_ADMIN); live watching DISABLED, sweeps keep the index converging`,
+		"the strict refusal is announced loudly")
+
+	buf.Reset()
+	n, err = newBackendNotifier("auto", roots)()
+	require.NoError(t, err)
+	_, isInfo := n.(backendInfo)
+	require.False(t, isInfo, "auto falls back to plain per-directory fsnotify")
+	require.NoError(t, n.Close())
+	require.Contains(t, buf.String(), "watch: fanotify unavailable (EPERM: no CAP_SYS_ADMIN); falling back to per-directory inotify watches")
+
+	// Constructor success: both fanotify-capable selections take it.
+	fake := newFakeNotifier()
+	calls := 0
+	newFanotifyFn = func([]string) (notifier, error) { calls++; return fake, nil }
+
+	n, err = newBackendNotifier("fanotify", roots)()
+	require.NoError(t, err)
+	require.Same(t, fake, n, "strict mode uses the fanotify notifier when it starts")
+	n, err = newBackendNotifier("auto", roots)()
+	require.NoError(t, err)
+	require.Same(t, fake, n, "auto prefers fanotify when it starts")
+	require.Equal(t, 2, calls)
+
+	n, err = newBackendNotifier("inotify", roots)()
+	require.NoError(t, err)
+	_, isInfo = n.(backendInfo)
+	require.False(t, isInfo, "the pinned inotify mode yields plain fsnotify")
+	require.NoError(t, n.Close())
+	require.Equal(t, 2, calls, "the pinned inotify mode never probes fanotify")
+	require.NoError(t, fake.Close())
 }

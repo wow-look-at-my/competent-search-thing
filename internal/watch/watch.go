@@ -102,6 +102,19 @@ type Options struct {
 	// snapshot carries the trigger. Implementations must not call back
 	// into the Watcher's Stop.
 	OnDegraded func(Stats)
+	// Backend selects the notification backend (wire config's
+	// watcher.backend here). "" or "auto" = automatic detection:
+	// fanotify whole-filesystem marks when the kernel, privileges, and
+	// filesystems allow, else per-directory fsnotify. "fanotify" =
+	// STRICT: require the fanotify backend; when it cannot start the
+	// watcher runs with NO live watching at all (the no-op "none"
+	// notifier -- Stats().Backend reports "none", nothing is watched,
+	// nothing is delivered) instead of silently falling back to
+	// inotify, and the refusal is logged loudly; sweeps keep the index
+	// converging. "inotify" = skip the fanotify probe and use
+	// per-directory fsnotify directly (debugging). Unrecognized values
+	// behave like "auto" (config normalization canonicalizes upstream).
+	Backend string
 }
 
 // Stats is a snapshot of the watcher's health for logs and the UI.
@@ -110,7 +123,9 @@ type Stats struct {
 	// "inotify" for the per-directory fsnotify model (the uniform
 	// default everywhere), "fanotify" when Start detected the
 	// whole-filesystem backend (linux with CAP_SYS_ADMIN and
-	// markable filesystems; see backendInfo).
+	// markable filesystems; see backendInfo), "none" when the strict
+	// Options.Backend="fanotify" mode could not start fanotify: no
+	// live watching at all, sweeps only.
 	Backend string
 	// Budget is the resolved MaxWatches cap (math.MaxInt when
 	// unlimited); 0 until Start resolved it.
@@ -230,11 +245,12 @@ func New(m *index.Manager, roots []string, ex *index.Excluder, opt Options) *Wat
 		w.pinned[r] = struct{}{}
 		w.rootList = append(w.rootList, r)
 	}
-	// The production constructor auto-detects the backend for these
-	// normalized roots (fanotify whole-filesystem marks with a clean
-	// fallback to per-directory fsnotify); it needs the roots, so it
-	// is bound after the loop above. Unit tests swap the seam.
-	w.newNotifier = newAutoNotifier(w.rootList)
+	// The production constructor resolves Options.Backend for these
+	// normalized roots (auto-detection with its clean
+	// fanotify-to-fsnotify fallback, the strict fanotify-or-nothing
+	// mode, or pinned fsnotify); it needs the roots, so it is bound
+	// after the loop above. Unit tests swap the seam.
+	w.newNotifier = newBackendNotifier(opt.Backend, w.rootList)
 	return w
 }
 

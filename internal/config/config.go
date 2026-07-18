@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // EnvConfigDir overrides the directory containing config.json (used by
@@ -45,6 +46,23 @@ const (
 // DefaultFirefoxTabsMaxResults caps one Open Tabs section (see
 // OpenTabsConfig).
 const DefaultFirefoxTabsMaxResults = 6
+
+// Watcher backend selection values (WatcherConfig.Backend).
+const (
+	// WatcherBackendAuto (the default) uses fanotify whole-filesystem
+	// marks when the kernel, privileges, and filesystems allow, and
+	// falls back to the per-directory inotify hot set otherwise.
+	WatcherBackendAuto = "auto"
+	// WatcherBackendFanotify is STRICT: fanotify or nothing. When the
+	// fanotify backend cannot start, live watching is disabled
+	// outright -- never a silent inotify fallback -- and the index
+	// converges through sweeps only, announced loudly in-app and in
+	// the log.
+	WatcherBackendFanotify = "fanotify"
+	// WatcherBackendInotify skips the fanotify probe and uses the
+	// per-directory inotify hot set directly (mainly for debugging).
+	WatcherBackendInotify = "inotify"
+)
 
 // Config is the on-disk configuration.
 type Config struct {
@@ -159,6 +177,18 @@ type WatcherConfig struct {
 	// one sweep interval instead of ~1s. Use it to keep high-churn
 	// trees you still want searchable from consuming watch budget.
 	WatchExcludes []string `json:"watchExcludes,omitempty"`
+	// Backend selects the notification backend (the WatcherBackend*
+	// constants): "auto" (the default; fanotify whole-filesystem marks
+	// when the binary can use them, else the per-directory inotify hot
+	// set), "fanotify" (STRICT: when fanotify cannot start, live
+	// watching is DISABLED -- never a silent inotify fallback -- and
+	// sweeps keep the index converging), or "inotify" (skip the
+	// fanotify probe; for debugging). Normalize lowercases the value
+	// and repairs empty or unknown values to "auto" -- no migration
+	// note is recorded for that repair because the effective backend is
+	// never silent: the watch layer logs it at startup and the frontend
+	// shows a notice chip whenever coverage is not full.
+	Backend string `json:"backend,omitempty"`
 }
 
 // BangsConfig configures the bang system.
@@ -371,7 +401,8 @@ func Save(c Config) error {
 // zero/negative knobs get their defaults (the firefox.frequentSites
 // and firefox.openTabs numbers included; a negative
 // watcher.sweepMinutes becomes 0 = the built-in cadence), an empty
-// theme name gets the default theme, nil
+// theme name gets the default theme, watcher.backend is lowercased and
+// repaired to "auto" when empty or unknown, nil
 // plugin entries and bang aliases become empty maps, and an empty
 // sigil list gets the default sigils. Excludes are left as the user
 // wrote them (an explicitly empty list means "exclude nothing"), and
@@ -403,6 +434,14 @@ func (c *Config) Normalize() {
 	}
 	if c.Watcher.SweepMinutes < 0 {
 		c.Watcher.SweepMinutes = 0
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Watcher.Backend)) {
+	case WatcherBackendFanotify:
+		c.Watcher.Backend = WatcherBackendFanotify
+	case WatcherBackendInotify:
+		c.Watcher.Backend = WatcherBackendInotify
+	default: // "", "auto", or anything unknown
+		c.Watcher.Backend = WatcherBackendAuto
 	}
 	if c.MaxResults <= 0 {
 		c.MaxResults = DefaultMaxResults
