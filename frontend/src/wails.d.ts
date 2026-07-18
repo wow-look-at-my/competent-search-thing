@@ -39,6 +39,11 @@ interface PluginAction {
   value?: string; // every type except run_command and activate_window
   argv?: string[]; // run_command only
   window?: string; // activate_window only: the window id to focus
+  // run_command only, set by the builtin app launchers: the .desktop
+  // entry behind the launch; Go resolves it for launch capabilities
+  // (D-Bus activation, startup notification) so the launched app's
+  // window ends up focused. Echo it back unchanged.
+  desktop_id?: string;
 }
 
 // One virtual result in a "plugin:results" emission (internal/plugin

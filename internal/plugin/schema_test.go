@@ -266,13 +266,15 @@ func TestSanitizeActionInternalTypesStripped(t *testing.T) {
 }
 
 func TestSanitizeActionClearsStrayWindow(t *testing.T) {
-	// A window id smuggled onto an external action type is cleared,
-	// exactly like a stray argv on a value-carrying action.
+	// A window id or desktop id smuggled onto an external action type
+	// is cleared, exactly like a stray argv on a value-carrying action:
+	// both fields are internal-only and only the builtin providers may
+	// set them.
 	cases := []Action{
-		{Type: ActionOpenPath, Value: "/tmp/x", Window: "42"},
-		{Type: ActionOpenURL, Value: "https://example.com/", Window: "42"},
-		{Type: ActionCopyText, Value: "x", Window: "42"},
-		{Type: ActionRunCommand, Argv: []string{"true"}, Window: "42"},
+		{Type: ActionOpenPath, Value: "/tmp/x", Window: "42", DesktopID: "x.desktop"},
+		{Type: ActionOpenURL, Value: "https://example.com/", Window: "42", DesktopID: "x.desktop"},
+		{Type: ActionCopyText, Value: "x", Window: "42", DesktopID: "x.desktop"},
+		{Type: ActionRunCommand, Argv: []string{"true"}, Window: "42", DesktopID: "x.desktop"},
 	}
 	for _, a := range cases {
 		t.Run(a.Type, func(t *testing.T) {
@@ -283,6 +285,8 @@ func TestSanitizeActionClearsStrayWindow(t *testing.T) {
 			require.Len(t, results, 1)
 			require.NotNil(t, results[0].Action)
 			require.Empty(t, results[0].Action.Window)
+			require.Empty(t, results[0].Action.DesktopID,
+				"an external plugin must never steer the credentialed launch path")
 		})
 	}
 }
