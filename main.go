@@ -5,7 +5,8 @@
 // The Go side embeds the built frontend (frontend/dist) and hosts the
 // Wails runtime; the bound application object lives in internal/app and
 // owns the index engine (internal/index), the live-update layer
-// (internal/watch: fsnotify watcher + periodic rescanner), and the
+// (internal/watch: fanotify/inotify watcher + reconcile sweeps +
+// periodic rescanner), and the
 // platform layer (internal/platform: global hotkey, cursor-display
 // positioning, open/reveal). Argument handling lives in internal/cli: a
 // bare invocation boots the GUI as a single instance (internal/ipc unix
