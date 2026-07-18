@@ -259,6 +259,11 @@ type PreviewKagiConfig struct {
 	// environment variable, if set"; with neither, the web-search
 	// preview stays unavailable.
 	APIKey string `json:"apiKey"`
+	// BaseURL is a custom API base URL, e.g. a self-hosted
+	// Kagi-compatible server; empty = the official endpoint
+	// (https://kagi.com). Passed through verbatim (no env fallback);
+	// requests go to <baseUrl>/api/v1/search.
+	BaseURL string `json:"baseUrl"`
 	// MaxResults caps one web-search preview (default 8).
 	MaxResults int `json:"maxResults"`
 }
@@ -270,6 +275,12 @@ type PreviewOpenAIConfig struct {
 	// variable, if set"; with neither, the answer preview stays
 	// unavailable.
 	APIKey string `json:"apiKey"`
+	// BaseURL is a custom API base URL, e.g. an OpenAI-compatible
+	// server; empty means "use the OPENAI_BASE_URL environment
+	// variable, if set", else the official endpoint
+	// (https://api.openai.com). Passed through verbatim; requests go
+	// to <baseUrl>/v1/responses (the Responses API).
+	BaseURL string `json:"baseUrl"`
 	// Model names the model answering (default "gpt-5-mini").
 	Model string `json:"model"`
 	// MaxOutputTokens caps one answer (default 1024).
