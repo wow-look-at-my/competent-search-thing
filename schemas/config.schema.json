@@ -70,27 +70,14 @@
       "default": "dark",
       "description": "The UI theme: a builtin ('dark', 'light') or the name of a user theme file at <configDir>/themes/<name>.json (see theme.schema.json). An unknown or invalid theme is logged and falls back to 'dark'. An empty value means the default."
     },
-    "search": {
-      "$ref": "#/$defs/searchConfig"
-    },
-    "plugins": {
-      "$ref": "#/$defs/pluginsConfig"
-    },
-    "bangs": {
-      "$ref": "#/$defs/bangsConfig"
-    },
-    "tray": {
-      "$ref": "#/$defs/trayConfig"
-    },
-    "history": {
-      "$ref": "#/$defs/historyConfig"
-    },
-    "window": {
-      "$ref": "#/$defs/windowConfig"
-    },
-    "firefox": {
-      "$ref": "#/$defs/firefoxConfig"
-    },
+    "search": { "$ref": "#/$defs/searchConfig" },
+    "plugins": { "$ref": "#/$defs/pluginsConfig" },
+    "bangs": { "$ref": "#/$defs/bangsConfig" },
+    "tray": { "$ref": "#/$defs/trayConfig" },
+    "history": { "$ref": "#/$defs/historyConfig" },
+    "window": { "$ref": "#/$defs/windowConfig" },
+    "firefox": { "$ref": "#/$defs/firefoxConfig" },
+    "preview": { "$ref": "#/$defs/previewConfig" },
     "rewrites": {
       "type": "array",
       "items": {
@@ -279,6 +266,93 @@
       },
       "additionalProperties": false
     },
+    "previewConfig": {
+      "title": "Preview pane configuration",
+      "description": "The right-hand preview pane showing the selected result (text with syntax highlighting, image thumbnails, directory listings, metadata; explicit-trigger Kagi web search and OpenAI answers). Off by default. Zero or negative numbers and an empty openai.model are repaired to the defaults by the app; this schema rejects them.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "true turns the preview pane on and widens the window to windowWidth x windowHeight. Read once at startup; the window size cannot change while the app runs."
+        },
+        "windowWidth": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1600,
+          "description": "Window width in pixels while the pane is enabled (default 1600). Ignored when enabled is false."
+        },
+        "windowHeight": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 800,
+          "description": "Window height in pixels while the pane is enabled (default 800). Ignored when enabled is false."
+        },
+        "textMaxKB": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 256,
+          "description": "How much of a text file one preview reads, in KiB (default 256); longer files are truncated with a marker."
+        },
+        "imageMaxEdge": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 800,
+          "description": "An image thumbnail's longest edge in pixels (default 800); larger sources are downscaled."
+        },
+        "dirMaxEntries": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 200,
+          "description": "Maximum entries in one directory listing preview (default 200)."
+        },
+        "kagi": { "$ref": "#/$defs/previewKagiConfig" },
+        "openai": { "$ref": "#/$defs/previewOpenAIConfig" }
+      },
+      "additionalProperties": false
+    },
+    "previewKagiConfig": {
+      "title": "Kagi web-search preview",
+      "type": "object",
+      "properties": {
+        "apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "SECRET: the Kagi Search API token. Passed through verbatim and never logged; keep config.json private when set. Empty means 'use the KAGI_API_KEY environment variable, if set'; with neither, the web-search preview stays unavailable."
+        },
+        "maxResults": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 8,
+          "description": "Maximum results in one web-search preview (default 8)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "previewOpenAIConfig": {
+      "title": "OpenAI answer preview",
+      "type": "object",
+      "properties": {
+        "apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "SECRET: the OpenAI API key. Passed through verbatim and never logged; keep config.json private when set. Empty means 'use the OPENAI_API_KEY environment variable, if set'; with neither, the answer preview stays unavailable."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "default": "gpt-5-mini",
+          "description": "The model answering (default 'gpt-5-mini'). An empty value is repaired to the default by the app; this schema rejects it."
+        },
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1024,
+          "description": "Maximum tokens in one answer (default 1024)."
+        }
+      },
+      "additionalProperties": false
+    },
     "windowConfig": {
       "title": "Native window configuration",
       "type": "object",
@@ -397,6 +471,16 @@
           "maxResults": 6,
           "profileDir": ""
         }
+      },
+      "preview": {
+        "enabled": false,
+        "windowWidth": 1600,
+        "windowHeight": 800,
+        "textMaxKB": 256,
+        "imageMaxEdge": 800,
+        "dirMaxEntries": 200,
+        "kagi": { "apiKey": "", "maxResults": 8 },
+        "openai": { "apiKey": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 }
       }
     }
   ]

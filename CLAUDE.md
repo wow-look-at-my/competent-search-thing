@@ -47,7 +47,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   with its own cwd/PATH), then prefers the STABLE spelling of that
   path via platform.StableExecutable(exe, args0-seam) -- resolved
   os.Executable dies with versioned symlinked installs (Homebrew
-  Cellar/Nix/stow) on every upgrade, so the PATH-shim or argv[0]
+  Cellar/Nix/stow) on every upgrade, so the PATH-shim, the structural
+  Homebrew mapping (brewpath.go: the Cellar path taken apart into the
+  linked <prefix>/<rest> then opt fallback -- needs no PATH/argv[0]
+  cooperation, which the gsd-boot context lacks), or the argv[0]
   symlink wins whenever it is proven (os.SameFile) to be the running
   binary, logged once when it differs -- calls
   gsettings.EnsureBinding(hotkeyCtx, run, hk,
@@ -149,7 +152,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   back to dark; GetCustomCSS returns <configDir>/themes/custom.css
   verbatim when <= 64KB (the unvalidated escape hatch), else "". The
   hotkey callback `toggle` (rate-limited 250ms against key
-  autorepeat) hides the bar when visible; when hidden it FIRST
+  autorepeat) hides the bar when visible; a toggle finding the bar
+  hidden but hidden within the last toggleGap (lastHide, stamped by
+  every Hide) is DROPPED, not re-summoned -- pressing the combo on an
+  OPEN bar can hide it through a side channel before the callback
+  runs (grab activation delivers FocusOut to the focused bar ->
+  frontend blur handler -> Hide; on the gsettings backend the toggle
+  then arrives a "<exe> toggle" process spawn + IPC later), and
+  branching on the visible flag alone turned exactly those dismiss
+  presses into re-summons, so the combo could never dismiss there;
+  when hidden beyond that window it FIRST
   captures app context (`captureAppContext`: CaptureFocused +
   RefreshRunningAsync + RefreshWindowsAsync +
   EnsureFreshInstalled(5m) -- the bar window
@@ -192,8 +204,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   frontend echoes back (defense in depth), logs it, then executes:
   copy_text -> ClipboardSetText (bar stays open); open_path (abs
   path only) and open_url (http/https + host only) -> the open seam;
-  run_command (1..16 non-empty <=1024-byte argv) -> the run seam
-  (launcher, detached); run_builtin -> rescan (Rescanner.Request;
+  run_command (1..16 non-empty <=1024-byte argv; a non-empty
+  DesktopID must be a bare *.desktop file name per
+  launch.ValidDesktopID) -> runCommandAction (launch.go): with a
+  DesktopID on linux it resolves handlerByID and takes the
+  credentialed path -- dbus Activate for DBusActivatable apps (what
+  focuses an already-running app), else the validated argv through
+  the run seam WITH the credential env -- plus watcher + launch log;
+  without one, byte-identical old behavior (run seam, detached, nil
+  env); run_builtin -> rescan (Rescanner.Request;
   friendly error while the index is still building) / reload
   (newRegistry, swap under mutex, Close the old) / config (open
   config.json) / version (copy `Version`, stays open) / quit
@@ -209,17 +228,50 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
   incl. run/activateWindow/appSource plus getenv/executable/args0/detectSession/
-  startPortal/ensureGnomeBinding, in window.go; defaults in New, plus
+  startPortal/ensureGnomeBinding AND the launch seams --
+  open/reveal/run take extraEnv now (reveal also startupID),
+  launchExec, resolveHandler, handlerByID, mintCredential,
+  prepareLaunch, dbusLaunch, watchState, snRemove -- in window.go;
+  defaults in New, plus
   the `newRegistry` and `newTray` seams); unit tests MUST replace
   them (see
   newTestApp, which also nils appSource, stubs newRegistry AND
-  newTray so no config, X11 or session-bus IO happens, pins getenv to
-  "" and detectSession to
+  newTray so no config, X11 or session-bus IO happens, pins goos to
+  "linux" -- identical launch-path behavior on the darwin CI job;
+  tests exercising other OSes set goos themselves -- pins getenv to
+  "" (no DISPLAY = raise watcher off) and detectSession to
   the unknown session -- keeping every test on the native
-  hotkey/positioning path unless it overrides detectSession -- and
-  makes startPortal/ensureGnomeBinding recording fakes) -- real
-  runtime funcs abort the process without a Wails context. Open/Reveal call the platform launcher and hide the
-  bar on success. `app.Result` is a type alias of `index.Result`
+  hotkey/positioning path unless it overrides detectSession -- makes
+  startPortal/ensureGnomeBinding recording fakes, and stubs the
+  launch seams: the handler never resolves, the mint yields none,
+  prepareLaunch stays deliberately silent; launch_test.go overrides
+  members per test) -- real
+  runtime funcs abort the process without a Wails context. Open/Reveal
+  run the CREDENTIALED LAUNCH PATH (launch.go) and hide the bar on
+  success: linux-only (launchEnabled gates on goos; macOS/Windows
+  keep the plain launcher call), ordering per launch = resolve the
+  handler (resolveHandler seam; reveal resolves Target{IsDir:true} =
+  the file MANAGER) -> mint a credential while the bar still holds
+  focus (mintCredential seam, gated by launch.ShouldMint -- no mint
+  for handlers with neither StartupNotify nor DBusActivatable) ->
+  watcherBefore snapshot (only when getenv DISPLAY != "" and the
+  watchState seam works) -> transport cascade (dispatchOpen: dbus
+  org.freedesktop.Application Open via launch.ApplicationDBusCall +
+  dbusLaunch seam, then the handler's own launch.ExpandExec argv via
+  launchExec seam unless Terminal, then the open seam = xdg-open
+  candidates; every tier carries launch.CredentialEnv, every
+  fall-through is logged) -> armRaiseWatcher (launch.RunWatcher
+  goroutine bounded by the app-lifetime launchCtx, cancelled in
+  Shutdown and left cancelled; when it ends -- and immediately on a
+  failed dispatch, or after launchReapDelay when no watcher could
+  arm -- endStartupSequence reaps an x11-sn sequence via the
+  snRemove seam) -> ONE log line launch.LogLine ("launch: <verb>
+  <target> handler=... credential=<kind>:<id8> transport=... watcher=
+  on|off"). openConfigFile routes through openTarget too. Startup
+  runs announceLaunch once (linux only): prepareLaunch seam (native
+  Wayland serial listener) + "launch: activation credentials enabled
+  (session=<kind>)". Blank targets skip straight to the launcher's
+  own validation. `app.Result` is a type alias of `index.Result`
   (the JSON tags path/name/isDir plus the optional hint live in
   internal/index). Search with an absolute-path query and ZERO index
   results may return ONE synthetic hint result (hint.go): the path
@@ -449,7 +501,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   6, profileDir ""}, openTabs {maxResults 6, profileDir ""}} -- the
   frequentSites defaults encode ">10 visits in 30 days AND >=1 in 7";
   the numeric knobs are Normalize-repaired to defaults when <= 0,
-  both profileDirs are passed through verbatim). Lives under
+  both profileDirs are passed through verbatim), preview {enabled,
+  windowWidth 1600, windowHeight 800, textMaxKB 256, imageMaxEdge 800,
+  dirMaxEntries 200, kagi {apiKey, maxResults 8}, openai {apiKey,
+  model "gpt-5-mini", maxOutputTokens 1024}} -- the opt-in preview
+  pane (zero value = off); numerics and an empty model are
+  Normalize-repaired, the API keys pass through verbatim and are never
+  logged. Lives under
   os.UserConfigDir(); the `COMPETENT_SEARCH_CONFIG_DIR` env var
   overrides the directory (tests rely on this); `Dir()` exposes that
   directory (the plugins/ and themes/ dirs and history.json live
@@ -552,7 +610,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (Request/Response/Result/Action, v=1; Result also carries Keywords
   <=8x64 runes -- extra engine match texts -- and MatchRanges <=32
   half-open RUNE pairs on Title, normalizeRanges clamps/sorts/merges
-  against the post-truncation title) and `SanitizeResponse`, which
+  against the post-truncation title; Action carries the
+  INTERNAL-ONLY DesktopID json:"desktop_id" -- the .desktop entry
+  behind a builtin run_command launch, consumed by the app's
+  credentialed launch path) and `SanitizeResponse`, which
   clamps/validates everything an external plugin returns: 20-result
   cap, rune caps (title 200/subtitle 300/badge 24/field 40+200, max 8
   fields), control chars -> spaces everywhere, icon = builtin name or
@@ -561,7 +622,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   copy_text <=8 KiB, run_command 1..16 argv <=1024 B each and the
   whole RESULT is dropped unless the manifest sets allow_run_command;
   internal-only set_query/run_builtin/activate_window always stripped
-  and a stray Action.Window on external types cleared; anything
+  and a stray Action.Window OR Action.DesktopID on external types
+  cleared; anything
   removed gets a human-readable reason for logging). trigger.go:
   `Trigger` Compile/Match/Boost -- prefix (case-insensitive,
   rune-folded) / regex (ci RE2 on the RAW query) / all_queries paths
@@ -624,7 +686,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   snapshot (empty query = first 15 alphabetical, prefix 100 /
   substring 80, cap 15, run_command argv via `parseDesktopExec`:
   quotes, backslash escapes, %-field codes stripped; the shared
-  scoring/sort/cap/result-build helper is `collectAppResults`);
+  scoring/sort/cap/result-build helper is `collectAppResults`, whose
+  actions also carry DesktopID = the InstalledApp.ID so the app can
+  launch with activation credentials);
   builtin_apps_search.go "apps-search"/Apps -- installed apps in
   NORMAL results: no bangs, a real all_queries Trigger (match
   override on builtinBase, effective min 2 runes), ranking exact 100
@@ -663,6 +727,144 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Exhaustively
   unit-tested, table-driven, plus an end-to-end manifest ->
   registry -> /bin/sh transport dispatch test.
+- `internal/launch` -- the pure decision half of "focus and raise on
+  launch" (README "Focus and raise on launch" holds the user-facing
+  capability matrix), exhaustively unit-tested headless; the
+  OS/display glue lives behind internal/platform/native seams wired
+  by internal/app launch.go. launch.go: `Target`/`ClassifyTarget`
+  (URL = scheme+host parse, else file path; URI = file:// form;
+  IsDir steers handler resolution to inode/directory), `Handler`
+  (DesktopID/Exec/WMClass/Exe/DBusActivatable/StartupNotify/
+  Terminal), `Credential` + kinds (none / x11-sn / wayland-gdk /
+  wayland-xdg), `ShouldMint` (unresolved handlers always mint;
+  resolved ones only with StartupNotify or DBusActivatable -- GLib's
+  dangling-busy-cursor gating), `CredentialEnv` (DESKTOP_STARTUP_ID
+  + XDG_ACTIVATION_TOKEN, BOTH carrying the same id -- launchees
+  pick whichever their toolkit understands, and Firefox >= 108
+  forwards it through its remoting), `LogLine` (the one-per-launch
+  log format), `ValidDesktopID` (bare *.desktop name). exec.go:
+  `ExpandExec` -- .desktop Exec tokenization (parseDesktopExec-
+  compatible quoting) with target substitution: %f/%F = raw path
+  (URL verbatim for URL targets, documented divergence), %u/%U =
+  URI, %% literal, %i/%c/%k + deprecated codes drop, unknown codes
+  keep their percent, NO target code = target appended last
+  (xdg-open-style divergence from GLib's silent no-file launch), and
+  an Exec whose program token does not survive a target-less
+  expansion is unlaunchable (nil -- the target must never become
+  argv[0]). dbus.go: `ApplicationDBusCall` derives the
+  org.freedesktop.Application call (bus name = id sans .desktop,
+  validated; path = "."->"/" + "-"->"_"; Open with URIs / Activate;
+  platform-data = desktop-startup-id + activation-token) and
+  `DBusActivate` performs it over a private never-autolaunched
+  session-bus conn (ctx-bounded; the method call itself
+  D-Bus-activates the service -- that IS the launch); tested against
+  a throwaway dbus-daemon like internal/portal. watcher.go: the
+  X-side raise watcher -- `XWindow`/`XState` (stacking order,
+  bottom-to-top), `NewIdentity` (pid + startup id + lowercased
+  WM_CLASS hints from StartupWMClass/exe base/argv0 base),
+  `RunWatcher` polls (default 6s deadline / 200ms interval,
+  ctx-bounded): an ACTIVE window matching the identity ends the
+  watch silently (self-raised; never double-activate), a NEW window
+  (not in the Before snapshot) matching pid/startup-id/class is
+  activated once (topmost match wins), and at the deadline the
+  most-recently-used EXISTING window matching the class hints
+  (highest _NET_WM_USER_TIME, ties toward the top of the stack) is
+  raised -- the editor-tab-into-running-instance fix -- else one
+  quiet give-up log. sn.go: `SNRemoveMessage` (the libsn `remove:
+  ID="..."` wire string, backslash-escaped, NUL-terminated) +
+  `SNChunks` (20-byte ClientMessage chunks, last zero-padded) behind
+  native.RemoveStartupSequence.
+- `internal/preview` -- the preview-pane engine, pure (no Wails
+  imports) and headless-tested. preview.go holds the wire contract:
+  Target {kind "file"|"plugin"|"none", path, isDir, title, subtitle,
+  pluginName} and Payload {gen, kind
+  "meta"|"text"|"image"|"dir"|"web"|"ai"|"error", title, path, meta,
+  text, image, dir, web, ai, err, durMs}. dispatch.go:
+  `New(parentCtx, Options{TextMaxKB, ImageMaxEdge, DirMaxEntries,
+  Emit, KagiAPIKey, KagiMaxResults, OpenAIAPIKey, OpenAIModel,
+  OpenAIMaxOutputTokens, AICachePath, Logf})` -> Dispatcher;
+  `Preview(target, gen)` is synchronous bookkeeping only (mutex'd
+  cancel of the previous request + gen store; kind none/"" =
+  cancel-only) and spawns ONE goroutine per request; file targets
+  emit a FAST meta card first, then the rich payload (dir listing /
+  capped text / thumbnail / a final meta card with a "binary" note)
+  under per-request hard timeouts (2s meta/dir/text, 4s image, via
+  runUnder racing the provider against the ctx); symlinks are
+  described (readlink) and never followed; every emit is suppressed
+  once the request ctx is cancelled; provider funcs are Dispatcher
+  seam fields for tests (webFn/aiFn stay nil while the matching key
+  is unconfigured -- WebConfigured()/AIConfigured() report it).
+  `FetchWeb(query, gen)` / `FetchAI(query, gen)` are the explicit
+  web/AI triggers sharing Preview's SAME cancel+generation space (a
+  fetch supersedes an in-flight file preview and vice versa, via
+  arm()): exactly ONE payload per accepted fetch -- kind "web"
+  {query, results, cached} / "ai" {query, answer, model, cached} /
+  "error" (blank query = "empty query"; no key = an error naming the
+  config key + env fallback; provider failure; 10s web / 90s ai hard
+  timeouts spelled out by fetchErrMsg). kagi.go: KagiClient
+  (NewKagiClient(key, maxResults); BaseURL/HTTPClient/Now exported
+  seams) -- Kagi Search API v1 verified 2026-07-18: GET
+  {base}/api/v1/search?q=&limit=, header `Authorization: Bot <key>`,
+  response data.search rows {url,title,snippet} (the deprecated v0
+  flat data array with t==0 rows is still accepted on parse);
+  Search(ctx, q) -> (results, cachedBool, err) with an exact-query
+  TTL cache (15min, 100 entries, oldest-inserted evicted; hits =
+  zero network + no token spend) and a client-side token bucket
+  (burst 3, refill 1/s; empty = "kagi: rate limited, retry shortly"
+  WITHOUT dialing); non-2xx = "kagi: HTTP <code>" + at most a
+  200-char parsed error message -- never the raw body, never the key.
+  openai.go: OpenAIClient (NewOpenAIClient(key, model,
+  maxOutputTokens); same exported seams) -- OpenAI Responses API
+  verified 2026-07-18: POST {base}/v1/responses `Authorization:
+  Bearer <key>` {"model","input","max_output_tokens"}; Ask(ctx,
+  prompt) -> (answer, resolvedModel, err) concatenating output[]
+  "message" items' "output_text" parts (top-level output_text is
+  SDK-only per the docs; read as a defensive fallback), status
+  "incomplete" appends a "[truncated by max_output_tokens]" marker
+  line ("[truncated: content_filter]" for that reason; marker-only
+  answers are legal -- reasoning models can spend every token before
+  emitting text), API-error JSON {"error":{"message"}} -> terse
+  capped error. aicache.go: AICache -- the persistent AI answer LRU
+  on internal/history's atomic pattern (lazy one-shot Load: missing =
+  empty+nil, corrupt = empty + error, logged once via the Logf seam;
+  temp-file+rename 0600 writes, MkdirAll parent; in-memory updates
+  even when the write fails; "" path = memory-only): {"v":1,
+  "entries":[{k,model,prompt,answer,at}]} at Options.AICachePath, k =
+  sha256 hex of model+NUL+FULL prompt (the stored prompt is capped
+  2KB, answer 32KB), Get(model,prompt) refreshes recency (At),
+  Put evicts past 128 entries by oldest At; hits emit Cached:true
+  with zero network. cache.go: bytes-bounded LRU of rich payloads
+  (16 MiB / 64 entries; key = path + mtime + size + provider kind);
+  hits skip the meta emission. text.go: IsBinary (NUL or >30% bad
+  bytes), ReadCapped (maxKB, ToValidUTF8-sanitized), LangHint (~35
+  extensions + Dockerfile/Makefile name matches -> highlight.js
+  names). image.go: Thumbnail -- extension gate
+  (png/jpg/jpeg/gif/webp/bmp), 32 MiB source + 40-megapixel
+  DecodeConfig gates, decode raced against ctx, x/image/draw
+  ApproxBiLinear downscale to maxEdge, JPEG q80 for JPEG sources else
+  PNG, base64 data URI. dir.go: ListCapped (dirs first,
+  case-insensitive, capped, entry.Info sizes, never recurses).
+  meta.go: MetaFor (humanized size, mtime, mode, kind guess, path +
+  extra rows). Wired by internal/app's preview.go: Options.Preview
+  (config section) gates startPreview, which resolves each API key
+  ONCE -- config value, else the env var through the getenv seam
+  (KAGI_API_KEY / OPENAI_API_KEY), exactly the resolution
+  GetPreviewConfig reports -- and passes <configDir>/aicache.json
+  (config.Dir() failure = one log line + memory-only cache); the
+  keys flow only into preview.Options, never into logs or payloads;
+  bound methods QueryPreview(target, gen) / GetPreviewConfig()
+  (enabled + kagi/openai configured, keys never exposed) /
+  FetchWebPreview / FetchAIPreview (gen store + dispatcher FetchWeb/
+  FetchAI; nil dispatcher = no-op, so the frontend's Ctrl+K / Ctrl+I
+  strip is the ONLY call path and nothing automatic ever dials);
+  emissions
+  ride the "preview:result" event behind the previewGen atomic gate
+  (the QueryPlugins pattern); Shutdown cancels the dispatcher's
+  parent ctx. previewsize.go `PreviewWindowSize()` (translucent.go
+  pattern: fresh config.Load, any error = disabled) tells main.go the
+  window size BEFORE wails.Run; flag off = exactly 680x460, flag on =
+  preview.windowWidth/Height, threaded into Options.WindowW/WindowH
+  for the positioning math (app.winW/winH).
 - `internal/appctx` -- app-context collection for the plugin system,
   pure and headless-tested: the data types (AppInfo / InstalledApp /
   WindowInfo (ID uint32/Title/App/PID) /
@@ -894,13 +1096,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the binding is never rewritten (user edits in GNOME Settings
   survive; Existing=true) and the stored command SELF-HEALS: it is
   rewritten (command key only; Repaired=true + PreviousCommand for
-  the app's loud old->new repair log) exactly when it can no longer
-  launch the running binary -- empty/unparseable (commandExecutable,
-  the GLib-shell inverse of ToggleCommand), a non-absolute
-  executable, a dead path, or a live path that is a different file
-  (os.Stat + os.SameFile vs the new command's exe; the
-  brew-upgrade-broke-the-shortcut field fix) -- while a textually
-  different but still-working spelling is kept verbatim (zero writes,
+  the app's loud old->new repair log) when it can no longer launch
+  the running binary -- empty/unparseable (commandExecutable, the
+  GLib-shell inverse of ToggleCommand), a non-absolute executable, a
+  dead path, or a live path that is a different file (os.Stat +
+  os.SameFile vs the new command's exe) -- AND when it still launches
+  it but through a Cellar-versioned spelling while the new command's
+  is not (platform.ParseBrewCellar on both exes; the migration that
+  keeps the binding alive across brew upgrades -- the
+  brew-upgrade-broke-the-shortcut field fix), while any other
+  still-working spelling (stable, custom symlink, and
+  versioned->versioned when no stable spelling was derivable) is kept
+  verbatim (zero writes,
   read-back verifies the on-disk command); a fresh entry gets the first free
   candidate of [configured, <Control><Alt>space, <Super>space]
   (normalization-deduped) checked against every accelerator in the
@@ -941,11 +1148,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   token -> error naming it) into an OS-neutral `Hotkey{Mods,Key}`;
   `StableExecutable(exe, args0)` (stablepath.go: the stable spelling
   of the running binary's path for anything that outlives the process
-  -- exec.LookPath(base) hit kept UNRESOLVED, else abs/Abs-resolved
-  args0, else exe, every candidate same-binary-guarded via
-  os.Stat+os.SameFile so a foreign same-named binary never wins;
-  tested with real tempdir trees, symlinks and t.Setenv(PATH), no
-  seams);
+  -- exec.LookPath(base) hit kept UNRESOLVED, else the structural
+  Homebrew candidates (brewpath.go: `ParseBrewCellar` splits an
+  absolute <prefix>/Cellar/<formula>/<version>/<rest> path at its
+  LAST separator-bounded "Cellar" component, prefix read from the
+  path itself -- no hardcoded prefix list; candidates = linked
+  <prefix>/<rest> then opt <prefix>/opt/<formula>/<rest>, and they
+  precede args0 because in the gsd-boot context args0 IS the
+  versioned Cellar path), else abs/Abs-resolved args0, else exe,
+  every candidate same-binary-guarded via os.Stat+os.SameFile so a
+  foreign same-named binary never wins; tested with real tempdir
+  trees, symlinks and t.Setenv(PATH), no seams);
   geometry (`Rect`, `Display{Rect,Work,Primary}`, `PickDisplay`,
   `BarPosition` = centered, top at H/3 - winH/3, clamped;
   `DisplayForWindow` by window center; `WailsPosition` translating
@@ -954,7 +1167,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   `RevealCommands`: linux xdg-open / dbus-send --print-reply
   FileManager1.ShowItems with xdg-open-parent fallback, darwin open /
   open -R, windows rundll32 FileProtocolHandler / explorer /select,)
-  and `Launcher` (injectable `Run`/`Start` seams + `Logf`; every
+  and `Launcher` (injectable `Run`/`Start` seams + `Logf`, BOTH
+  env-carrying now: Start(argv, extraEnv) returns (pid, wait, err)
+  and appends extraEnv to the inherited child environment -- nil =
+  byte-identical old behavior, never os.Setenv -- while
+  OpenEnv/RevealEnv/Launch thread the launch-credential env through
+  (Open/Reveal stay as nil-env wrappers); RevealCommands takes the
+  startupID injected into the ShowItems startup-id argument ("" =
+  the old call); `Launch(argv, extraEnv)` runs ONE resolved handler
+  command line under the same observed-grace semantics and returns
+  the child pid for the raise watcher; every
   spawn logs its exact argv; Open/Reveal observe the child for a 1.5s
   grace window -- a non-zero exit inside it returns an error with
   captured stderr (unlinked-temp-file capture, never a pipe a
@@ -1002,10 +1224,60 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   walk kept per-WINDOW: skips untitled windows + os.Getpid()'s own,
   caps 100, no pid dedup -- and winlist_linux.go's ActivateWindow(id)
   = EWMH _NET_ACTIVE_WINDOW ClientMessage to the root window (format
-  32, source indication 2 = pager, SubstructureRedirect|Notify mask);
+  32, source indication 2 = pager, SubstructureRedirect|Notify mask)
+  now carrying a FRESH X server timestamp (launchwatch_linux.go's
+  serverTime: zero-length property-append on a scratch InputOnly
+  window + PropertyNotify, the gdk_x11_get_server_time trick; 0
+  fallback = old behavior) so it passes mutter's staleness gate and
+  may switch workspaces;
   winlist_other.go (!linux) = OpenWindows not-ok + ActivateWindow
   error, so the open-windows feature does not exist on
-  windows/darwin yet); windows = GetForegroundWindow / EnumWindows (package-
+  windows/darwin yet). LAUNCH GLUE (all linux-only, stubs in
+  launch_other.go): identity_linux.go = cgo init() g_set_prgname
+  ("competent-search-thing") at import time, before wails builds the
+  window -- wails sets no prgname, so the window had NO WM_CLASS and
+  NO wayland app_id (the CI screenshot script matches by title +
+  geometry, unaffected); launchmint_linux.{go,h,c} = the GTK-thread
+  credential mint: runOnGTKThread (g_main_context_is_owner inline
+  check, else g_idle_add + cgo.Handle trampoline csRunOnGtk, bounded
+  wait, abandoned callbacks self-clean) and cs_mint(desktop_id) --
+  the mint DESCRIBES the launch with a real GAppInfo (the resolved
+  handler's desktop entry, else a synthesized commandline appinfo
+  flagged SUPPORTS_STARTUP_NOTIFICATION): GLib >= 2.76 asserts
+  G_IS_APP_INFO and returns NULL for a NULL info (verified
+  empirically on 2.80; never pass NULL) -- (X11 = gdk
+  app-launch-context startup-notify id incl. the libsn "new:"
+  broadcast; Wayland = the same call (notify_launch uuid on 3.24.33,
+  real token on >= 3.24.35) falling back to a hand-rolled
+  xdg_activation_v1 token on a DEDICATED wl_event_queue via proxy
+  wrappers -- never dispatching gdk's queue -- authenticated by the
+  last wl_keyboard serial from our own listener (cs_prepare_wayland,
+  scheduled at Startup via PrepareLaunch; the keymap fd is closed
+  per event) and the toplevel's live wl_surface fetched AT MINT TIME
+  (gdk recreates wayland objects per hide/show; never cache));
+  xdg-activation-v1-client-protocol.h +
+  xdg-activation-v1-protocol_linux.c are COMMITTED wayland-scanner
+  output (provenance + regen command in their headers;
+  ASCII-sanitized copyright sign; the _linux.c suffix keeps them off
+  darwin builds); launchresolve_linux.go = thread-safe gio handler
+  resolution (ResolveHandler: content-type guess by file NAME or
+  inode/directory, or URI scheme; HandlerByDesktopID; both fill
+  launch.Handler incl. DBusActivatable/StartupNotify/StartupWMClass/
+  Terminal/Exec/Exe); launchwatch_linux.go = WatchState (stacking
+  client list -- _NET_CLIENT_LIST_STACKING falling back to
+  _NET_CLIENT_LIST, read via windowPropPresent because a
+  present-but-EMPTY list (the bar hides right after a launch; an
+  otherwise empty desktop is the NORMAL post-launch state) must poll
+  as zero windows, not as "no EWMH WM" -- + active window +
+  per-window pid/WM_CLASS
+  instance+class/_NET_STARTUP_ID/_NET_WM_USER_TIME, conn-per-call,
+  cap 100), internAtomAlways (only_if_exists=false -- scratch atoms
+  must be CREATED), scratchWindow, serverTime, and
+  RemoveStartupSequence = the libsn "remove:" broadcast (20-byte
+  format-8 ClientMessages to root, first chunk typed
+  _NET_STARTUP_INFO_BEGIN then _NET_STARTUP_INFO, PropertyChange
+  event mask, scratch sender window) reaping sequences
+  chromium-family launchees never complete; windows = GetForegroundWindow / EnumWindows (package-
   level callback) + IsWindowVisible + GetWindowTextW +
   GetWindowThreadProcessId + OpenProcess/QueryFullProcessImageNameW
   (Name = exe base sans extension), InstalledApps = HKLM+HKCU
@@ -1027,7 +1299,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `frontend/` -- vanilla TypeScript + Vite. No framework. `index.html`
   (query row with inline SVG magnifier + hidden bang chip; #results
   split into #file-results / static #empty ("No matches") /
-  #plugin-results zones; status bar + degraded chip; <template>s for
+  #plugin-results zones; status bar + degraded chip; #preview-pane
+  (spinner + #preview-body + command strip with the web/AI buttons
+  and the pane flash) as one more #bar child, display:none unless
+  body.with-preview; <template>s for
   folder/file icons AND plugin section/row skeletons) + `src/main.ts`
   (search as-you-type: 15ms debounce + sequence-number stale-response
   drop; every generation also fire-and-forgets QueryPlugins(query,
@@ -1104,12 +1379,65 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   consumes var(--plugin-accent, var(--accent, #89b4fa)) and a :root
   bridge defines --accent: var(--sb-accent, #89b4fa), so the theming
   design tokens apply when present and the standalone default
-  otherwise, merge order irrelevant) + `src/wails.d.ts` (ambient
+  otherwise, merge order irrelevant; plus the appended .preview-* /
+  body.with-preview block: with-preview turns #bar into a grid --
+  680px left column holding query row/results/status exactly as
+  before, pane in the rest behind a border-left divider, minmax(0,..)
+  tracks so pane content scrolls instead of growing the window --
+  and without the class every preview rule is inert, so flag-off
+  layout is behavior-identical to the classic bar; CI screenshots run
+  preview-off and must stay that way, the 680x460 window regex in
+  screenshots.ts depends on it) + `src/preview.ts` (ALL pane logic;
+  initPreview is called from wire() with the GetPreviewConfig answer
+  and installs NOTHING when enabled is false -- no body class, no
+  listeners, hooks no-op; enabled: sets body.with-preview, subscribes
+  "preview:result" (drop unless payload.gen === its own previewGen
+  counter, cancel the 150ms-delayed spinner on the first accepted
+  payload, REPLACE the pane content per emission -- a fast meta card
+  precedes the rich payload, cache hits skip it), and registers its
+  OWN window keydown handler for Ctrl/Cmd+K (web) / Ctrl/Cmd+I (AI)
+  -- main.ts's document handler is untouched, Tab and Ctrl+Enter
+  stay reserved. previewOnSelectionChange (called from select(), the
+  single selection choke point) paints an instant zero-IO header and
+  debounces QueryPreview 90ms so held arrows stay free, dedupes
+  same-row re-selects by target key, and maps rows to targets: file
+  -> {kind:"file", path, isDir}, plugin -> {kind:"plugin", title,
+  subtitle, pluginName}, null -> idle card + a debounced
+  {kind:"none"} cancel; previewOnQueryChange feeds the strip labels
+  ('Search web for "<q>"') and idles the pane on a cleared query.
+  The strip buttons + hotkeys are the ONLY FetchWebPreview /
+  FetchAIPreview call sites (never automatic; unconfigured providers
+  render disabled with a hint naming the config key). Renderers are
+  text-node-only: meta dl, text (header + highlighted <pre><code> +
+  truncation footer), image (<img src=dataUri> + WxH/size caption),
+  dir (rows cloning the folder/file icon templates + "N more..."),
+  web (rows whose click runs RunPluginAction("preview", open_url) --
+  Go validates, opens, hides the bar), ai (answer + model/cached
+  badges + a Copy button through copy_text, <= 8 KiB Go-side, with a
+  "Copied"/error flash in the pane strip), error card) +
+  `src/highlight.ts` (hljs lib/core + explicitly registered grammars
+  covering every LangHint name in the hljs distribution plus
+  shell/plaintext -- never import the full highlight.js bundle;
+  highlightInto: hinted registered language first, highlightAuto only
+  for unhinted content <= 64KB, plain text beyond or on any error;
+  `setHighlighted` is the frontend's ONE sanctioned innerHTML-style
+  sink -- createContextualFragment into the single <code> node, fed
+  EXCLUSIVELY hljs output, which HTML-escapes all content text by
+  documented contract; the invariant comment on it is load-bearing,
+  never route other strings through it) + `src/hljs-theme.css` (hljs
+  token classes -> var(--sb-*) with literal dark fallbacks, scoped
+  under .preview-code, imported from highlight.ts; NO new --sb-*
+  token -- the :root block is a sync_test.go contract) +
+  `src/wails.d.ts` (ambient
   types for the Wails-injected `window.go` / `window.runtime` incl.
   EventsOn, the event payload shapes, and the plugin wire contract
-  TargetInfo/PluginAction (incl. activate_window + its window
-  field)/PluginResult/PluginEmission -- keep in sync
-  with internal/app + internal/plugin payload structs).
+  TargetInfo/PluginAction (incl. activate_window + its window field
+  and the internal desktop_id the frontend echoes back
+  unchanged)/PluginResult/PluginEmission plus the preview contract
+  Preview{Target,Payload,ConfigInfo,MetaRow,Text,Image,Dir,DirEntry,
+  Web,WebResult,AI} and the four preview bound methods -- keep in
+  sync with internal/app + internal/plugin + internal/preview payload
+  structs).
 - `examples/plugins/` -- three shipped example plugins, INERT until a
   user copies one into `<configDir>/plugins/` (each has a README with
   install/usage): `calc` (python3 command plugin: trigger prefix "=",
@@ -1201,6 +1529,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the theming tokens apply when present. Never apply plugin data
   as literal inline color/background styles, and never widen the
   whitelisted styling knobs without updating the sanitizer + README.
+- No innerHTML anywhere in the frontend, with EXACTLY ONE sanctioned
+  exception: highlight.ts's `setHighlighted`, which parses
+  highlight.js output (hljs HTML-escapes all content text by
+  documented contract) into the preview pane's single <code> node via
+  createContextualFragment. Every other render path builds text
+  nodes; never add a second markup sink.
 - Changing any JSON-carrying struct (config, manifest/trigger, wire
   Request/Response, themeFile) or its validator means updating the
   matching schema in `schemas/` in the same commit -- the lockstep

@@ -1,281 +1,294 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/wow-look-at-my/competent-search-thing/master/schemas/plugin-response.schema.json",
-  "title": "competent-search-thing plugin response (wire protocol v1)",
-  "description": "The JSON a plugin returns for one request: written to stdout for command plugins, the body of a 2xx reply for HTTP plugins. Source of truth: internal/plugin/schema.go (Response and SanitizeResponse). IMPORTANT: the app does not reject a response that violates the caps below -- it CLAMPS, clears, or drops the offending pieces (a too-long title is truncated, score 101 becomes 100, a 21st result is dropped, an invalid accent_color is cleared). This schema is a strict AUTHORING AID: staying inside it guarantees the app shows exactly what you sent.",
-  "type": "object",
-  "properties": {
-    "v": {
-      "type": "integer",
-      "const": 1,
-      "default": 1,
-      "description": "Protocol version. Omitting it means 1; any other value makes the app drop the whole response."
-    },
-    "results": {
-      "type": "array",
-      "maxItems": 20,
-      "items": {
-        "$ref": "#/$defs/result"
-      },
-      "description": "The virtual results, best first (ordering within a section is yours; sections are ordered by arrival). The app keeps at most 20 and drops the rest. Returning no results (empty or absent) is the idiomatic 'nothing to show' answer and emits nothing."
-    }
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://raw.githubusercontent.com/wow-look-at-my/competent-search-thing/master/schemas/plugin-response.schema.json",
+ "title": "competent-search-thing plugin response (wire protocol v1)",
+ "description": "The JSON a plugin returns for one request: written to stdout for command plugins, the body of a 2xx reply for HTTP plugins. Source of truth: internal/plugin/schema.go (Response and SanitizeResponse). IMPORTANT: the app does not reject a response that violates the caps below -- it CLAMPS, clears, or drops the offending pieces (a too-long title is truncated, score 101 becomes 100, a 21st result is dropped, an invalid accent_color is cleared). This schema is a strict AUTHORING AID: staying inside it guarantees the app shows exactly what you sent.",
+ "type": "object",
+ "properties": {
+  "v": {
+   "type": "integer",
+   "const": 1,
+   "default": 1,
+   "description": "Protocol version. Omitting it means 1; any other value makes the app drop the whole response."
   },
-  "additionalProperties": false,
-  "$defs": {
-    "result": {
-      "title": "One virtual result",
-      "type": "object",
-      "required": [
-        "title"
-      ],
-      "properties": {
-        "title": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200,
-          "description": "The result's main line; required and non-empty (an empty title drops the result). Max 200 runes; control characters become spaces."
-        },
-        "subtitle": {
-          "type": "string",
-          "maxLength": 300,
-          "description": "Dim second line. Max 300 runes."
-        },
-        "icon": {
-          "type": "string",
-          "anyOf": [
-            {
-              "pattern": "^[a-z0-9_-]+$"
-            },
-            {
-              "maxLength": 32
-            }
-          ],
-          "description": "Either a builtin icon name ([a-z0-9_-]+: calculator, globe, clock, star, info, warning, link, terminal, text, hash, bolt, app, puzzle; unknown names render as the puzzle glyph) or a short literal glyph such as an emoji (at most 32 BYTES, no control characters)."
-        },
-        "badge": {
-          "type": "string",
-          "maxLength": 24,
-          "description": "Small pill on the right. Max 24 runes."
-        },
-        "accent_color": {
-          "type": "string",
-          "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$",
-          "description": "Row accent as #rgb or #rrggbb. Applied ONLY via the --plugin-accent CSS custom property; anything else is cleared by the app."
-        },
-        "score": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 100,
-          "default": 50,
-          "description": "Ranking hint 0..100 (absent means 50). The app CLAMPS out-of-range values (101 becomes 100); this schema rejects them so authors notice."
-        },
-        "fields": {
-          "type": "array",
-          "maxItems": 8,
-          "items": {
-            "$ref": "#/$defs/field"
-          },
-          "description": "Extra 'label: value' detail lines. The app keeps at most 8."
-        },
-        "action": {
-          "$ref": "#/$defs/action"
-        },
-        "keywords": {
-          "type": "array",
-          "maxItems": 8,
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64
-          },
-          "description": "Extra match texts for the engine's text gating: query terms match a result when they match its title OR any keyword. All-queries plugins should list whatever the result should be findable by; the app trims, strips control characters, caps each keyword at 64 runes and keeps at most 8. Triggered (prefix/regex/bang) plugins do not need keywords."
-        },
-        "matchRanges": {
-          "type": "array",
-          "maxItems": 32,
-          "items": {
-            "type": "array",
-            "minItems": 2,
-            "maxItems": 2,
-            "items": {
-              "type": "integer",
-              "minimum": 0
-            }
-          },
-          "description": "Optional per-character highlight ranges on title: half-open [start, end) RUNE index pairs. Absent means the app computes them for text-matched results (and none for triggered-tier results); supplying your own wins. The app clamps pairs into the title's rune length, drops empty/inverted pairs, sorts, merges overlaps, and keeps at most 32."
-        }
-      },
-      "additionalProperties": false
+  "results": {
+   "type": "array",
+   "maxItems": 20,
+   "items": {
+    "$ref": "#/$defs/result"
+   },
+   "description": "The virtual results, best first (ordering within a section is yours; sections are ordered by arrival). The app keeps at most 20 and drops the rest. Returning no results (empty or absent) is the idiomatic 'nothing to show' answer and emits nothing."
+  }
+ },
+ "additionalProperties": false,
+ "$defs": {
+  "result": {
+   "title": "One virtual result",
+   "type": "object",
+   "required": [
+    "title"
+   ],
+   "properties": {
+    "title": {
+     "type": "string",
+     "minLength": 1,
+     "maxLength": 200,
+     "description": "The result's main line; required and non-empty (an empty title drops the result). Max 200 runes; control characters become spaces."
     },
-    "field": {
-      "title": "Detail field",
-      "type": "object",
-      "required": [
-        "label",
-        "value"
-      ],
-      "properties": {
-        "label": {
-          "type": "string",
-          "maxLength": 40,
-          "description": "Max 40 runes."
-        },
-        "value": {
-          "type": "string",
-          "maxLength": 200,
-          "description": "Max 200 runes."
-        }
+    "subtitle": {
+     "type": "string",
+     "maxLength": 300,
+     "description": "Dim second line. Max 300 runes."
+    },
+    "icon": {
+     "type": "string",
+     "anyOf": [
+      {
+       "pattern": "^[a-z0-9_-]+$"
       },
-      "additionalProperties": false
+      {
+       "maxLength": 32
+      }
+     ],
+     "description": "Either a builtin icon name ([a-z0-9_-]+: calculator, globe, clock, star, info, warning, link, terminal, text, hash, bolt, app, puzzle; unknown names render as the puzzle glyph) or a short literal glyph such as an emoji (at most 32 BYTES, no control characters)."
+    },
+    "badge": {
+     "type": "string",
+     "maxLength": 24,
+     "description": "Small pill on the right. Max 24 runes."
+    },
+    "accent_color": {
+     "type": "string",
+     "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$",
+     "description": "Row accent as #rgb or #rrggbb. Applied ONLY via the --plugin-accent CSS custom property; anything else is cleared by the app."
+    },
+    "score": {
+     "type": "number",
+     "minimum": 0,
+     "maximum": 100,
+     "default": 50,
+     "description": "Ranking hint 0..100 (absent means 50). The app CLAMPS out-of-range values (101 becomes 100); this schema rejects them so authors notice."
+    },
+    "fields": {
+     "type": "array",
+     "maxItems": 8,
+     "items": {
+      "$ref": "#/$defs/field"
+     },
+     "description": "Extra 'label: value' detail lines. The app keeps at most 8."
     },
     "action": {
-      "title": "Activation action",
-      "type": "object",
-      "description": "What Enter/click on the result does (omit for an inert row). External plugins may use open_path, open_url, copy_text and run_command; the types set_query, run_builtin and activate_window are INTERNAL-ONLY (produced by builtin providers) and are always stripped from plugin responses. 'value' carries the payload for all types except run_command, which uses 'argv'. Note: the byte caps below are enforced by the app in BYTES; maxLength here counts characters, which is equivalent for ASCII payloads.",
-      "required": [
-        "type"
-      ],
-      "properties": {
-        "type": {
-          "type": "string",
-          "enum": [
-            "open_path",
-            "open_url",
-            "copy_text",
-            "run_command"
-          ],
-          "description": "The action type."
-        },
-        "value": {
-          "type": "string",
-          "description": "Payload for open_path (absolute path, max 2048 bytes), open_url (http(s) URL with a host, max 2048 bytes) and copy_text (non-empty, max 8192 bytes)."
-        },
-        "argv": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "maxLength": 1024
-          },
-          "description": "Command line for run_command: 1..16 entries, each at most 1024 bytes, executed directly (no shell). The result is dropped entirely unless the manifest sets allow_run_command."
-        },
-        "window": {
-          "type": "string",
-          "description": "Window id carried by the INTERNAL-ONLY activate_window action (produced by the builtin Open Windows provider). External plugins cannot use it: activate_window actions are always stripped from plugin responses, and any 'window' value on the external types is cleared -- so this schema rejects every action carrying 'window'."
-        }
-      },
-      "additionalProperties": false,
-      "not": {
-        "required": [
-          "window"
-        ]
-      },
-      "oneOf": [
-        {
-          "properties": {
-            "type": {
-              "const": "open_path"
-            },
-            "value": {
-              "minLength": 1,
-              "maxLength": 2048
-            }
-          },
-          "required": [
-            "value"
-          ],
-          "not": {
-            "required": [
-              "argv"
-            ]
-          }
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "open_url"
-            },
-            "value": {
-              "pattern": "^https?://",
-              "maxLength": 2048
-            }
-          },
-          "required": [
-            "value"
-          ],
-          "not": {
-            "required": [
-              "argv"
-            ]
-          }
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "copy_text"
-            },
-            "value": {
-              "minLength": 1,
-              "maxLength": 8192
-            }
-          },
-          "required": [
-            "value"
-          ],
-          "not": {
-            "required": [
-              "argv"
-            ]
-          }
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "run_command"
-            },
-            "argv": {
-              "minItems": 1,
-              "maxItems": 16
-            }
-          },
-          "required": [
-            "argv"
-          ],
-          "not": {
-            "required": [
-              "value"
-            ]
-          }
-        }
-      ]
+     "$ref": "#/$defs/action"
+    },
+    "keywords": {
+     "type": "array",
+     "maxItems": 8,
+     "items": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+     },
+     "description": "Extra match texts for the engine's text gating: query terms match a result when they match its title OR any keyword. All-queries plugins should list whatever the result should be findable by; the app trims, strips control characters, caps each keyword at 64 runes and keeps at most 8. Triggered (prefix/regex/bang) plugins do not need keywords."
+    },
+    "matchRanges": {
+     "type": "array",
+     "maxItems": 32,
+     "items": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+       "type": "integer",
+       "minimum": 0
+      }
+     },
+     "description": "Optional per-character highlight ranges on title: half-open [start, end) RUNE index pairs. Absent means the app computes them for text-matched results (and none for triggered-tier results); supplying your own wins. The app clamps pairs into the title's rune length, drops empty/inverted pairs, sorts, merges overlaps, and keeps at most 32."
     }
+   },
+   "additionalProperties": false
   },
-  "examples": [
-    {
-      "v": 1,
-      "results": [
-        {
-          "title": "4",
-          "subtitle": "2+2",
-          "icon": "calculator",
-          "badge": "=",
-          "accent_color": "#8db8ff",
-          "score": 90,
-          "fields": [
-            {
-              "label": "Hex",
-              "value": "0x4"
-            },
-            {
-              "label": "Binary",
-              "value": "0b100"
-            }
-          ],
-          "action": {
-            "type": "copy_text",
-            "value": "4"
-          }
-        }
-      ]
+  "field": {
+   "title": "Detail field",
+   "type": "object",
+   "required": [
+    "label",
+    "value"
+   ],
+   "properties": {
+    "label": {
+     "type": "string",
+     "maxLength": 40,
+     "description": "Max 40 runes."
+    },
+    "value": {
+     "type": "string",
+     "maxLength": 200,
+     "description": "Max 200 runes."
     }
-  ]
+   },
+   "additionalProperties": false
+  },
+  "action": {
+   "title": "Activation action",
+   "type": "object",
+   "description": "What Enter/click on the result does (omit for an inert row). External plugins may use open_path, open_url, copy_text and run_command; the types set_query, run_builtin and activate_window are INTERNAL-ONLY (produced by builtin providers) and are always stripped from plugin responses. 'value' carries the payload for all types except run_command, which uses 'argv'. Note: the byte caps below are enforced by the app in BYTES; maxLength here counts characters, which is equivalent for ASCII payloads.",
+   "required": [
+    "type"
+   ],
+   "properties": {
+    "type": {
+     "type": "string",
+     "enum": [
+      "open_path",
+      "open_url",
+      "copy_text",
+      "run_command"
+     ],
+     "description": "The action type."
+    },
+    "value": {
+     "type": "string",
+     "description": "Payload for open_path (absolute path, max 2048 bytes), open_url (http(s) URL with a host, max 2048 bytes) and copy_text (non-empty, max 8192 bytes)."
+    },
+    "argv": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "maxLength": 1024
+     },
+     "description": "Command line for run_command: 1..16 entries, each at most 1024 bytes, executed directly (no shell). The result is dropped entirely unless the manifest sets allow_run_command."
+    },
+    "window": {
+     "type": "string",
+     "description": "Window id carried by the INTERNAL-ONLY activate_window action (produced by the builtin Open Windows provider). External plugins cannot use it: activate_window actions are always stripped from plugin responses, and any 'window' value on the external types is cleared -- so this schema rejects every action carrying 'window'."
+    },
+    "desktop_id": {
+     "type": "string",
+     "description": "Desktop-entry id carried by INTERNAL-ONLY run_command actions from the builtin app launchers (the .desktop entry behind the launch, e.g. \"code.desktop\"; the app resolves it for D-Bus activation and startup-notification capabilities so launching an already-running app focuses its window). External plugins cannot use it: the app clears 'desktop_id' on every external action, so this schema rejects every action carrying it."
+    }
+   },
+   "additionalProperties": false,
+   "not": {
+    "anyOf": [
+     {
+      "required": [
+       "window"
+      ]
+     },
+     {
+      "required": [
+       "desktop_id"
+      ]
+     }
+    ]
+   },
+   "oneOf": [
+    {
+     "properties": {
+      "type": {
+       "const": "open_path"
+      },
+      "value": {
+       "minLength": 1,
+       "maxLength": 2048
+      }
+     },
+     "required": [
+      "value"
+     ],
+     "not": {
+      "required": [
+       "argv"
+      ]
+     }
+    },
+    {
+     "properties": {
+      "type": {
+       "const": "open_url"
+      },
+      "value": {
+       "pattern": "^https?://",
+       "maxLength": 2048
+      }
+     },
+     "required": [
+      "value"
+     ],
+     "not": {
+      "required": [
+       "argv"
+      ]
+     }
+    },
+    {
+     "properties": {
+      "type": {
+       "const": "copy_text"
+      },
+      "value": {
+       "minLength": 1,
+       "maxLength": 8192
+      }
+     },
+     "required": [
+      "value"
+     ],
+     "not": {
+      "required": [
+       "argv"
+      ]
+     }
+    },
+    {
+     "properties": {
+      "type": {
+       "const": "run_command"
+      },
+      "argv": {
+       "minItems": 1,
+       "maxItems": 16
+      }
+     },
+     "required": [
+      "argv"
+     ],
+     "not": {
+      "required": [
+       "value"
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "examples": [
+  {
+   "v": 1,
+   "results": [
+    {
+     "title": "4",
+     "subtitle": "2+2",
+     "icon": "calculator",
+     "badge": "=",
+     "accent_color": "#8db8ff",
+     "score": 90,
+     "fields": [
+      {
+       "label": "Hex",
+       "value": "0x4"
+      },
+      {
+       "label": "Binary",
+       "value": "0b100"
+      }
+     ],
+     "action": {
+      "type": "copy_text",
+      "value": "4"
+     }
+    }
+   ]
+  }
+ ]
 }

@@ -72,9 +72,15 @@ func (appSource) OpenWindows() ([]appctx.WindowInfo, bool) {
 // _NET_ACTIVE_WINDOW client message: format 32, source indication
 // "pager" (a direct user request), sent to the root window with the
 // SubstructureRedirect|SubstructureNotify event mask so the window
-// manager receives it. A vanished window id is harmless -- the WM
-// ignores the message. No X server means an error and the caller
-// degrades.
+// manager receives it -- byte-identical in form to libwnck's
+// activate, the mechanism a taskbar click uses. The timestamp is the
+// X server's CURRENT time (fetched via serverTime), which always
+// passes mutter's staleness gate and additionally permits the
+// workspace switch a zero timestamp forbids; on a fetch failure it
+// degrades to the old zero timestamp ("buggy client" path: focus
+// still granted, no workspace switch). A vanished window id is
+// harmless -- the WM ignores the message. No X server means an error
+// and the caller degrades.
 func ActivateWindow(id uint32) error {
 	conn, err := xgb.NewConn()
 	if err != nil {
@@ -87,13 +93,17 @@ func ActivateWindow(id uint32) error {
 		return errors.New("the window manager does not support _NET_ACTIVE_WINDOW")
 	}
 	root := xproto.Setup(conn).DefaultScreen(conn).Root
+	ts := uint32(0)
+	if scratch, err := scratchWindow(conn, root); err == nil {
+		ts = serverTime(conn, scratch)
+	}
 	ev := xproto.ClientMessageEvent{
 		Format: 32,
 		Window: xproto.Window(id),
 		Type:   atom,
 		// data.l = [source indication, timestamp, requestor's active
-		// window, 0, 0] per the EWMH spec; 0 timestamps are accepted.
-		Data: xproto.ClientMessageDataUnionData32New([]uint32{activateSourcePager, 0, 0, 0, 0}),
+		// window, 0, 0] per the EWMH spec.
+		Data: xproto.ClientMessageDataUnionData32New([]uint32{activateSourcePager, ts, 0, 0, 0}),
 	}
 	return xproto.SendEventChecked(conn, false, root,
 		xproto.EventMaskSubstructureRedirect|xproto.EventMaskSubstructureNotify,

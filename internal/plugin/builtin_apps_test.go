@@ -102,6 +102,8 @@ func TestAppsThroughDispatch(t *testing.T) {
 	require.Equal(t, "apps", e.Plugin)
 	require.Len(t, e.Results, 1)
 	require.Equal(t, "Firefox", e.Results[0].Title)
+	require.Equal(t, &Action{Type: ActionRunCommand, Argv: []string{"firefox"}, DesktopID: "firefox.desktop"},
+		e.Results[0].Action, "the .desktop id rides the internal action for the credentialed launch path")
 }
 
 func TestParseDesktopExec(t *testing.T) {
