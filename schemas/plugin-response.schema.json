@@ -14,7 +14,9 @@
     "results": {
       "type": "array",
       "maxItems": 20,
-      "items": { "$ref": "#/$defs/result" },
+      "items": {
+        "$ref": "#/$defs/result"
+      },
       "description": "The virtual results, best first (ordering within a section is yours; sections are ordered by arrival). The app keeps at most 20 and drops the rest. Returning no results (empty or absent) is the idiomatic 'nothing to show' answer and emits nothing."
     }
   },
@@ -23,7 +25,9 @@
     "result": {
       "title": "One virtual result",
       "type": "object",
-      "required": ["title"],
+      "required": [
+        "title"
+      ],
       "properties": {
         "title": {
           "type": "string",
@@ -39,8 +43,12 @@
         "icon": {
           "type": "string",
           "anyOf": [
-            { "pattern": "^[a-z0-9_-]+$" },
-            { "maxLength": 32 }
+            {
+              "pattern": "^[a-z0-9_-]+$"
+            },
+            {
+              "maxLength": 32
+            }
           ],
           "description": "Either a builtin icon name ([a-z0-9_-]+: calculator, globe, clock, star, info, warning, link, terminal, text, hash, bolt, app, puzzle; unknown names render as the puzzle glyph) or a short literal glyph such as an emoji (at most 32 BYTES, no control characters)."
         },
@@ -64,20 +72,59 @@
         "fields": {
           "type": "array",
           "maxItems": 8,
-          "items": { "$ref": "#/$defs/field" },
+          "items": {
+            "$ref": "#/$defs/field"
+          },
           "description": "Extra 'label: value' detail lines. The app keeps at most 8."
         },
-        "action": { "$ref": "#/$defs/action" }
+        "action": {
+          "$ref": "#/$defs/action"
+        },
+        "keywords": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "description": "Extra match texts for the engine's text gating: query terms match a result when they match its title OR any keyword. All-queries plugins should list whatever the result should be findable by; the app trims, strips control characters, caps each keyword at 64 runes and keeps at most 8. Triggered (prefix/regex/bang) plugins do not need keywords."
+        },
+        "matchRanges": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "description": "Optional per-character highlight ranges on title: half-open [start, end) RUNE index pairs. Absent means the app computes them for text-matched results (and none for triggered-tier results); supplying your own wins. The app clamps pairs into the title's rune length, drops empty/inverted pairs, sorts, merges overlaps, and keeps at most 32."
+        }
       },
       "additionalProperties": false
     },
     "field": {
       "title": "Detail field",
       "type": "object",
-      "required": ["label", "value"],
+      "required": [
+        "label",
+        "value"
+      ],
       "properties": {
-        "label": { "type": "string", "maxLength": 40, "description": "Max 40 runes." },
-        "value": { "type": "string", "maxLength": 200, "description": "Max 200 runes." }
+        "label": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Max 40 runes."
+        },
+        "value": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Max 200 runes."
+        }
       },
       "additionalProperties": false
     },
@@ -85,11 +132,18 @@
       "title": "Activation action",
       "type": "object",
       "description": "What Enter/click on the result does (omit for an inert row). External plugins may use open_path, open_url, copy_text and run_command; the types set_query, run_builtin and activate_window are INTERNAL-ONLY (produced by builtin providers) and are always stripped from plugin responses. 'value' carries the payload for all types except run_command, which uses 'argv'. Note: the byte caps below are enforced by the app in BYTES; maxLength here counts characters, which is equivalent for ASCII payloads.",
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["open_path", "open_url", "copy_text", "run_command"],
+          "enum": [
+            "open_path",
+            "open_url",
+            "copy_text",
+            "run_command"
+          ],
           "description": "The action type."
         },
         "value": {
@@ -98,7 +152,10 @@
         },
         "argv": {
           "type": "array",
-          "items": { "type": "string", "maxLength": 1024 },
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          },
           "description": "Command line for run_command: 1..16 entries, each at most 1024 bytes, executed directly (no shell). The result is dropped entirely unless the manifest sets allow_run_command."
         },
         "window": {
@@ -107,39 +164,87 @@
         }
       },
       "additionalProperties": false,
-      "not": { "required": ["window"] },
+      "not": {
+        "required": [
+          "window"
+        ]
+      },
       "oneOf": [
         {
           "properties": {
-            "type": { "const": "open_path" },
-            "value": { "minLength": 1, "maxLength": 2048 }
+            "type": {
+              "const": "open_path"
+            },
+            "value": {
+              "minLength": 1,
+              "maxLength": 2048
+            }
           },
-          "required": ["value"],
-          "not": { "required": ["argv"] }
+          "required": [
+            "value"
+          ],
+          "not": {
+            "required": [
+              "argv"
+            ]
+          }
         },
         {
           "properties": {
-            "type": { "const": "open_url" },
-            "value": { "pattern": "^https?://", "maxLength": 2048 }
+            "type": {
+              "const": "open_url"
+            },
+            "value": {
+              "pattern": "^https?://",
+              "maxLength": 2048
+            }
           },
-          "required": ["value"],
-          "not": { "required": ["argv"] }
+          "required": [
+            "value"
+          ],
+          "not": {
+            "required": [
+              "argv"
+            ]
+          }
         },
         {
           "properties": {
-            "type": { "const": "copy_text" },
-            "value": { "minLength": 1, "maxLength": 8192 }
+            "type": {
+              "const": "copy_text"
+            },
+            "value": {
+              "minLength": 1,
+              "maxLength": 8192
+            }
           },
-          "required": ["value"],
-          "not": { "required": ["argv"] }
+          "required": [
+            "value"
+          ],
+          "not": {
+            "required": [
+              "argv"
+            ]
+          }
         },
         {
           "properties": {
-            "type": { "const": "run_command" },
-            "argv": { "minItems": 1, "maxItems": 16 }
+            "type": {
+              "const": "run_command"
+            },
+            "argv": {
+              "minItems": 1,
+              "maxItems": 16
+            }
           },
-          "required": ["argv"],
-          "not": { "required": ["value"] }
+          "required": [
+            "argv"
+          ],
+          "not": {
+            "required": [
+              "value"
+            ]
+          }
         }
       ]
     }
@@ -156,10 +261,19 @@
           "accent_color": "#8db8ff",
           "score": 90,
           "fields": [
-            { "label": "Hex", "value": "0x4" },
-            { "label": "Binary", "value": "0b100" }
+            {
+              "label": "Hex",
+              "value": "0x4"
+            },
+            {
+              "label": "Binary",
+              "value": "0b100"
+            }
           ],
-          "action": { "type": "copy_text", "value": "4" }
+          "action": {
+            "type": "copy_text",
+            "value": "4"
+          }
         }
       ]
     }

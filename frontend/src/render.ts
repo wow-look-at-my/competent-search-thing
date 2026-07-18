@@ -29,23 +29,69 @@ export function parentDir(path: string, name: string): string {
   return cut > 0 ? path.slice(0, cut) : "/";
 }
 
-// highlightedName renders name with the first case-insensitive
-// occurrence of query wrapped in a .hl span. Plain text nodes
-// everywhere: nothing here can inject markup.
-export function highlightedName(name: string, query: string): HTMLSpanElement {
+// appendHighlighted fills el with text, wrapping the characters inside
+// the engine-minted ranges in .hl spans -- per-character letter-color
+// highlighting (the .hl class changes ONLY the letter color via
+// --sb-highlight; deliberately no background rectangles). Ranges are
+// half-open RUNE (code point) index pairs from Go, sorted and merged;
+// JS strings are UTF-16, so the walk counts code points. Plain text
+// nodes everywhere: nothing here can inject markup, and the spans stay
+// inline inside el so ellipsis/flex truncation behaves as before.
+export function appendHighlighted(
+  el: HTMLElement,
+  text: string,
+  ranges: [number, number][] | undefined,
+): void {
+  if (ranges === undefined || ranges.length === 0) {
+    el.textContent = text;
+    return;
+  }
+  let rune = 0;
+  let ri = 0;
+  let plain = "";
+  let lit = "";
+  const flushPlain = () => {
+    if (plain !== "") {
+      el.append(plain);
+      plain = "";
+    }
+  };
+  const flushLit = () => {
+    if (lit !== "") {
+      const hl = document.createElement("span");
+      hl.className = "hl";
+      hl.textContent = lit;
+      el.append(hl);
+      lit = "";
+    }
+  };
+  for (const ch of text) {
+    // for..of iterates code points, matching Go's rune indices.
+    while (ri < ranges.length && rune >= ranges[ri][1]) {
+      ri++;
+    }
+    if (ri < ranges.length && rune >= ranges[ri][0] && rune < ranges[ri][1]) {
+      flushPlain();
+      lit += ch;
+    } else {
+      flushLit();
+      plain += ch;
+    }
+    rune++;
+  }
+  flushPlain();
+  flushLit();
+}
+
+// highlightedName renders a file row's name with the engine-minted
+// match ranges lit up.
+export function highlightedName(
+  name: string,
+  ranges: [number, number][] | undefined,
+): HTMLSpanElement {
   const span = document.createElement("span");
   span.className = "name";
-  const q = query.trim().toLowerCase();
-  const at = q === "" ? -1 : name.toLowerCase().indexOf(q);
-  if (at < 0) {
-    span.textContent = name;
-    return span;
-  }
-  span.append(name.slice(0, at));
-  const hl = document.createElement("span");
-  hl.className = "hl";
-  hl.textContent = name.slice(at, at + q.length);
-  span.append(hl, name.slice(at + q.length));
+  appendHighlighted(span, name, ranges);
   return span;
 }
 
@@ -57,7 +103,6 @@ export function highlightedName(name: string, query: string): HTMLSpanElement {
 export function renderResults(
   container: HTMLElement,
   items: WailsSearchResult[],
-  query: string,
   handlers: RowHandlers,
 ): HTMLDivElement[] {
   const rows: HTMLDivElement[] = [];
@@ -69,7 +114,7 @@ export function renderResults(
 
     const tpl = item.isDir ? folderTpl : fileTpl;
     row.append(tpl.content.cloneNode(true));
-    row.append(highlightedName(item.name, query));
+    row.append(highlightedName(item.name, item.matchRanges));
 
     const dir = document.createElement("span");
     dir.className = "dir";
@@ -235,8 +280,11 @@ function buildPluginRow(
 
   (row.querySelector(".plugin-icon") as HTMLSpanElement).textContent =
     iconGlyph(result.icon);
-  (row.querySelector(".plugin-title") as HTMLSpanElement).textContent =
-    result.title;
+  appendHighlighted(
+    row.querySelector(".plugin-title") as HTMLSpanElement,
+    result.title,
+    result.matchRanges,
+  );
   (row.querySelector(".plugin-subtitle") as HTMLSpanElement).textContent =
     result.subtitle ?? "";
 

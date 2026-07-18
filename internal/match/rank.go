@@ -149,6 +149,12 @@ func Rank(cands []Candidate, o RankOptions) []Ranked {
 				minted: true,
 			})
 		}
+		// Claimed sources answered the query and pre-ordered their
+		// results ("best first" per the wire contract): order by the
+		// hint alone and keep the source order on ties -- never the
+		// generic alphabetical tie-breaks.
+		sort.SliceStable(out, func(i, j int) bool { return out[i].score > out[j].score })
+		return capRanked(out, o.Limit)
 	case len(o.Terms) == 0:
 		if !o.Targeted {
 			return nil // an untargeted source with no query lists nothing

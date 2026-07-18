@@ -11,6 +11,11 @@ interface WailsSearchResult {
   // Optional note rendered in place of the parent-dir line (the
   // outside-indexed-roots hint; internal/index Result.Hint).
   hint?: string;
+  // Per-character highlight ranges on name: half-open [start, end)
+  // RUNE (code point) index pairs, sorted and merged, minted by the
+  // Go matching engine (internal/index Result.MatchRanges). JS
+  // strings are UTF-16: convert while walking code points.
+  matchRanges?: [number, number][];
 }
 
 // Bang-target info returned by QueryPlugins (internal/plugin
@@ -49,9 +54,16 @@ interface PluginResult {
   icon?: string; // builtin icon name [a-z0-9_-]+ OR literal glyph/emoji
   badge?: string;
   accent_color?: string; // "#rgb" | "#rrggbb" -- ONLY ever sets --plugin-accent
-  score?: number; // 0..100; in practice always present
+  score?: number; // 0..100; in practice always present (engine-minted)
   fields?: { label: string; value: string }[]; // <= 8
   action?: PluginAction; // absent => Enter/click is a no-op row
+  // Extra engine match texts (plugin authors' findability field);
+  // present on the wire but not rendered.
+  keywords?: string[];
+  // Per-character highlight ranges on title: half-open [start, end)
+  // RUNE index pairs (engine-minted, or plugin-supplied and
+  // sanitized). Same rendering as file-row matchRanges.
+  matchRanges?: [number, number][];
 }
 
 // Payload of the "plugin:results" event (internal/plugin Emission).

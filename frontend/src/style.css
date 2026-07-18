@@ -280,6 +280,15 @@ body {
   text-align: center;
 }
 
+.plugin-title .hl {
+  /* Per-character match highlight: LETTER COLOR ONLY (same rule as
+     .result .name .hl) -- never a background rectangle. The token is
+     chosen to stay readable on both the normal row background and
+     --sb-selection-bg. */
+  color: var(--sb-highlight);
+  font-weight: 600;
+}
+
 .plugin-subtitle {
   /* Dim, ellipsizes first -- the same language as .result .dir. */
   flex: 1 1 auto;

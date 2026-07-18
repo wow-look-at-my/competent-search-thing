@@ -86,6 +86,12 @@ type Config struct {
 	// Firefox configures the Firefox history integration (see
 	// internal/firefox).
 	Firefox FirefoxConfig `json:"firefox"`
+	// Rewrites are user-defined regex rewrite rules: a query matching
+	// a rule's pattern yields one instant top result opening the
+	// expanded URL (internal/plugin's rewrites source). Rules run in
+	// config order; invalid patterns are logged at startup and
+	// skipped.
+	Rewrites []RewriteRule `json:"rewrites,omitempty"`
 
 	// MigrationNotes describes, in human-readable lines, what the
 	// roots migration changed on this Load (empty when nothing did).
@@ -110,6 +116,28 @@ type PluginEntry struct {
 	// Settings is an opaque JSON object forwarded verbatim to the
 	// plugin in every request.
 	Settings json.RawMessage `json:"settings,omitempty"`
+}
+
+// RewriteRule is one regex rewrite rule (config "rewrites"): pattern
+// is a Go regexp (RE2) matched FULL-MATCH against the trimmed query
+// unless the user anchors it (a leading ^ or trailing $ keeps it
+// verbatim); replacement/title expand capture groups ($1, ${name},
+// $$). The expanded replacement must be an absolute http(s) URL --
+// open_url is the only action rewrites can produce.
+type RewriteRule struct {
+	// Name is the display name, shown as the result's subtitle.
+	Name string `json:"name"`
+	// Pattern is the rule's regular expression.
+	Pattern string `json:"pattern"`
+	// Replacement is the URL template.
+	Replacement string `json:"replacement"`
+	// Title optionally overrides the result title (same expansion);
+	// empty means the expanded URL.
+	Title string `json:"title,omitempty"`
+	// Icon optionally overrides the "link" icon.
+	Icon string `json:"icon,omitempty"`
+	// Disabled turns the rule off without deleting it.
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 // SearchConfig configures the search engine. The zero value means the

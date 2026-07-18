@@ -127,6 +127,20 @@ func (t *Trigger) Boost(focused *AppInfo) int {
 	return b
 }
 
+// Claims reports whether the trigger's prefix or regex path matches
+// query: the plugin CLAIMED the query (a calculator's "=6*7") rather
+// than receiving it from the all-queries fan-out. Consulted only
+// after Match already dispatched, so the focused gate and minimum
+// length are irrelevant here.
+func (t *Trigger) Claims(query string) bool {
+	if t.Prefix != "" {
+		if _, ok := cutPrefixFold(query, t.Prefix); ok {
+			return true
+		}
+	}
+	return t.re != nil && t.re.MatchString(query)
+}
+
 // textMatch tries the three text paths in order.
 func (t *Trigger) textMatch(query string) (string, bool) {
 	if t.Prefix != "" {
