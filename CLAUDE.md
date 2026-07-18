@@ -152,7 +152,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   back to dark; GetCustomCSS returns <configDir>/themes/custom.css
   verbatim when <= 64KB (the unvalidated escape hatch), else "". The
   hotkey callback `toggle` (rate-limited 250ms against key
-  autorepeat) hides the bar when visible; when hidden it FIRST
+  autorepeat) hides the bar when visible; a toggle finding the bar
+  hidden but hidden within the last toggleGap (lastHide, stamped by
+  every Hide) is DROPPED, not re-summoned -- pressing the combo on an
+  OPEN bar can hide it through a side channel before the callback
+  runs (grab activation delivers FocusOut to the focused bar ->
+  frontend blur handler -> Hide; on the gsettings backend the toggle
+  then arrives a "<exe> toggle" process spawn + IPC later), and
+  branching on the visible flag alone turned exactly those dismiss
+  presses into re-summons, so the combo could never dismiss there;
+  when hidden beyond that window it FIRST
   captures app context (`captureAppContext`: CaptureFocused +
   RefreshRunningAsync + RefreshWindowsAsync +
   EnsureFreshInstalled(5m) -- the bar window

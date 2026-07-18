@@ -98,10 +98,16 @@ type App struct {
 	hkOnce    sync.Once
 	notesOnce sync.Once
 
-	mu         sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, lastThemeErr, domReady, pendingShow, history
+	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, lastThemeErr, domReady, pendingShow, history
 	ctx        context.Context
 	visible    bool
 	lastToggle time.Time
+	// lastHide is when Hide last ran. A toggle whose show branch runs
+	// within toggleGap of it is treated as the dismiss press whose own
+	// side effects (the grab FocusOut -> frontend blur -> Hide chain)
+	// already hid the bar, and is dropped instead of re-summoning --
+	// see toggle in window.go.
+	lastHide   time.Time
 	hotkeyStop func()
 	// hotkeyCancel aborts the async portal/gsettings backend chain;
 	// portalHK is the active portal shortcut (nil otherwise);

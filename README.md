@@ -1476,7 +1476,13 @@ single instance around one unix socket (in `$XDG_RUNTIME_DIR`):
   just shows the already-running instance's bar and exits 0.
 - `competent-search-thing toggle` -- what the global hotkey does:
   hide when visible, summon when hidden. Starts the app when it is
-  not running (the bar shows once the frontend is ready).
+  not running (the bar shows once the frontend is ready). A toggle
+  landing moments after the bar was dismissed counts as that
+  dismissal instead of a re-summon: pressing a grabbed summon combo
+  on an open bar unfocuses it first (which already hides it, exactly
+  like clicking elsewhere), and the toggle -- on GNOME delivered
+  through a freshly spawned `competent-search-thing toggle` process
+  -- must not bounce the bar back open.
 - `competent-search-thing show` -- like toggle but never hides a
   visible bar (idempotent; also starts the app when needed).
 - `competent-search-thing hide` -- hides the running instance's bar;

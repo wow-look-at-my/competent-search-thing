@@ -18,7 +18,12 @@ import (
 
 // toggleGap rate-limits the hotkey toggle: X11 and Windows both
 // deliver key autorepeat while the combination is held, which would
-// otherwise flicker the bar.
+// otherwise flicker the bar. The same window classifies a toggle that
+// arrives just after a Hide as the dismiss press that caused that
+// hide through a side channel (grab FocusOut -> frontend blur; see
+// toggle) -- it comfortably covers the gsettings backend's process
+// spawn + IPC latency while staying below deliberate
+// dismiss-then-resummon typing speed.
 const toggleGap = 250 * time.Millisecond
 
 // runtimeSeams carries the Wails runtime calls the App makes. Calling
@@ -152,6 +157,7 @@ func (a *App) emitEvent(name string, payload ...interface{}) {
 func (a *App) Hide() {
 	a.mu.Lock()
 	a.visible = false
+	a.lastHide = a.plat.now()
 	// A hide also cancels a show that has not executed yet (e.g. an
 	// IPC hide racing a pre-DomReady summon): the ordered outcome is
 	// hidden.
@@ -172,6 +178,21 @@ func (a *App) Hide() {
 // summon path the app context is captured FIRST: showing the bar
 // steals focus, so the focused app must be read before the window
 // appears.
+//
+// A toggle that finds the bar hidden BUT hidden only within the last
+// toggleGap is dropped, not re-summoned: pressing the combo on an
+// open bar can hide it through a side channel before this callback
+// even runs -- activating an X11 grab (the app's own XGrabKey, or
+// gsd's for a GNOME media-keys binding) delivers FocusOut to the
+// focused bar, the frontend's blur handler calls Hide, and on the
+// gsettings backend the toggle then arrives a whole process spawn +
+// IPC round-trip later ("<exe> toggle"). Branching on the visible
+// flag alone turned exactly those dismiss presses into re-summons
+// (the bar flickered and stayed open). Treating a just-hidden bar as
+// "this press already dismissed it" makes the combo dismiss
+// deterministic regardless of which side of the race this callback
+// lands on; a summon later than toggleGap after an Esc/blur hide is
+// untouched.
 func (a *App) toggle() {
 	a.mu.Lock()
 	now := a.plat.now()
@@ -186,10 +207,11 @@ func (a *App) toggle() {
 		return
 	}
 	visible := a.visible
+	justHidden := now.Sub(a.lastHide) < toggleGap
 	a.mu.Unlock()
 	if visible {
 		a.Hide()
-	} else {
+	} else if !justHidden {
 		a.captureAppContext()
 		a.showOnCursorDisplay()
 	}
