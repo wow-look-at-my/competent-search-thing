@@ -54,6 +54,14 @@ func runGUI(opts cli.RunOptions) error {
 	}
 	mgr := index.NewManager(cfg.Roots, cfg.Excludes, cfg.MaxResults)
 	mgr.SetFuzzyDisabled(cfg.Search.FuzzyDisabled)
+	// The window size is fixed at construction (DisableResize), so it
+	// is read up front and the SAME two values feed Wails and the
+	// App's positioning math. The base size is config window.width/
+	// height (defaults 780x550, floors 320x240 -- see
+	// internal/config.Normalize); the preview pane (preview.enabled)
+	// widens it to preview.windowWidth/Height, and with the flag off
+	// this stays exactly the configured base size.
+	width, height, _ := app.PreviewWindowSize()
 	a := app.New(mgr, app.Options{
 		RescanEvery:            time.Duration(cfg.RescanIntervalMinutes) * time.Minute,
 		Hotkey:                 cfg.Hotkey,
@@ -62,12 +70,15 @@ func runGUI(opts cli.RunOptions) error {
 		TrayDisabled:           cfg.Tray.Disabled,
 		HistoryPersistDisabled: cfg.History.PersistDisabled,
 		ConfigNotes:            cfg.MigrationNotes,
+		Preview:                cfg.Preview,
+		WindowWidth:            width,
+		WindowHeight:           height,
 	})
 
 	wailsOpts := &options.App{
 		Title:             "competent-search-thing",
-		Width:             app.WindowWidth,
-		Height:            app.WindowHeight,
+		Width:             width,
+		Height:            height,
 		Frameless:         true,
 		AlwaysOnTop:       true,
 		StartHidden:       true,

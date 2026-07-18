@@ -22,7 +22,7 @@ func TestOpenCommands(t *testing.T) {
 }
 
 func TestRevealCommands(t *testing.T) {
-	linux := RevealCommands("linux", "/tmp/dir/file.txt")
+	linux := RevealCommands("linux", "/tmp/dir/file.txt", "")
 	require.Len(t, linux, 2)
 	require.Equal(t, []string{
 		"dbus-send", "--session", "--print-reply",
@@ -34,15 +34,23 @@ func TestRevealCommands(t *testing.T) {
 	}, linux[0], "--print-reply makes a missing file manager a detectable non-zero exit")
 	require.Equal(t, []string{"xdg-open", "/tmp/dir"}, linux[1], "fallback opens the parent directory")
 
-	require.Equal(t, [][]string{{"open", "-R", "/tmp/x"}}, RevealCommands("darwin", "/tmp/x"))
-	require.Equal(t, [][]string{{"explorer", `/select,C:\x\y.txt`}}, RevealCommands("windows", `C:\x\y.txt`))
-	require.Nil(t, RevealCommands("plan9", "/tmp/x"))
+	require.Equal(t, [][]string{{"open", "-R", "/tmp/x"}}, RevealCommands("darwin", "/tmp/x", ""))
+	require.Equal(t, [][]string{{"explorer", `/select,C:\x\y.txt`}}, RevealCommands("windows", `C:\x\y.txt`, ""))
+	require.Nil(t, RevealCommands("plan9", "/tmp/x", ""))
+}
+
+func TestRevealCommandsCarryStartupID(t *testing.T) {
+	linux := RevealCommands("linux", "/tmp/dir/file.txt", "sid_TIME7")
+	require.Equal(t, "string:sid_TIME7", linux[0][7],
+		"the minted startup id rides the ShowItems startup-id argument")
+	require.Equal(t, []string{"xdg-open", "/tmp/dir"}, linux[1],
+		"the fallback candidate is unchanged (the credential rides its environment instead)")
 }
 
 func TestFileURIEscaping(t *testing.T) {
 	// Spaces are percent-encoded by net/url; commas additionally,
 	// because dbus-send splits array:string: arguments on commas.
-	cmds := RevealCommands("linux", "/tmp/weird name,with comma")
+	cmds := RevealCommands("linux", "/tmp/weird name,with comma", "")
 	require.Equal(t, "array:string:file:///tmp/weird%20name%2Cwith%20comma", cmds[0][6])
 }
 
@@ -76,20 +84,22 @@ type scriptEntry struct {
 
 type scriptedStarter struct {
 	calls  [][]string
+	envs   [][]string
 	script []scriptEntry
 }
 
-func (s *scriptedStarter) start(argv []string) (func() error, error) {
+func (s *scriptedStarter) start(argv, extraEnv []string) (int, func() error, error) {
 	i := len(s.calls)
 	s.calls = append(s.calls, argv)
+	s.envs = append(s.envs, extraEnv)
 	if i >= len(s.script) {
 		panic(fmt.Sprintf("scriptedStarter: unexpected call %d: %q", i, argv))
 	}
 	e := s.script[i]
 	if e.startErr != nil {
-		return nil, e.startErr
+		return 0, nil, e.startErr
 	}
-	return func() error {
+	return 1000 + i, func() error {
 		if e.block != nil {
 			<-e.block
 		}
@@ -215,16 +225,31 @@ func requireSh(t *testing.T) {
 func TestStartObservedCapturesStderrAndExitStatus(t *testing.T) {
 	requireSh(t)
 	l := NewLauncher()
-	wait, err := l.startObserved([]string{"sh", "-c", "echo boom goes stderr >&2; exit 3"})
+	pid, wait, err := l.startObserved([]string{"sh", "-c", "echo boom goes stderr >&2; exit 3"}, nil)
 	require.NoError(t, err)
+	require.Positive(t, pid, "the child pid is reported")
 	werr := wait()
 	require.Error(t, werr)
 	require.Contains(t, werr.Error(), "exit status 3")
 	require.Contains(t, werr.Error(), "boom goes stderr")
 
-	wait, err = l.startObserved([]string{"sh", "-c", "exit 0"})
+	_, wait, err = l.startObserved([]string{"sh", "-c", "exit 0"}, nil)
 	require.NoError(t, err)
 	require.NoError(t, wait(), "a clean exit reports no error")
+}
+
+func TestStartObservedDeliversExtraEnv(t *testing.T) {
+	requireSh(t)
+	l := NewLauncher()
+	// The child proves the env entry arrived by echoing it to stderr
+	// and failing, which folds the stderr into the wait error.
+	_, wait, err := l.startObserved(
+		[]string{"sh", "-c", "echo got:$COMPETENT_SEARCH_TEST_TOKEN >&2; exit 3"},
+		[]string{"COMPETENT_SEARCH_TEST_TOKEN=tok123"})
+	require.NoError(t, err)
+	werr := wait()
+	require.Error(t, werr)
+	require.Contains(t, werr.Error(), "got:tok123", "extraEnv reaches the child process")
 }
 
 func TestRunDetachedReaperLogsFailure(t *testing.T) {
@@ -232,7 +257,7 @@ func TestRunDetachedReaperLogsFailure(t *testing.T) {
 	lc := &logCapture{}
 	l := NewLauncher()
 	l.Logf = lc.logf
-	require.NoError(t, l.Run([]string{"sh", "-c", "echo bad launch >&2; exit 5"}),
+	require.NoError(t, l.Run([]string{"sh", "-c", "echo bad launch >&2; exit 5"}, nil),
 		"Run stays fire-and-forget: a started process is a success")
 	require.Eventually(t, func() bool {
 		return strings.Contains(lc.joined(), "exit status 5") &&
@@ -248,6 +273,65 @@ func TestNewLauncherStartsRealProcesses(t *testing.T) {
 	l := NewLauncher()
 	require.Equal(t, runtime.GOOS, l.GOOS)
 	require.Equal(t, DefaultGrace, l.Grace)
-	require.NoError(t, l.Run([]string{"true"}), "runDetached starts a real command")
-	require.Error(t, l.Run([]string{"definitely-not-a-binary-xyz"}))
+	require.NoError(t, l.Run([]string{"true"}, nil), "runDetached starts a real command")
+	require.Error(t, l.Run([]string{"definitely-not-a-binary-xyz"}, nil))
+}
+
+func TestLauncherOpenEnvThreadsEnvToEveryCandidate(t *testing.T) {
+	s := &scriptedStarter{script: []scriptEntry{{}}}
+	lc := &logCapture{}
+	l := testLauncher("linux", s, lc)
+	env := []string{"DESKTOP_STARTUP_ID=abc", "XDG_ACTIVATION_TOKEN=abc"}
+	require.NoError(t, l.OpenEnv("/tmp/x", env))
+	require.Equal(t, [][]string{env}, s.envs, "the credential env rides the candidate spawn")
+
+	s2 := &scriptedStarter{script: []scriptEntry{{startErr: errors.New("gone")}, {}}}
+	l2 := testLauncher("linux", s2, lc)
+	require.NoError(t, l2.RevealEnv("/tmp/d/f", env, "abc"))
+	require.Equal(t, [][]string{env, env}, s2.envs, "every candidate gets the env, fallback included")
+	require.Equal(t, "string:abc", s2.calls[0][7])
+}
+
+func TestLauncherLaunch(t *testing.T) {
+	s := &scriptedStarter{script: []scriptEntry{{}}}
+	lc := &logCapture{}
+	l := testLauncher("linux", s, lc)
+	pid, err := l.Launch([]string{"gedit", "/tmp/x"}, []string{"DESKTOP_STARTUP_ID=i"})
+	require.NoError(t, err)
+	require.Equal(t, 1000, pid, "the child pid comes back for the raise watcher")
+	require.Equal(t, [][]string{{"gedit", "/tmp/x"}}, s.calls)
+	require.Equal(t, [][]string{{"DESKTOP_STARTUP_ID=i"}}, s.envs)
+	require.Contains(t, lc.joined(), `launch: exec ["gedit" "/tmp/x"]`)
+
+	_, err = l.Launch(nil, nil)
+	require.Error(t, err, "empty argv is rejected")
+	_, err = l.Launch([]string{"  "}, nil)
+	require.Error(t, err, "blank argv0 is rejected")
+}
+
+func TestLauncherLaunchFastFailure(t *testing.T) {
+	boom := errors.New("exit status 127; stderr: not found")
+	s := &scriptedStarter{script: []scriptEntry{{waitErr: boom}}}
+	lc := &logCapture{}
+	l := testLauncher("linux", s, lc)
+	_, err := l.Launch([]string{"gedit"}, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found")
+
+	s2 := &scriptedStarter{script: []scriptEntry{{startErr: errors.New("exec: no gedit")}}}
+	l2 := testLauncher("linux", s2, lc)
+	pid, err := l2.Launch([]string{"gedit"}, nil)
+	require.Error(t, err)
+	require.Zero(t, pid)
+}
+
+func TestLauncherLaunchStillRunningAtGraceIsSuccess(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	s := &scriptedStarter{script: []scriptEntry{{block: block}}}
+	l := testLauncher("linux", s, &logCapture{})
+	l.Grace = 20 * time.Millisecond
+	pid, err := l.Launch([]string{"gedit"}, nil)
+	require.NoError(t, err, "an application still starting at grace expiry is success")
+	require.Equal(t, 1000, pid)
 }

@@ -11,6 +11,11 @@ interface WailsSearchResult {
   // Optional note rendered in place of the parent-dir line (the
   // outside-indexed-roots hint; internal/index Result.Hint).
   hint?: string;
+  // Per-character highlight ranges on name: half-open [start, end)
+  // RUNE (code point) index pairs, sorted and merged, minted by the
+  // Go matching engine (internal/index Result.MatchRanges). JS
+  // strings are UTF-16: convert while walking code points.
+  matchRanges?: [number, number][];
 }
 
 // Bang-target info returned by QueryPlugins (internal/plugin
@@ -39,6 +44,11 @@ interface PluginAction {
   value?: string; // every type except run_command and activate_window
   argv?: string[]; // run_command only
   window?: string; // activate_window only: the window id to focus
+  // run_command only, set by the builtin app launchers: the .desktop
+  // entry behind the launch; Go resolves it for launch capabilities
+  // (D-Bus activation, startup notification) so the launched app's
+  // window ends up focused. Echo it back unchanged.
+  desktop_id?: string;
 }
 
 // One virtual result in a "plugin:results" emission (internal/plugin
@@ -49,9 +59,16 @@ interface PluginResult {
   icon?: string; // builtin icon name [a-z0-9_-]+ OR literal glyph/emoji
   badge?: string;
   accent_color?: string; // "#rgb" | "#rrggbb" -- ONLY ever sets --plugin-accent
-  score?: number; // 0..100; in practice always present
+  score?: number; // 0..100; in practice always present (engine-minted)
   fields?: { label: string; value: string }[]; // <= 8
   action?: PluginAction; // absent => Enter/click is a no-op row
+  // Extra engine match texts (plugin authors' findability field);
+  // present on the wire but not rendered.
+  keywords?: string[];
+  // Per-character highlight ranges on title: half-open [start, end)
+  // RUNE index pairs (engine-minted, or plugin-supplied and
+  // sanitized). Same rendering as file-row matchRanges.
+  matchRanges?: [number, number][];
 }
 
 // Payload of the "plugin:results" event (internal/plugin Emission).
@@ -61,6 +78,110 @@ interface PluginEmission {
   name: string; // section header display name
   gen: number; // DROP unless === the current frontend seq
   results: PluginResult[]; // non-empty (empty answers never emit)
+}
+
+// The preview target QueryPreview sends (internal/preview Target).
+// kind selects which fields matter: "file" carries path/isDir,
+// "plugin" carries title/subtitle/pluginName, "none" cancels the
+// in-flight preview. Absent fields marshal as Go zero values.
+interface PreviewTarget {
+  kind: "file" | "plugin" | "none";
+  path?: string;
+  isDir?: boolean;
+  title?: string;
+  subtitle?: string;
+  pluginName?: string;
+}
+
+// One label/value line of a preview metadata card (internal/preview
+// MetaRow).
+interface PreviewMetaRow {
+  label: string;
+  value: string;
+}
+
+// A capped text-file read (internal/preview TextPreview).
+interface PreviewText {
+  content: string;
+  lang: string; // highlight.js language name; "" = plain text
+  truncated: boolean;
+  sizeBytes: number;
+}
+
+// A downscaled thumbnail (internal/preview ImagePreview).
+interface PreviewImage {
+  dataUri: string; // data:image/png;base64,... or data:image/jpeg;...
+  w: number;
+  h: number;
+  origW: number;
+  origH: number;
+  sizeBytes: number;
+}
+
+// One row of a directory listing (internal/preview DirEntry).
+interface PreviewDirEntry {
+  name: string;
+  isDir: boolean;
+  size: number;
+}
+
+// A capped, sorted directory listing (internal/preview DirPreview).
+interface PreviewDir {
+  entries: PreviewDirEntry[];
+  total: number; // whole-directory count, before the cap
+  truncated: boolean;
+}
+
+// One web-search hit (internal/preview WebResult).
+interface PreviewWebResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+// A web-search answer (internal/preview WebPreview).
+interface PreviewWeb {
+  query: string;
+  results: PreviewWebResult[];
+  cached: boolean;
+}
+
+// An AI answer (internal/preview AIPreview).
+interface PreviewAI {
+  query: string;
+  answer: string;
+  model: string;
+  cached: boolean;
+}
+
+// Payload of the "preview:result" event (internal/preview Payload).
+// kind selects which optional section is set. Payloads whose gen is
+// not the current preview generation are DROPPED, and multiple
+// emissions per gen REPLACE the pane content -- a fast "meta" card
+// often precedes the rich payload (cache hits skip the meta card).
+interface PreviewPayload {
+  gen: number;
+  kind: "meta" | "text" | "image" | "dir" | "web" | "ai" | "error";
+  title: string;
+  path: string;
+  meta?: PreviewMetaRow[];
+  text?: PreviewText;
+  image?: PreviewImage;
+  dir?: PreviewDir;
+  web?: PreviewWeb;
+  ai?: PreviewAI;
+  err?: string; // human-readable failure (kind "error")
+  durMs: number;
+}
+
+// GetPreviewConfig answer (internal/app PreviewConfigInfo): whether
+// the pane is on and whether the web/AI providers have credentials
+// (config key or environment variable). The key values themselves
+// never cross to the frontend.
+interface PreviewConfigInfo {
+  enabled: boolean;
+  kagiConfigured: boolean;
+  openaiConfigured: boolean;
 }
 
 interface WailsAppBindings {
@@ -87,6 +208,21 @@ interface WailsAppBindings {
   GetTheme(): Promise<Record<string, string>>;
   // Contents of <configDir>/themes/custom.css (<= 64KB), else "".
   GetCustomCSS(): Promise<string>;
+  // The system-stats sampler's cached snapshot -- instant Go-side
+  // (never IO), so it is safe to call on the show path. enabled false
+  // (stats.disabled / no sampler) = hide the row entirely.
+  GetStats(): Promise<StatsSnapshot>;
+  // Preview pane (internal/app preview.go). QueryPreview asks for
+  // target under generation gen; answers arrive asynchronously as
+  // "preview:result" events carrying gen. A {kind: "none"} target
+  // cancels the in-flight request without starting a new one.
+  // Fetch{Web,AI}Preview are the EXPLICIT web-search / AI triggers --
+  // never called from a keystroke or selection path. All three are
+  // safe no-ops while the pane is disabled.
+  QueryPreview(target: PreviewTarget, gen: number): Promise<void>;
+  GetPreviewConfig(): Promise<PreviewConfigInfo>;
+  FetchWebPreview(query: string, gen: number): Promise<void>;
+  FetchAIPreview(query: string, gen: number): Promise<void>;
 }
 
 // The subset of the Wails runtime API this app uses (see the wails v2
@@ -111,6 +247,32 @@ interface WatchDegradedEvent {
   watched: number;
   dropped: number;
   overflows: number;
+}
+
+// Payload of the "stats:update" event AND the GetStats return
+// (internal/sysstats Snapshot; keep field names in lockstep with its
+// json tags). enabled false means the feature is off (stats.disabled):
+// hide the #stats row entirely and skip rendering. enabled true with a
+// metric's *Ok false means that one metric has no live value (missing
+// source, non-Linux, failed read, rate not accumulated yet): render a
+// dash. Sizes are bytes, rates bytes/second, percentages 0..100.
+// Events fire only while the bar is visible, every ~1.5s, plus one at
+// summon and a ~300ms follow-up.
+interface StatsSnapshot {
+  enabled: boolean;
+  cpuPct: number;
+  cpuOk: boolean;
+  gpuPct: number;
+  gpuOk: boolean;
+  memUsed: number;
+  memTotal: number;
+  memOk: boolean;
+  swapUsed: number;
+  swapTotal: number;
+  swapOk: boolean;
+  netRxBps: number;
+  netTxBps: number;
+  netOk: boolean;
 }
 
 interface WailsGo {

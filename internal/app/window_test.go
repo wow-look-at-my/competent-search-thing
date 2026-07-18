@@ -119,11 +119,12 @@ func TestShowPositionsOnCursorDisplay(t *testing.T) {
 
 	a.showOnCursorDisplay()
 
-	// BarPosition on the left monitor: x = -2560+(2560-680)/2 = -1620,
-	// y = 0 + 1440/3 - 460/3 = 327. The window sits on the primary
-	// (origin 0,0), so the wails-relative coordinates are identical.
-	require.Equal(t, []int{-1620}, r.setPosX)
-	require.Equal(t, []int{327}, r.setPosY)
+	// BarPosition on the left monitor with the default 780x550 size:
+	// x = -2560+(2560-780)/2 = -1670, y = 0 + 1440/3 - 550/3 = 297.
+	// The window sits on the primary (origin 0,0), so the
+	// wails-relative coordinates are identical.
+	require.Equal(t, []int{-1670}, r.setPosX)
+	require.Equal(t, []int{297}, r.setPosY)
 	require.False(t, r.has("center"), "successful positioning skips centering")
 	require.True(t, r.has("show"))
 	require.Len(t, r.emitted(eventShown), 1)
@@ -140,12 +141,12 @@ func TestShowTranslatesAgainstCurrentMonitor(t *testing.T) {
 
 	a.showOnCursorDisplay()
 
-	// Absolute target on the primary: x = (1920-680)/2 = 620,
-	// y = 1080/3 - 460/3 = 207. WindowSetPosition is relative to the
+	// Absolute target on the primary: x = (1920-780)/2 = 570,
+	// y = 1080/3 - 550/3 = 177. WindowSetPosition is relative to the
 	// window's current monitor (origin -2560,0), so x becomes
-	// 620 - (-2560) = 3180.
-	require.Equal(t, []int{3180}, r.setPosX)
-	require.Equal(t, []int{207}, r.setPosY)
+	// 570 - (-2560) = 3130.
+	require.Equal(t, []int{3130}, r.setPosX)
+	require.Equal(t, []int{177}, r.setPosY)
 }
 
 func TestShowUsesWorkAreaOriginOnWindows(t *testing.T) {
@@ -159,8 +160,26 @@ func TestShowUsesWorkAreaOriginOnWindows(t *testing.T) {
 
 	a.showOnCursorDisplay()
 
-	require.Equal(t, []int{620}, r.setPosX)
-	require.Equal(t, []int{207 - 40}, r.setPosY, "windows translates against rcWork")
+	require.Equal(t, []int{570}, r.setPosX)
+	require.Equal(t, []int{177 - 40}, r.setPosY, "windows translates against rcWork")
+}
+
+func TestShowUsesConfiguredWindowSize(t *testing.T) {
+	a, r := newTestApp(t, nil, Options{WindowWidth: 1000, WindowHeight: 700})
+	a.plat.goos = "linux"
+	r.cursorOK = true
+	r.cursorX, r.cursorY = 960, 540 // cursor on the primary
+	r.displays = testDisplays()
+	r.winX, r.winY = 0, 0 // window already on the primary
+	a.Startup(context.Background())
+
+	a.showOnCursorDisplay()
+
+	// The Options size drives the math: x = (1920-1000)/2 = 460,
+	// y = 1080/3 - 700/3 = 127; the window is on the primary (origin
+	// 0,0), so the relative coordinates are identical.
+	require.Equal(t, []int{460}, r.setPosX)
+	require.Equal(t, []int{127}, r.setPosY)
 }
 
 func TestShowCentersWhenCursorUnknown(t *testing.T) {
@@ -220,4 +239,53 @@ func TestHideTracksVisibility(t *testing.T) {
 	a.Hide() // e.g. the frontend reacting to Escape or blur
 	a.toggle()
 	require.Len(t, r.emitted(eventShown), 2, "after Hide, toggle shows again instead of hiding")
+}
+
+func TestToggleRacedByDismissalStaysHidden(t *testing.T) {
+	// The field bug on grab-based summon backends: pressing the combo
+	// on an OPEN bar hides it through a side channel before the toggle
+	// callback runs -- activating the grab (the app's own XGrabKey, or
+	// gsd's for a GNOME media-keys binding) unfocuses the bar, the
+	// frontend's blur handler calls Hide, and on the gsettings backend
+	// the toggle then arrives a whole "<exe> toggle" process spawn +
+	// IPC round-trip later. That toggle finds the bar hidden; it must
+	// recognize the fresh hide as its own dismissal and stay hidden
+	// instead of re-summoning.
+	clk := &fakeClock{step: 50 * time.Millisecond}
+	a, r := newTestApp(t, nil, Options{})
+	a.plat.now = clk.now
+	a.Startup(context.Background())
+	a.DomReady(context.Background())
+
+	a.showOnCursorDisplay()
+	require.Len(t, r.emitted(eventShown), 1)
+
+	a.Hide()   // the blur dismissal the combo press triggered
+	a.toggle() // the same press's toggle callback, 50ms later
+	require.Len(t, r.emitted(eventShown), 1, "a dismiss press raced by its own blur-hide must not re-summon")
+
+	// Walk the clock past toggleGap: the next toggle is a normal
+	// summon again.
+	for i := 0; i < 6; i++ {
+		clk.now()
+	}
+	a.toggle()
+	require.Len(t, r.emitted(eventShown), 2, "a later toggle summons as usual")
+}
+
+func TestShowOnStartupThenToggleHides(t *testing.T) {
+	// The gsd first-press boot: "<exe> toggle" with no instance
+	// running becomes the app itself (ShowOnStartup), DomReady
+	// executes the deferred show, and the NEXT combo press must
+	// dismiss -- the deferred show marks the bar visible like any
+	// other summon.
+	a, r := newTestApp(t, nil, Options{ShowOnStartup: true})
+	a.plat.now = (&fakeClock{step: time.Second}).now
+	a.Startup(context.Background())
+	a.DomReady(context.Background())
+	require.Len(t, r.emitted(eventShown), 1, "DomReady executed the deferred show")
+
+	a.toggle()
+	require.True(t, r.has("hide"), "the next toggle hides instead of re-summoning")
+	require.Len(t, r.emitted(eventShown), 1)
 }

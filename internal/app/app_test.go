@@ -19,6 +19,7 @@ import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/gsettings"
 	"github.com/wow-look-at-my/competent-search-thing/internal/index"
+	"github.com/wow-look-at-my/competent-search-thing/internal/launch"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/portal"
 	"github.com/wow-look-at-my/competent-search-thing/internal/watch"
@@ -125,10 +126,13 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 		r.call("startHotkey")
 		return func() { r.call("stopHotkey") }, nil
 	}
-	// Ambient bits pinned down: no real env reads, a fixed executable
-	// path, and an unknown session -- which keeps every test on the
-	// pre-Wayland native hotkey and positioning paths unless a test
-	// overrides detectSession itself.
+	// Ambient bits pinned down: a fixed goos (the linux launch path,
+	// so the app tests behave identically on the darwin CI job; tests
+	// exercising other-OS behavior set goos themselves), no real env
+	// reads, a fixed executable path, and an unknown session -- which
+	// keeps every test on the pre-Wayland native hotkey and
+	// positioning paths unless a test overrides detectSession itself.
+	a.plat.goos = "linux"
 	a.plat.getenv = func(string) string { return "" }
 	a.plat.executable = func() (string, error) { return "/test/bin/competent-search-thing", nil }
 	// An empty argv[0] plus the nonexistent executable path above keep
@@ -166,9 +170,41 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// the real disk; hint tests override it (some with the real
 	// os.Lstat over temp trees).
 	a.plat.lstat = func(string) (os.FileInfo, error) { return nil, fs.ErrNotExist }
-	a.plat.open = func(path string) error { r.call("open:" + path); return nil }
-	a.plat.reveal = func(path string) error { r.call("reveal:" + path); return nil }
-	a.plat.run = func(argv []string) error { r.call("run:" + strings.Join(argv, " ")); return nil }
+	a.plat.open = func(path string, _ []string) error { r.call("open:" + path); return nil }
+	a.plat.reveal = func(path string, _ []string, _ string) error { r.call("reveal:" + path); return nil }
+	a.plat.run = func(argv, _ []string) error { r.call("run:" + strings.Join(argv, " ")); return nil }
+	// The credentialed launch path's seams: recorders whose defaults
+	// keep every test on the pre-credential behavior -- the handler
+	// never resolves (so the dispatch falls through to the open/run
+	// seams), the mint yields no credential, and with getenv pinned to
+	// "" (no DISPLAY) the raise watcher never arms. Launch tests
+	// override individual members.
+	a.plat.resolveHandler = func(tg launch.Target) (launch.Handler, bool) {
+		r.call("resolve:" + tg.Raw)
+		return launch.Handler{}, false
+	}
+	a.plat.handlerByID = func(id string) (launch.Handler, bool) {
+		r.call("handlerByID:" + id)
+		return launch.Handler{}, false
+	}
+	a.plat.mintCredential = func(string) launch.Credential {
+		r.call("mint")
+		return launch.Credential{Kind: launch.KindNone}
+	}
+	// Silent on purpose: announceLaunch runs it at every Startup, and
+	// recording it would pollute every sequence assertion; the launch
+	// tests override it with a recording fake.
+	a.plat.prepareLaunch = func() {}
+	a.plat.dbusLaunch = func(call launch.DBusCall) error {
+		r.call("dbusLaunch:" + call.Dest + ":" + call.Method)
+		return nil
+	}
+	a.plat.launchExec = func(argv, _ []string) (int, error) {
+		r.call("launchExec:" + strings.Join(argv, " "))
+		return 0, nil
+	}
+	a.plat.watchState = func() (launch.XState, bool) { return launch.XState{}, false }
+	a.plat.snRemove = func(id string) error { r.call("snRemove:" + id); return nil }
 	a.plat.activateWindow = func(id uint32) error { r.call(fmt.Sprintf("activateWindow:%d", id)); return nil }
 	// A nil Source degrades the app-context cache to a no-op; tests
 	// that exercise capture inject a fake Source before Startup.
@@ -182,6 +218,10 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// No session-bus IO either: the tray seam yields nothing, so
 	// startTray is a no-op. Tray tests inject a recording fake.
 	a.newTray = func() trayHandle { return nil }
+	// No stats goroutines or /proc//sys probes: the stats seam yields
+	// nothing. Stats tests inject a recording fake (or restore
+	// a.buildStats explicitly).
+	a.newStats = func() statsSource { return nil }
 	return a, r
 }
 
@@ -242,7 +282,10 @@ func TestSearchQueriesManager(t *testing.T) {
 
 	got := a.Search("  shopping  ") // query is trimmed
 	require.Len(t, got, 1)
-	require.Equal(t, Result{Path: "/notes/shopping-list.txt", Name: "shopping-list.txt", IsDir: false}, got[0])
+	require.Equal(t, Result{
+		Path: "/notes/shopping-list.txt", Name: "shopping-list.txt", IsDir: false,
+		MatchRanges: [][2]int{{0, 8}}, // the engine highlights the matched prefix
+	}, got[0])
 
 	miss := a.Search("no-such-entry")
 	require.NotNil(t, miss, "no-match result is empty but non-nil")
@@ -406,14 +449,15 @@ func TestOpenRunsPlatformOpenAndHides(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
 	a.Startup(context.Background())
 	require.NoError(t, a.Open("/tmp/x"))
-	require.Equal(t, []string{"open:/tmp/x", "hide"}, r.callNames())
+	require.Equal(t, []string{"resolve:/tmp/x", "mint", "open:/tmp/x", "hide"}, r.callNames(),
+		"resolve then mint (bar still focused) then dispatch then hide")
 }
 
 func TestOpenErrorKeepsBarVisible(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
 	a.Startup(context.Background())
 	boom := errors.New("no handler")
-	a.plat.open = func(string) error { return boom }
+	a.plat.open = func(string, []string) error { return boom }
 	require.ErrorIs(t, a.Open("/tmp/x"), boom)
 	require.False(t, r.has("hide"), "a failed open does not hide the bar")
 }
@@ -422,10 +466,11 @@ func TestRevealRunsPlatformRevealAndHides(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
 	a.Startup(context.Background())
 	require.NoError(t, a.Reveal("/tmp/y"))
-	require.Equal(t, []string{"reveal:/tmp/y", "hide"}, r.callNames())
+	require.Equal(t, []string{"resolve:/tmp/y", "mint", "reveal:/tmp/y", "hide"}, r.callNames(),
+		"reveal resolves the directory handler, mints, dispatches, hides")
 
 	boom := errors.New("nope")
-	a.plat.reveal = func(string) error { return boom }
+	a.plat.reveal = func(string, []string, string) error { return boom }
 	require.ErrorIs(t, a.Reveal("/tmp/y"), boom)
 }
 

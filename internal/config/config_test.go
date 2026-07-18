@@ -319,6 +319,25 @@ func TestTrayConfig(t *testing.T) {
 	require.True(t, got.Tray.Disabled)
 }
 
+func TestStatsConfig(t *testing.T) {
+	setConfigDir(t)
+	require.False(t, Default().Stats.Disabled, "the stats row is on by default")
+
+	// A config predating the stats block loads as enabled...
+	var c Config
+	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
+	c.Normalize()
+	require.False(t, c.Stats.Disabled)
+
+	// ...and an explicit opt-out round-trips.
+	in := Default()
+	in.Stats.Disabled = true
+	require.NoError(t, Save(in))
+	got, err := Load()
+	require.NoError(t, err)
+	require.True(t, got.Stats.Disabled)
+}
+
 func TestWindowConfig(t *testing.T) {
 	setConfigDir(t)
 	require.False(t, Default().Window.Translucent, "the window is opaque by default")
@@ -336,6 +355,48 @@ func TestWindowConfig(t *testing.T) {
 	got, err := Load()
 	require.NoError(t, err)
 	require.True(t, got.Window.Translucent)
+}
+
+func TestWindowSizeConfig(t *testing.T) {
+	setConfigDir(t)
+	def := Default()
+	require.Equal(t, DefaultWindowWidth, def.Window.Width, "default width")
+	require.Equal(t, DefaultWindowHeight, def.Window.Height, "default height")
+
+	// A config predating the size knobs (zero values) gets the
+	// defaults...
+	var c Config
+	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
+	c.Normalize()
+	require.Equal(t, DefaultWindowWidth, c.Window.Width)
+	require.Equal(t, DefaultWindowHeight, c.Window.Height)
+
+	// ...negative values are repaired to the defaults too...
+	c.Window.Width, c.Window.Height = -10, -1
+	c.Normalize()
+	require.Equal(t, DefaultWindowWidth, c.Window.Width)
+	require.Equal(t, DefaultWindowHeight, c.Window.Height)
+
+	// ...positive but too-small values clamp up to the floors...
+	c.Window.Width, c.Window.Height = 100, 40
+	c.Normalize()
+	require.Equal(t, MinWindowWidth, c.Window.Width)
+	require.Equal(t, MinWindowHeight, c.Window.Height)
+
+	// ...the floors themselves pass through untouched...
+	c.Window.Width, c.Window.Height = MinWindowWidth, MinWindowHeight
+	c.Normalize()
+	require.Equal(t, MinWindowWidth, c.Window.Width)
+	require.Equal(t, MinWindowHeight, c.Window.Height)
+
+	// ...and custom sane values round-trip through Save/Load.
+	in := Default()
+	in.Window.Width, in.Window.Height = 900, 640
+	require.NoError(t, Save(in))
+	got, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 900, got.Window.Width)
+	require.Equal(t, 640, got.Window.Height)
 }
 
 func TestHistoryConfig(t *testing.T) {
@@ -419,4 +480,76 @@ func TestFirefoxConfig(t *testing.T) {
 	require.Equal(t, "/custom/profile", got.Firefox.FrequentSites.ProfileDir)
 	require.Equal(t, 3, got.Firefox.OpenTabs.MaxResults)
 	require.Equal(t, "/tabs/profile", got.Firefox.OpenTabs.ProfileDir)
+}
+
+func TestPreviewConfig(t *testing.T) {
+	setConfigDir(t)
+	require.Equal(t, PreviewConfig{
+		Enabled:       false,
+		WindowWidth:   1600,
+		WindowHeight:  800,
+		TextMaxKB:     256,
+		ImageMaxEdge:  800,
+		DirMaxEntries: 200,
+		Kagi:          PreviewKagiConfig{MaxResults: 8},
+		OpenAI:        PreviewOpenAIConfig{Model: "gpt-5-mini", MaxOutputTokens: 1024},
+	}, Default().Preview, "the preview pane defaults off with every knob populated")
+
+	// A config predating the preview block normalizes to the defaults
+	// (still disabled).
+	var c Config
+	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
+	c.Normalize()
+	require.Equal(t, DefaultPreview(), c.Preview)
+
+	// Zero and negative knobs and an empty model are repaired; real
+	// values -- the API keys verbatim included -- survive.
+	c = Config{Preview: PreviewConfig{
+		Enabled:       true,
+		WindowWidth:   0,
+		WindowHeight:  -1,
+		TextMaxKB:     512,
+		ImageMaxEdge:  0,
+		DirMaxEntries: 50,
+		Kagi:          PreviewKagiConfig{APIKey: "kagi-secret", MaxResults: 0},
+		OpenAI:        PreviewOpenAIConfig{APIKey: "sk-secret", Model: "", MaxOutputTokens: -5},
+	}}
+	c.Normalize()
+	require.True(t, c.Preview.Enabled)
+	require.Equal(t, DefaultPreviewWindowWidth, c.Preview.WindowWidth)
+	require.Equal(t, DefaultPreviewWindowHeight, c.Preview.WindowHeight)
+	require.Equal(t, 512, c.Preview.TextMaxKB)
+	require.Equal(t, DefaultPreviewImageMaxEdge, c.Preview.ImageMaxEdge)
+	require.Equal(t, 50, c.Preview.DirMaxEntries)
+	require.Equal(t, "kagi-secret", c.Preview.Kagi.APIKey, "the key is never touched")
+	require.Equal(t, DefaultPreviewKagiMax, c.Preview.Kagi.MaxResults)
+	require.Equal(t, "sk-secret", c.Preview.OpenAI.APIKey, "the key is never touched")
+	require.Equal(t, DefaultPreviewOpenAIModel, c.Preview.OpenAI.Model)
+	require.Equal(t, DefaultPreviewOpenAITokens, c.Preview.OpenAI.MaxOutputTokens)
+
+	// Real values survive Normalize untouched.
+	c = Config{Preview: PreviewConfig{
+		WindowWidth:  1920,
+		WindowHeight: 1080,
+		OpenAI:       PreviewOpenAIConfig{Model: "gpt-5"},
+	}}
+	c.Normalize()
+	require.Equal(t, 1920, c.Preview.WindowWidth)
+	require.Equal(t, 1080, c.Preview.WindowHeight)
+	require.Equal(t, "gpt-5", c.Preview.OpenAI.Model)
+
+	// The block round-trips through Save/Load.
+	in := Default()
+	in.Preview.Enabled = true
+	in.Preview.WindowWidth = 1440
+	in.Preview.Kagi.APIKey = "kagi-secret"
+	in.Preview.OpenAI.APIKey = "sk-secret"
+	require.NoError(t, Save(in))
+	got, err := Load()
+	require.NoError(t, err)
+	require.True(t, got.Preview.Enabled)
+	require.Equal(t, 1440, got.Preview.WindowWidth)
+	require.Equal(t, "kagi-secret", got.Preview.Kagi.APIKey)
+	require.Equal(t, "sk-secret", got.Preview.OpenAI.APIKey)
+	require.Equal(t, DefaultPreviewOpenAIModel, got.Preview.OpenAI.Model)
 }
