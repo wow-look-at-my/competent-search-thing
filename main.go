@@ -61,6 +61,7 @@ func runGUI(opts cli.RunOptions) error {
 		SweepInterval:          time.Duration(cfg.Watcher.SweepMinutes) * time.Minute,
 		SweepDisabled:          cfg.Watcher.SweepDisabled,
 		WatchExcludes:          cfg.Watcher.WatchExcludes,
+		WatchBackend:           cfg.Watcher.Backend,
 		Hotkey:                 cfg.Hotkey,
 		IPC:                    opts.Server,
 		ShowOnStartup:          opts.ShowOnStartup,

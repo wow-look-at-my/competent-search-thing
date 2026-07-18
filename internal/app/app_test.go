@@ -493,6 +493,93 @@ func TestEmitDegradedPayload(t *testing.T) {
 	require.Equal(t, watchDegraded{Watched: 7, Dropped: 3, Overflows: 2}, events[0].payload[0])
 }
 
+func TestWatchBackendForPayloads(t *testing.T) {
+	require.Equal(t, watchBackend{Backend: "fanotify", Full: true, Hint: ""},
+		watchBackendFor("fanotify"), "full coverage carries no hint")
+	require.Equal(t, watchBackend{
+		Backend: "inotify",
+		Full:    false,
+		Hint:    "Partial file watching: changes outside the hot set appear within the sweep interval. Enable full coverage: see README (fanotify).",
+	}, watchBackendFor("inotify"))
+	require.Equal(t, watchBackend{
+		Backend: "none",
+		Full:    false,
+		Hint:    "Live file watching is off (fanotify required by config but unavailable). The index refreshes on sweeps only.",
+	}, watchBackendFor("none"))
+}
+
+func TestStartWatchEmitsBackendNoticeAndGrantHint(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0o644))
+	m := index.NewManager([]string{dir}, nil, 0)
+	a, r := newTestApp(t, m, Options{WatchBackend: "inotify"})
+	// Pin the OS: the grant hint is linux-only and this suite also
+	// runs on the darwin CI job.
+	a.plat.goos = "linux"
+	a.Startup(context.Background())
+
+	require.Eventually(t, func() bool { return len(r.emitted(eventWatchBackend)) == 1 },
+		20*time.Second, 10*time.Millisecond, "the backend notice is emitted once the watch layer is up")
+	require.Equal(t, watchBackend{Backend: "inotify", Full: false, Hint: hintPartialWatch},
+		r.emitted(eventWatchBackend)[0].payload[0])
+	require.Contains(t, buf.String(),
+		"watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /test/bin/competent-search-thing",
+		"the grant command names the stable executable path")
+	a.Shutdown(context.Background())
+}
+
+func TestStartWatchStrictFanotifyNeverFallsBackToInotify(t *testing.T) {
+	// watcher.backend="fanotify" is fanotify or NOTHING: on an
+	// unprivileged run (CI) the backend resolves to "none" with the
+	// watching-off hint; on a privileged run it is real fanotify with
+	// full coverage. It must never report the inotify fallback.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0o644))
+	m := index.NewManager([]string{dir}, nil, 0)
+	a, r := newTestApp(t, m, Options{WatchBackend: "fanotify"})
+	a.plat.goos = "linux"
+	a.Startup(context.Background())
+
+	require.Eventually(t, func() bool { return len(r.emitted(eventWatchBackend)) == 1 },
+		20*time.Second, 10*time.Millisecond, "the backend notice is emitted")
+	wb, ok := r.emitted(eventWatchBackend)[0].payload[0].(watchBackend)
+	require.True(t, ok)
+	require.NotEqual(t, "inotify", wb.Backend, "strict mode must never fall back to inotify")
+	switch wb.Backend {
+	case "none":
+		require.Equal(t, watchBackend{Backend: "none", Full: false, Hint: hintWatchOff}, wb)
+	case "fanotify":
+		require.Equal(t, watchBackend{Backend: "fanotify", Full: true, Hint: ""}, wb)
+	default:
+		t.Fatalf("unexpected backend %q", wb.Backend)
+	}
+	a.Shutdown(context.Background())
+}
+
+func TestLogFanotifyGrantSkippedOffLinuxAndOnce(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	// Off linux there is no fanotify, so no setcap hint -- ever.
+	a, _ := newTestApp(t, nil, Options{})
+	a.plat.goos = "darwin"
+	a.logFanotifyGrant()
+	require.NotContains(t, buf.String(), "sudo setcap")
+
+	// On linux the hint logs exactly once per app.
+	b, _ := newTestApp(t, nil, Options{})
+	b.plat.goos = "linux"
+	b.logFanotifyGrant()
+	b.logFanotifyGrant()
+	require.Equal(t, 1, strings.Count(buf.String(), "sudo setcap cap_sys_admin,cap_dac_read_search+ep"),
+		"the grant hint is logged once")
+}
+
 func TestEmitEventBeforeStartupIsNoOp(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
 	a.emitDegraded(watch.Stats{})

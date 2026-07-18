@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,6 +36,12 @@ const (
 	// eventWatchDegraded reports that live updates became incomplete;
 	// payload watchDegraded.
 	eventWatchDegraded = "watch:degraded"
+	// eventWatchBackend announces the effective live-watch backend
+	// once, when the watch layer is up; payload watchBackend. full
+	// false means the user runs a suboptimal (or off) live-watch
+	// configuration, and the frontend shows a persistent notice chip
+	// with the hint -- nothing about reduced coverage is ever silent.
+	eventWatchBackend = "watch:backend"
 	// eventShown fires after the bar was shown; no payload.
 	eventShown = "app:shown"
 )
@@ -51,6 +58,46 @@ type watchDegraded struct {
 	Watched   int `json:"watched"`
 	Dropped   int `json:"dropped"`
 	Overflows int `json:"overflows"`
+}
+
+// watchBackend is the eventWatchBackend payload: which notification
+// backend the watch layer runs on ("fanotify" | "inotify" | "none"),
+// whether that is full whole-filesystem coverage (fanotify only), and
+// -- when it is not -- a short user-facing hint the frontend surfaces
+// on the notice chip.
+type watchBackend struct {
+	Backend string `json:"backend"`
+	Full    bool   `json:"full"`
+	Hint    string `json:"hint"`
+}
+
+// The user-facing hints carried by eventWatchBackend when live
+// coverage is not full (empty when it is).
+const (
+	// hintPartialWatch: the bounded inotify hot set is live -- changes
+	// under it show up in ~1s, everything else within one sweep.
+	hintPartialWatch = "Partial file watching: changes outside the hot set appear within the sweep interval. Enable full coverage: see README (fanotify)."
+	// hintWatchOff: the strict watcher.backend="fanotify" mode could
+	// not start fanotify, so live watching is disabled outright.
+	hintWatchOff = "Live file watching is off (fanotify required by config but unavailable). The index refreshes on sweeps only."
+	// hintWatchFailed: the watcher itself failed to start (an OS
+	// refusal, e.g. inotify instance exhaustion) -- no live events
+	// from any backend.
+	hintWatchFailed = "Live file watching is off (the watcher could not start). The index refreshes on sweeps only."
+)
+
+// watchBackendFor maps the watcher's reported backend to the
+// eventWatchBackend payload. fanotify is the only full-coverage
+// backend; everything else carries a hint the frontend must show.
+func watchBackendFor(backend string) watchBackend {
+	switch backend {
+	case "fanotify":
+		return watchBackend{Backend: backend, Full: true}
+	case "none":
+		return watchBackend{Backend: backend, Hint: hintWatchOff}
+	default: // "inotify": the bounded per-directory hot set
+		return watchBackend{Backend: backend, Hint: hintPartialWatch}
+	}
 }
 
 // Result is a single search hit sent to the frontend. It is the index
@@ -82,6 +129,12 @@ type Options struct {
 	// directories and their subtrees stay indexed and swept but never
 	// hold a watch. See watch.Options.WatchEx.
 	WatchExcludes []string
+	// WatchBackend selects the notification backend (wire config's
+	// watcher.backend here): "auto"/"" = automatic detection,
+	// "fanotify" = strict fanotify-or-nothing, "inotify" = skip the
+	// fanotify probe. See watch.Options.Backend; the effective backend
+	// is announced to the frontend via eventWatchBackend either way.
+	WatchBackend string
 	// Hotkey is the config hotkey string ("alt+space"); empty disables
 	// the global hotkey.
 	Hotkey string
@@ -116,6 +169,9 @@ type App struct {
 	buildOnce sync.Once
 	hkOnce    sync.Once
 	notesOnce sync.Once
+	// grantOnce guards the one-time fanotify capability-grant log line
+	// (see logFanotifyGrant).
+	grantOnce sync.Once
 
 	mu         sync.Mutex // guards ctx, visible, lastToggle, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, lastThemeErr, domReady, pendingShow, history
 	ctx        context.Context
@@ -326,8 +382,10 @@ const defaultSweepInterval = 20 * time.Minute
 // instead: the coverage invariant (tiers differ only in latency) then
 // holds only through full rescans. After everything is up it waits
 // for the watcher's initial registration (ctx-abortable, so Shutdown
-// cuts the wait) and logs one loud behavior-contract summary
-// including the sweep state. It is skipped when Shutdown already ran.
+// cuts the wait), logs one loud behavior-contract summary including
+// the sweep state, and emits the one-time eventWatchBackend notice --
+// with the setcap grant command logged whenever coverage is not full.
+// It is skipped when Shutdown already ran.
 func (a *App) startWatch() {
 	watermark := time.Now()
 	ex, err := index.NewExcluder(a.manager.Excludes())
@@ -349,6 +407,7 @@ func (a *App) startWatch() {
 		MaxWatches: a.opt.WatchMaxWatches,
 		WatchEx:    watchEx,
 		OnDegraded: a.emitDegraded,
+		Backend:    a.opt.WatchBackend,
 	})
 	r := watch.NewRescanner(a.manager, w, watch.RescanOptions{Interval: a.opt.RescanEvery})
 	sweepEvery := a.opt.SweepInterval
@@ -402,6 +461,55 @@ func (a *App) startWatch() {
 	}
 	log.Printf("watch: backend %s: %d/%d dirs live-watched (budget %d); sweep interval %s; full rescan interval %s",
 		st.Backend, st.WatchedDirs, st.IndexedDirs, st.Budget, sweepDesc, rescanDesc)
+
+	// Announce the effective backend to the frontend exactly once. A
+	// non-full backend is a user-visible state, never a silent one:
+	// the frontend keeps a notice chip up, and the log gets the exact
+	// capability-grant command that would enable full coverage. The
+	// grant line goes first so observing the event implies the line is
+	// written (tests synchronize on the emit).
+	wb := watchBackendFor(st.Backend)
+	if wErr != nil {
+		// The watcher itself never started, so no backend delivers
+		// anything -- report that honestly as "none" with its own
+		// reason instead of parroting a backend name that is not live.
+		wb = watchBackend{Backend: "none", Hint: hintWatchFailed}
+	}
+	if !wb.Full {
+		a.logFanotifyGrant()
+	}
+	a.emitEvent(eventWatchBackend, wb)
+}
+
+// logFanotifyGrant logs -- once, linux only (fanotify does not exist
+// elsewhere) -- the exact command that grants the running binary
+// full-filesystem watching. The path prefers the STABLE spelling of
+// the binary (the PATH shim or the argv[0] symlink proven to be this
+// very binary) over the fully resolved os.Executable, exactly like
+// the GNOME keybinding command in hotkey.go: a versioned install dir
+// (Homebrew Cellar, Nix, stow) dies on the next upgrade, and file
+// capabilities are re-granted per installed path.
+func (a *App) logFanotifyGrant() {
+	a.grantOnce.Do(func() {
+		if a.plat.goos != "linux" || a.plat.executable == nil {
+			return
+		}
+		exe, err := a.plat.executable()
+		if err != nil || exe == "" {
+			return // no path to print; the README documents the command
+		}
+		if !filepath.IsAbs(exe) {
+			if abs, aerr := filepath.Abs(exe); aerr == nil {
+				exe = abs
+			}
+		}
+		args0 := ""
+		if a.plat.args0 != nil {
+			args0 = a.plat.args0()
+		}
+		exe = platform.StableExecutable(exe, args0)
+		log.Printf("watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep %s", exe)
+	})
 }
 
 // emitDegraded forwards watcher degradation to the frontend (the

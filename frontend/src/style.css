@@ -200,7 +200,13 @@ body {
   white-space: nowrap;
 }
 
-#degraded-chip {
+/* The two status-bar notice chips share one look (the warning token):
+   #degraded-chip = live updates lost events; #backend-chip = the
+   persistent partial/off file-watching notice ("watch:backend" with
+   full=false; hover shows the hint). They are independent -- both can
+   show at once. */
+#degraded-chip,
+#backend-chip {
   flex: 0 0 auto;
   padding: 1px 7px;
   font-size: calc(var(--sb-font-size-small) - 2px);

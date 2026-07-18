@@ -113,6 +113,16 @@ interface WatchDegradedEvent {
   overflows: number;
 }
 
+// Payload of the "watch:backend" event (internal/app watchBackend),
+// emitted once when the watch layer is up. full is true only for the
+// fanotify whole-filesystem backend; otherwise hint carries a short
+// user-facing explanation the status-bar chip shows on hover.
+interface WatchBackendEvent {
+  backend: "fanotify" | "inotify" | "none";
+  full: boolean;
+  hint: string;
+}
+
 interface WailsGo {
   app: {
     App: WailsAppBindings;
