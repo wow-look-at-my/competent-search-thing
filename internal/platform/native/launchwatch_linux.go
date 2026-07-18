@@ -34,11 +34,11 @@ func WatchState() (launch.XState, bool) {
 	defer conn.Close()
 
 	root := xproto.Setup(conn).DefaultScreen(conn).Root
-	list := windowProp(conn, root, internAtom(conn, "_NET_CLIENT_LIST_STACKING"))
-	if list == nil {
-		list = windowProp(conn, root, internAtom(conn, "_NET_CLIENT_LIST"))
+	list, present := windowPropPresent(conn, root, internAtom(conn, "_NET_CLIENT_LIST_STACKING"))
+	if !present {
+		list, present = windowPropPresent(conn, root, internAtom(conn, "_NET_CLIENT_LIST"))
 	}
-	if list == nil {
+	if !present {
 		return launch.XState{}, false
 	}
 	var st launch.XState
@@ -69,6 +69,23 @@ func WatchState() (launch.XState, bool) {
 		st.Windows = append(st.Windows, w)
 	}
 	return st, true
+}
+
+// windowPropPresent reads like windowProp but also reports whether
+// the property EXISTS at all: a present-but-EMPTY _NET_CLIENT_LIST
+// (every window closed or hidden -- the bar hides right after a
+// launch, so this is the NORMAL state on an otherwise empty desktop)
+// must poll as "zero windows", never as "no EWMH window manager".
+// An absent property reads back with Format 0.
+func windowPropPresent(conn *xgb.Conn, win xproto.Window, prop xproto.Atom) ([]byte, bool) {
+	if prop == 0 {
+		return nil, false
+	}
+	rep, err := xproto.GetProperty(conn, false, win, prop, xproto.GetPropertyTypeAny, 0, propReadLen).Reply()
+	if err != nil || rep == nil || rep.Format == 0 {
+		return nil, false
+	}
+	return rep.Value, true
 }
 
 // internAtomAlways interns name, CREATING the atom when absent --

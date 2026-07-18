@@ -36,6 +36,7 @@
 #include <unistd.h>
 
 #include <gtk/gtk.h>
+#include <gio/gdesktopappinfo.h>
 
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
@@ -117,20 +118,51 @@ cs_find_toplevel(void)
 	return best;
 }
 
-/* cs_gdk_mint asks gdk's app-launch context for a startup-notify id
- * (NULL info/files: no .desktop identity to describe; verified fine
- * at 3.24.33 on both backends). On X11 this also performs the libsn
- * "new:" broadcast. */
+/* cs_mint_app_info builds the GAppInfo the mint describes the launch
+ * with: the resolved handler's desktop entry when we have one, else a
+ * synthesized commandline entry flagged SUPPORTS_STARTUP_NOTIFICATION.
+ * A real info is REQUIRED: GLib >= 2.76 asserts G_IS_APP_INFO(info)
+ * in g_app_launch_context_get_startup_notify_id and returns NULL for
+ * a NULL info (verified empirically on 2.80), and a desktop-entry
+ * info also gives the X11 "new:" broadcast its proper NAME/WMCLASS
+ * fields. */
+static GAppInfo *
+cs_mint_app_info(const char *desktop_id)
+{
+	GAppInfo *info = NULL;
+
+	if (desktop_id != NULL && desktop_id[0] != '\0') {
+		GDesktopAppInfo *dai = g_desktop_app_info_new(desktop_id);
+		if (dai != NULL)
+			info = G_APP_INFO(dai);
+	}
+	if (info == NULL)
+		info = g_app_info_create_from_commandline("true",
+		    "competent-search-thing-launch",
+		    G_APP_INFO_CREATE_SUPPORTS_STARTUP_NOTIFICATION, NULL);
+	return info;
+}
+
+/* cs_gdk_mint asks gdk's app-launch context for a startup-notify id,
+ * described by the handler's appinfo. On X11 this also performs the
+ * libsn "new:" broadcast. */
 static char *
-cs_gdk_mint(GdkDisplay *dpy)
+cs_gdk_mint(GdkDisplay *dpy, const char *desktop_id)
 {
 	GdkAppLaunchContext *ctx;
+	GAppInfo *info;
 	char *id;
 
 	ctx = gdk_display_get_app_launch_context(dpy);
 	if (ctx == NULL)
 		return NULL;
-	id = g_app_launch_context_get_startup_notify_id(G_APP_LAUNCH_CONTEXT(ctx), NULL, NULL);
+	info = cs_mint_app_info(desktop_id);
+	if (info == NULL) {
+		g_object_unref(ctx);
+		return NULL;
+	}
+	id = g_app_launch_context_get_startup_notify_id(G_APP_LAUNCH_CONTEXT(ctx), info, NULL);
+	g_object_unref(info);
 	g_object_unref(ctx);
 	return id;
 }
@@ -366,7 +398,7 @@ cs_prepare_wayland(void)
 }
 
 void
-cs_mint(CsMintResult *out)
+cs_mint(const char *desktop_id, CsMintResult *out)
 {
 	GdkDisplay *dpy;
 	char *id;
@@ -378,7 +410,7 @@ cs_mint(CsMintResult *out)
 		return;
 #ifdef GDK_WINDOWING_X11
 	if (GDK_IS_X11_DISPLAY(dpy)) {
-		id = cs_gdk_mint(dpy);
+		id = cs_gdk_mint(dpy, desktop_id);
 		if (id != NULL) {
 			out->id = id;
 			out->kind = CS_MINT_X11_SN;
@@ -388,7 +420,7 @@ cs_mint(CsMintResult *out)
 #endif
 #ifdef GDK_WINDOWING_WAYLAND
 	if (GDK_IS_WAYLAND_DISPLAY(dpy)) {
-		id = cs_gdk_mint(dpy);
+		id = cs_gdk_mint(dpy, desktop_id);
 		if (id != NULL) {
 			out->id = id;
 			out->kind = CS_MINT_WAYLAND_GDK;
@@ -400,4 +432,5 @@ cs_mint(CsMintResult *out)
 	}
 #endif
 	(void)id;
+	(void)desktop_id;
 }

@@ -15,7 +15,7 @@ import (
 // them off linux.
 
 // MintLaunchCredential reports no credential off linux.
-func MintLaunchCredential(time.Duration) launch.Credential {
+func MintLaunchCredential(time.Duration, string) launch.Credential {
 	return launch.Credential{Kind: launch.KindNone}
 }
 

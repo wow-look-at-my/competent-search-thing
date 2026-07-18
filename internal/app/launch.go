@@ -174,12 +174,18 @@ func (a *App) runCommandAction(argv []string, desktopID string) error {
 }
 
 // mintFor mints a credential when the policy says the handler can use
-// one; otherwise (or without the seam) the none-credential.
+// one; otherwise (or without the seam) the none-credential. The
+// resolved handler's desktop id describes the launch (name/wmclass in
+// the X11 broadcast; GLib >= 2.76 requires a real appinfo).
 func (a *App) mintFor(h launch.Handler, resolved bool) launch.Credential {
 	if !launch.ShouldMint(h, resolved) || a.plat.mintCredential == nil {
 		return launch.Credential{Kind: launch.KindNone}
 	}
-	return a.plat.mintCredential()
+	id := ""
+	if resolved {
+		id = h.DesktopID
+	}
+	return a.plat.mintCredential(id)
 }
 
 // targetIsDir stats a path target through the lstat seam; symlinks

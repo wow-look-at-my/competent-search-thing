@@ -33,8 +33,10 @@ int cs_on_gtk_thread(void);
  * (g_idle_add); csRunOnGtk runs and frees it. */
 void cs_idle_add(uintptr_t handle);
 
-/* Mint one launch credential. GTK main thread only. */
-void cs_mint(CsMintResult *out);
+/* Mint one launch credential, described by the resolved handler's
+ * desktop id (NULL/empty = a synthesized commandline appinfo). GTK
+ * main thread only. */
+void cs_mint(const char *desktop_id, CsMintResult *out);
 
 /* One-time Wayland preparation (the keyboard serial listener). GTK
  * main thread only; no-op elsewhere and on X11. */

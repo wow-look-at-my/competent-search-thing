@@ -37,8 +37,8 @@ func launchTestApp(t *testing.T, h launch.Handler, cred launch.Credential) (*App
 		r.call("resolve:" + tg.Raw)
 		return h, true
 	}
-	a.plat.mintCredential = func() launch.Credential {
-		r.call("mint")
+	a.plat.mintCredential = func(desktopID string) launch.Credential {
+		r.call("mint:" + desktopID)
 		return cred
 	}
 	return a, r
@@ -56,7 +56,7 @@ func TestOpenDBusTransport(t *testing.T) {
 	a.Startup(context.Background())
 	require.NoError(t, a.Open("/tmp/x.txt"))
 	require.Equal(t,
-		[]string{"resolve:/tmp/x.txt", "mint", "dbusLaunch:org.gnome.gedit:Open", "hide"},
+		[]string{"resolve:/tmp/x.txt", "mint:org.gnome.gedit.desktop", "dbusLaunch:org.gnome.gedit:Open", "hide"},
 		r.callNames(), "resolve -> mint -> dbus dispatch -> hide; exec and xdg-open never run")
 	require.Equal(t, []string{"file:///tmp/x.txt"}, gotCall.URIs)
 	require.Equal(t, map[string]string{
@@ -81,7 +81,7 @@ func TestOpenDBusFailureFallsBackToExec(t *testing.T) {
 	a.Startup(context.Background())
 	require.NoError(t, a.Open("/tmp/x.txt"))
 	require.Equal(t,
-		[]string{"resolve:/tmp/x.txt", "mint", "dbusLaunch:org.gnome.gedit:Open",
+		[]string{"resolve:/tmp/x.txt", "mint:org.gnome.gedit.desktop", "dbusLaunch:org.gnome.gedit:Open",
 			"launchExec:gedit file:///tmp/x.txt", "hide"},
 		r.callNames(), "a failed dbus activation falls through to the handler's own Exec")
 	require.Equal(t, launch.CredentialEnv(cred), execEnv, "the credential rides the child env")
@@ -105,7 +105,7 @@ func TestOpenExecFailureFallsBackToXdgOpen(t *testing.T) {
 	a.Startup(context.Background())
 	require.NoError(t, a.Open("/tmp/x.txt"))
 	require.Equal(t,
-		[]string{"resolve:/tmp/x.txt", "mint", "launchExec:gedit file:///tmp/x.txt",
+		[]string{"resolve:/tmp/x.txt", "mint:org.gnome.gedit.desktop", "launchExec:gedit file:///tmp/x.txt",
 			"open:/tmp/x.txt", "hide"},
 		r.callNames(), "a failed exec falls through to the xdg-open candidates")
 	require.Equal(t, launch.CredentialEnv(cred), openEnv,
@@ -118,7 +118,7 @@ func TestOpenTerminalHandlerSkipsExec(t *testing.T) {
 	a.Startup(context.Background())
 	require.NoError(t, a.Open("/tmp/x.txt"))
 	require.Equal(t,
-		[]string{"resolve:/tmp/x.txt", "mint", "open:/tmp/x.txt", "hide"},
+		[]string{"resolve:/tmp/x.txt", "mint:vim.desktop", "open:/tmp/x.txt", "hide"},
 		r.callNames(), "Terminal=true handlers go straight to xdg-open (which knows terminals)")
 }
 
@@ -243,7 +243,7 @@ func TestRevealCarriesCredentialAndStartupID(t *testing.T) {
 	a.Startup(context.Background())
 	require.NoError(t, a.Reveal("/tmp/y.txt"))
 	require.Equal(t,
-		[]string{"resolve:/tmp/y.txt", "mint", "reveal:/tmp/y.txt", "hide"},
+		[]string{"resolve:/tmp/y.txt", "mint:org.gnome.Nautilus.desktop", "reveal:/tmp/y.txt", "hide"},
 		r.callNames())
 	require.Equal(t, "reveal-cred", gotSID, "the minted id rides the ShowItems startup-id argument")
 	require.Equal(t, launch.CredentialEnv(cred), gotEnv, "and the fallback child env")
@@ -273,8 +273,8 @@ func TestRunCommandActionDBusActivation(t *testing.T) {
 		r.call("handlerByID:" + id)
 		return code, true
 	}
-	a.plat.mintCredential = func() launch.Credential {
-		r.call("mint")
+	a.plat.mintCredential = func(desktopID string) launch.Credential {
+		r.call("mint:" + desktopID)
 		return launch.Credential{ID: "run-cred", Kind: launch.KindWaylandGDK}
 	}
 	var gotCall launch.DBusCall
@@ -288,7 +288,7 @@ func TestRunCommandActionDBusActivation(t *testing.T) {
 		Type: plugin.ActionRunCommand, Argv: []string{"gedit"}, DesktopID: "org.gnome.gedit.desktop"})
 	require.NoError(t, err)
 	require.Equal(t,
-		[]string{"handlerByID:org.gnome.gedit.desktop", "mint",
+		[]string{"handlerByID:org.gnome.gedit.desktop", "mint:org.gnome.gedit.desktop",
 			"dbusLaunch:org.gnome.gedit:Activate", "hide"},
 		r.callNames(), "a DBusActivatable app launches via Activate -- raising its existing window")
 	require.Nil(t, gotCall.URIs)
@@ -301,7 +301,7 @@ func TestRunCommandActionDBusFailureFallsBackToArgv(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
 	a.plat.handlerByID = func(id string) (launch.Handler, bool) { return code, true }
 	cred := launch.Credential{ID: "run-cred-2", Kind: launch.KindWaylandGDK}
-	a.plat.mintCredential = func() launch.Credential { return cred }
+	a.plat.mintCredential = func(string) launch.Credential { return cred }
 	a.plat.dbusLaunch = func(launch.DBusCall) error { return errors.New("activation refused") }
 	var gotEnv []string
 	a.plat.run = func(argv, env []string) error {
@@ -323,7 +323,7 @@ func TestRunCommandActionNonDBusHandlerSpawnsWithEnv(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
 	a.plat.handlerByID = func(id string) (launch.Handler, bool) { return plainApp, true }
 	cred := launch.Credential{ID: "run-cred-3", Kind: launch.KindX11SN}
-	a.plat.mintCredential = func() launch.Credential { return cred }
+	a.plat.mintCredential = func(string) launch.Credential { return cred }
 	var gotEnv []string
 	a.plat.run = func(argv, env []string) error {
 		r.call("run:" + strings.Join(argv, " "))
@@ -363,7 +363,7 @@ func TestRunCommandActionSpawnFailureReapsSequence(t *testing.T) {
 	a.plat.handlerByID = func(id string) (launch.Handler, bool) {
 		return launch.Handler{DesktopID: id, StartupNotify: true}, true
 	}
-	a.plat.mintCredential = func() launch.Credential {
+	a.plat.mintCredential = func(string) launch.Credential {
 		return launch.Credential{ID: "sn-id-4", Kind: launch.KindX11SN}
 	}
 	boom := errors.New("spawn failed")

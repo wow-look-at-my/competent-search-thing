@@ -187,7 +187,7 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 		r.call("handlerByID:" + id)
 		return launch.Handler{}, false
 	}
-	a.plat.mintCredential = func() launch.Credential {
+	a.plat.mintCredential = func(string) launch.Credential {
 		r.call("mint")
 		return launch.Credential{Kind: launch.KindNone}
 	}

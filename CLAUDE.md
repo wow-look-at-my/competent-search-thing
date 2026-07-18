@@ -1029,7 +1029,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   geometry, unaffected); launchmint_linux.{go,h,c} = the GTK-thread
   credential mint: runOnGTKThread (g_main_context_is_owner inline
   check, else g_idle_add + cgo.Handle trampoline csRunOnGtk, bounded
-  wait, abandoned callbacks self-clean) and cs_mint (X11 = gdk
+  wait, abandoned callbacks self-clean) and cs_mint(desktop_id) --
+  the mint DESCRIBES the launch with a real GAppInfo (the resolved
+  handler's desktop entry, else a synthesized commandline appinfo
+  flagged SUPPORTS_STARTUP_NOTIFICATION): GLib >= 2.76 asserts
+  G_IS_APP_INFO and returns NULL for a NULL info (verified
+  empirically on 2.80; never pass NULL) -- (X11 = gdk
   app-launch-context startup-notify id incl. the libsn "new:"
   broadcast; Wayland = the same call (notify_launch uuid on 3.24.33,
   real token on >= 3.24.35) falling back to a hand-rolled
@@ -1049,7 +1054,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   launch.Handler incl. DBusActivatable/StartupNotify/StartupWMClass/
   Terminal/Exec/Exe); launchwatch_linux.go = WatchState (stacking
   client list -- _NET_CLIENT_LIST_STACKING falling back to
-  _NET_CLIENT_LIST -- + active window + per-window pid/WM_CLASS
+  _NET_CLIENT_LIST, read via windowPropPresent because a
+  present-but-EMPTY list (the bar hides right after a launch; an
+  otherwise empty desktop is the NORMAL post-launch state) must poll
+  as zero windows, not as "no EWMH WM" -- + active window +
+  per-window pid/WM_CLASS
   instance+class/_NET_STARTUP_ID/_NET_WM_USER_TIME, conn-per-call,
   cap 100), internAtomAlways (only_if_exists=false -- scratch atoms
   must be CREATED), scratchWindow, serverTime, and

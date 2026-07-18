@@ -5,6 +5,7 @@ package native
 /*
 #cgo linux pkg-config: gtk+-3.0 gdk-3.0 gio-2.0 gio-unix-2.0 wayland-client
 #include <stdint.h>
+#include <stdlib.h>
 #include "launchmint_linux.h"
 */
 import "C"
@@ -12,6 +13,7 @@ import "C"
 import (
 	"runtime/cgo"
 	"time"
+	"unsafe"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/launch"
 )
@@ -55,19 +57,25 @@ func runOnGTKThread(f func(), timeout time.Duration) bool {
 
 // MintLaunchCredential mints one launch credential on the GTK main
 // thread (see launchmint_linux.c for the per-backend mechanism),
-// waiting at most timeout for the GTK loop to service the request. A
-// none-credential comes back when the loop is not running, the wait
-// times out, or the session has no minting backend (non-GNOME
-// Wayland without xdg-activation).
-func MintLaunchCredential(timeout time.Duration) launch.Credential {
+// describing the launch with the resolved handler's desktop id when
+// there is one (GLib >= 2.76 requires a real GAppInfo; an empty id
+// synthesizes one) and waiting at most timeout for the GTK loop to
+// service the request. A none-credential comes back when the loop is
+// not running, the wait times out, or the session has no minting
+// backend (non-GNOME Wayland without xdg-activation).
+func MintLaunchCredential(timeout time.Duration, desktopID string) launch.Credential {
 	type mintOut struct {
 		id   string
 		kind C.int
 	}
 	ch := make(chan mintOut, 1)
 	ok := runOnGTKThread(func() {
+		// Allocated and freed inside the closure, which runs (and
+		// therefore cleans up) even when the caller stopped waiting.
+		cid := C.CString(desktopID)
+		defer C.free(unsafe.Pointer(cid))
 		var res C.CsMintResult
-		C.cs_mint(&res)
+		C.cs_mint(cid, &res)
 		out := mintOut{kind: res.kind}
 		if res.id != nil {
 			out.id = C.GoString(res.id)

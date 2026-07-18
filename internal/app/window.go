@@ -101,9 +101,11 @@ type platformSeams struct {
 	resolveHandler func(t launch.Target) (launch.Handler, bool)
 	handlerByID    func(id string) (launch.Handler, bool)
 	// mintCredential mints one launch credential on the GTK thread
-	// (startup-notification id or activation token); best-effort, a
-	// none-credential on timeout or unsupported backends.
-	mintCredential func() launch.Credential
+	// (startup-notification id or activation token), described by the
+	// resolved handler's desktop id ("" = a synthesized appinfo);
+	// best-effort, a none-credential on timeout or unsupported
+	// backends.
+	mintCredential func(desktopID string) launch.Credential
 	// prepareLaunch performs the one-time native launch setup (the
 	// Wayland input-serial listener); called once at Startup.
 	prepareLaunch func()
@@ -159,8 +161,8 @@ func defaultPlatformSeams() platformSeams {
 		launchExec:      launcher.Launch,
 		resolveHandler:  native.ResolveHandler,
 		handlerByID:     native.HandlerByDesktopID,
-		mintCredential: func() launch.Credential {
-			return native.MintLaunchCredential(launchMintTimeout)
+		mintCredential: func(desktopID string) launch.Credential {
+			return native.MintLaunchCredential(launchMintTimeout, desktopID)
 		},
 		prepareLaunch: native.PrepareLaunch,
 		dbusLaunch: func(call launch.DBusCall) error {
