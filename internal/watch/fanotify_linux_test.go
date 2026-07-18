@@ -2,6 +2,7 @@ package watch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -346,6 +347,58 @@ func TestFanotifySweepMarksNewMounts(t *testing.T) {
 	marks := len(h.markedPaths())
 	sweepOnce(t, s)
 	require.Len(t, h.markedPaths(), marks, "a stable mount table re-marks nothing")
+
+	// A mount that appears but cannot be marked is logged and still
+	// force-reconciled: coverage holds through sweeps, latency only.
+	badsub := filepath.Join(root, "badmount")
+	require.NoError(t, os.Mkdir(badsub, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(badsub, "still-indexed.txt"), nil, 0o644))
+	h.setFsid(badsub, fanoFsid{6, 6})
+	h.setMarkErr(badsub, unix.ENODEV)
+	mu.Lock()
+	table = []string{sub, badsub}
+	mu.Unlock()
+	sweepOnce(t, s)
+	require.Contains(t, h.markedPaths(), badsub, "the mark was attempted")
+	_, ok = h.n.mountFor(fanoFsid{6, 6})
+	require.False(t, ok, "the unmarkable filesystem stays unrouted")
+	waitFor(t, func() bool { return hasPath(m, filepath.Join(badsub, "still-indexed.txt")) },
+		"the reconcile still indexed the unmarkable mount's content")
+}
+
+func TestNewAutoNotifierAlwaysYieldsANotifier(t *testing.T) {
+	// Backend auto-detection never fails overall: the real fanotify
+	// backend when the environment allows it, else the per-directory
+	// fsnotify fallback (the common unprivileged-CI outcome). Either
+	// way the caller gets a working notifier.
+	n, err := newAutoNotifier([]string{t.TempDir()})()
+	require.NoError(t, err)
+	require.NotNil(t, n)
+	require.NoError(t, n.Close())
+}
+
+func TestFanotifyReadErrorSignalsOverflow(t *testing.T) {
+	root := t.TempDir()
+	h := newFanoHarness(t)
+	h.n.readFn = func(int, []byte) (int, error) { return 0, errors.New("boom") }
+	require.NoError(t, h.n.start([]string{root}))
+	t.Cleanup(func() { _ = h.n.Close() })
+	require.ErrorIs(t, <-h.n.Errors(), fsnotify.ErrEventOverflow,
+		"a dead event source degrades exactly like an overflow: sweeps take over")
+}
+
+func TestFanotifyDeliverGuardsCraftedNames(t *testing.T) {
+	root := t.TempDir()
+	h := newFanoHarness(t)
+	require.NoError(t, h.n.start([]string{root}))
+	t.Cleanup(func() { _ = h.n.Close() })
+	h.bufs <- concat(
+		fanoRec(unix.FAN_CREATE, fsidA, []byte(root), ".."),
+		fanoRec(unix.FAN_CREATE, fsidA, []byte(root), "ok.txt"),
+	)
+	ev := <-h.n.Events()
+	require.Equal(t, filepath.Join(root, "ok.txt"), ev.Name,
+		"a crafted .. entry name is dropped; the sane event still flows")
 }
 
 func TestFanotifyMarkMountAfterCloseErrors(t *testing.T) {
