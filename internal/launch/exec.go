@@ -27,8 +27,25 @@ const droppedFieldCodes = "ickdDnNvm"
 // silently launch without the file; matches xdg-open's fallback). An
 // empty t.Raw (a bare application launch) makes every target code
 // expand to nothing, so a lone %f argument disappears entirely --
-// byte-identical argv to parseDesktopExec.
+// byte-identical argv to parseDesktopExec. An Exec line whose program
+// token does not survive a target-less expansion (empty, field codes
+// only, an explicit "" program) is unlaunchable and returns nil: the
+// target must never end up as argv[0].
 func ExpandExec(exec string, t Target) []string {
+	if base, _ := expandExecArgs(exec, Target{}); len(base) == 0 || base[0] == "" {
+		return nil
+	}
+	argv, sawTargetCode := expandExecArgs(exec, t)
+	if !sawTargetCode && t.Raw != "" {
+		argv = append(argv, t.Raw)
+	}
+	return argv
+}
+
+// expandExecArgs is ExpandExec's tokenizer pass: the argv with t
+// substituted (no no-code target append) plus whether a target field
+// code was seen.
+func expandExecArgs(exec string, t Target) ([]string, bool) {
 	var argv []string
 	var cur strings.Builder
 	started := false // tracks explicit empty "" and empty-expansion args
@@ -97,8 +114,5 @@ func ExpandExec(exec string, t Target) []string {
 		}
 	}
 	flush()
-	if !sawTargetCode && t.Raw != "" {
-		argv = append(argv, t.Raw)
-	}
-	return argv
+	return argv, sawTargetCode
 }

@@ -40,8 +40,12 @@ func TestExpandExec(t *testing.T) {
 		{name: "field code embedded in an argument", exec: "app --file=%f", t: file, want: []string{"app", "--file=/tmp/a b.txt"}},
 		{name: "embedded code with empty target leaves the prefix", exec: "app --file=%f", t: none, want: []string{"app", "--file="}},
 		{name: "tabs separate", exec: "app\t%f", t: file, want: []string{"app", "/tmp/a b.txt"}},
-		{name: "empty exec with target appends only the target", exec: "", t: file, want: []string{"/tmp/a b.txt"}},
+		{name: "empty exec is unlaunchable", exec: "", t: file, want: nil},
 		{name: "empty exec empty target", exec: "", t: none, want: nil},
+		{name: "field-code-only exec is unlaunchable", exec: "%f", t: file, want: nil},
+		{name: "icon-code-only exec is unlaunchable", exec: "%i", t: file, want: nil},
+		{name: "explicit empty program is unlaunchable", exec: `"" %f`, t: file, want: nil},
+		{name: "whitespace-only exec is unlaunchable", exec: "  \t ", t: file, want: nil},
 		{name: "dangling backslash inside quotes", exec: `app "x\`, t: none, want: []string{"app", "x"}},
 	}
 	for _, tt := range tests {

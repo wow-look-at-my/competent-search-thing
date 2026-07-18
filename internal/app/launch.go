@@ -256,6 +256,11 @@ func (a *App) endStartupSequence(cred launch.Credential) {
 	}
 }
 
+// launchReapDelay is how long endStartupSequenceLater waits before
+// reaping a watcherless x11-sn sequence -- the same window the
+// watcher would have granted. Variable so tests need not wait it out.
+var launchReapDelay = launch.DefaultWatchDeadline
+
 // endStartupSequenceLater reaps an x11-sn sequence after the watcher
 // deadline when no watcher runs, giving the launchee the same
 // completion window it would have had.
@@ -267,7 +272,7 @@ func (a *App) endStartupSequenceLater(cred launch.Credential) {
 	go func() {
 		select {
 		case <-ctx.Done():
-		case <-time.After(launch.DefaultWatchDeadline):
+		case <-time.After(launchReapDelay):
 			a.endStartupSequence(cred)
 		}
 	}()
