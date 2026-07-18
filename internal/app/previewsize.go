@@ -6,13 +6,14 @@ import "github.com/wow-look-at-my/competent-search-thing/internal/config"
 // for. main.go must know it BEFORE wails.Run builds the native window
 // (the size is fixed for the process lifetime), which is why this is
 // a standalone config read like WindowTranslucent. enabled false --
-// the pane off, or any config error -- means the classic 680x460, the
-// exact pre-pane window. The returned dimensions are always positive
-// (config.Load normalizes them).
+// the pane off, or any config error -- means the configured base size
+// (window.width/height; the WindowSize read, defaults 780x550). The
+// returned dimensions are always positive (config.Load normalizes
+// both the window and preview sections, even on error).
 func PreviewWindowSize() (w, h int, enabled bool) {
 	cfg, err := config.Load()
 	if err != nil || !cfg.Preview.Enabled {
-		return WindowWidth, WindowHeight, false
+		return cfg.Window.Width, cfg.Window.Height, false
 	}
 	return cfg.Preview.WindowWidth, cfg.Preview.WindowHeight, true
 }

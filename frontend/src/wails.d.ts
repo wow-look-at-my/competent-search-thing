@@ -208,6 +208,10 @@ interface WailsAppBindings {
   GetTheme(): Promise<Record<string, string>>;
   // Contents of <configDir>/themes/custom.css (<= 64KB), else "".
   GetCustomCSS(): Promise<string>;
+  // The system-stats sampler's cached snapshot -- instant Go-side
+  // (never IO), so it is safe to call on the show path. enabled false
+  // (stats.disabled / no sampler) = hide the row entirely.
+  GetStats(): Promise<StatsSnapshot>;
   // Preview pane (internal/app preview.go). QueryPreview asks for
   // target under generation gen; answers arrive asynchronously as
   // "preview:result" events carrying gen. A {kind: "none"} target
@@ -243,6 +247,32 @@ interface WatchDegradedEvent {
   watched: number;
   dropped: number;
   overflows: number;
+}
+
+// Payload of the "stats:update" event AND the GetStats return
+// (internal/sysstats Snapshot; keep field names in lockstep with its
+// json tags). enabled false means the feature is off (stats.disabled):
+// hide the #stats row entirely and skip rendering. enabled true with a
+// metric's *Ok false means that one metric has no live value (missing
+// source, non-Linux, failed read, rate not accumulated yet): render a
+// dash. Sizes are bytes, rates bytes/second, percentages 0..100.
+// Events fire only while the bar is visible, every ~1.5s, plus one at
+// summon and a ~300ms follow-up.
+interface StatsSnapshot {
+  enabled: boolean;
+  cpuPct: number;
+  cpuOk: boolean;
+  gpuPct: number;
+  gpuOk: boolean;
+  memUsed: number;
+  memTotal: number;
+  memOk: boolean;
+  swapUsed: number;
+  swapTotal: number;
+  swapOk: boolean;
+  netRxBps: number;
+  netTxBps: number;
+  netOk: boolean;
 }
 
 interface WailsGo {

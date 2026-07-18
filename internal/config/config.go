@@ -46,6 +46,16 @@ const (
 // OpenTabsConfig).
 const DefaultFirefoxTabsMaxResults = 6
 
+// Window size defaults and floors (see WindowConfig). The defaults are
+// ~15% larger than the original fixed 680x460 bar; the floors keep a
+// hand-edited config from producing an unusably tiny window.
+const (
+	DefaultWindowWidth  = 780
+	DefaultWindowHeight = 550
+	MinWindowWidth      = 320
+	MinWindowHeight     = 240
+)
+
 // Preview pane defaults (see PreviewConfig). The window grows to
 // DefaultPreviewWindowWidth x DefaultPreviewWindowHeight when the pane
 // is enabled; the size knobs bound what one preview may cost.
@@ -94,6 +104,8 @@ type Config struct {
 	// History configures the query history behind the bar's Up/Down
 	// recall (see internal/history).
 	History HistoryConfig `json:"history"`
+	// Stats configures the system-stats row (see internal/sysstats).
+	Stats StatsConfig `json:"stats"`
 	// Window configures the native window layer (read by main.go
 	// before the Wails runtime starts).
 	Window WindowConfig `json:"window"`
@@ -194,6 +206,26 @@ type WindowConfig struct {
 	// solid black, which is why the zero value -- the default --
 	// keeps the window opaque (current behavior).
 	Translucent bool `json:"translucent"`
+	// Width is the bar window's width in pixels. Zero or negative
+	// values (including configs predating the knob) get
+	// DefaultWindowWidth; positive values below MinWindowWidth are
+	// raised to that floor. See Normalize.
+	Width int `json:"width"`
+	// Height is the bar window's height in pixels; repaired against
+	// DefaultWindowHeight / MinWindowHeight the same way.
+	Height int `json:"height"`
+}
+
+// StatsConfig configures the system-stats row (see internal/sysstats
+// and internal/app's stats wiring). The zero value -- the default --
+// means enabled, matching the tray.disabled convention: the sampler
+// only ever runs while the bar is visible and degrades missing
+// sources to placeholders by itself, so only users who actively
+// dislike the row need the switch.
+type StatsConfig struct {
+	// Disabled turns the system-stats sampler (and with it the
+	// frontend's stats row data) off.
+	Disabled bool `json:"disabled"`
 }
 
 // HistoryConfig configures the query history (see internal/history).
@@ -356,6 +388,7 @@ func Default() Config {
 		Theme:                 DefaultTheme,
 		Plugins:               PluginsConfig{Entries: map[string]PluginEntry{}},
 		Bangs:                 BangsConfig{Sigils: DefaultBangSigils(), Aliases: map[string]string{}},
+		Window:                WindowConfig{Width: DefaultWindowWidth, Height: DefaultWindowHeight},
 		Firefox:               DefaultFirefox(),
 		Preview:               DefaultPreview(),
 	}
@@ -446,7 +479,9 @@ func Save(c Config) error {
 // fall back to the default root, relative roots are absolutized,
 // zero/negative knobs get their defaults (the firefox.frequentSites,
 // firefox.openTabs and preview numbers included, plus an empty
-// preview.openai.model), an empty theme name gets the
+// preview.openai.model), the window size gets its
+// defaults when unset and is clamped up to the minimum floors when set
+// too small, an empty theme name gets the
 // default theme, nil
 // plugin entries and bang aliases become empty maps, and an empty
 // sigil list gets the default sigils. The preview API keys are passed
@@ -506,6 +541,19 @@ func (c *Config) Normalize() {
 	}
 	if c.Firefox.OpenTabs.MaxResults <= 0 {
 		c.Firefox.OpenTabs.MaxResults = DefaultFirefoxTabsMaxResults
+	}
+	w := &c.Window
+	switch {
+	case w.Width <= 0:
+		w.Width = DefaultWindowWidth
+	case w.Width < MinWindowWidth:
+		w.Width = MinWindowWidth
+	}
+	switch {
+	case w.Height <= 0:
+		w.Height = DefaultWindowHeight
+	case w.Height < MinWindowHeight:
+		w.Height = MinWindowHeight
 	}
 	pv := &c.Preview
 	if pv.WindowWidth <= 0 {
