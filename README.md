@@ -213,7 +213,9 @@ buildhost (see [Install](#install)):
       to centering when the platform cannot say, e.g. Wayland)
 - [x] Open / Reveal: Enter opens the selection with the OS default
       handler, Ctrl+Enter (Cmd+Enter on macOS) reveals it in the file
-      manager; both hide the bar on success
+      manager; both hide the bar on success, and on Linux the target
+      application's window ends focused and raised (see
+      [Focus and raise on launch](#focus-and-raise-on-launch))
 - [x] Search UI: as-you-type results with match highlighting, dimmed
       parent paths, folder/file glyphs, keyboard + mouse selection,
       live index status bar and a staleness warning chip
@@ -1353,6 +1355,108 @@ So on a Wayland session the section simply never appears, and one log
 line says why. A future option is a GNOME Shell extension that exports
 the window list over D-Bus (for example "Window Calls"), which the app
 could consume opt-in; nothing like that ships today.
+
+## Focus and raise on launch
+
+Everything launched from the bar -- Enter on a file or URL, Ctrl+Enter
+reveal, an app from the Apps sections -- ends with the target
+application's window focused and raised wherever the platform allows
+it, instead of GNOME's "<App> is ready" notification. macOS `open` and
+Windows ShellExecute activate the target natively, so the machinery
+below is Linux-only.
+
+How a launch runs:
+
+1. **Resolve** the default handler through gio (by content type for
+   files, by URI scheme for URLs, `inode/directory` for reveal) and
+   read its capabilities: `DBusActivatable`, `StartupNotify`,
+   `StartupWMClass`, `Terminal`.
+2. **Mint an activation credential** while the bar still holds focus:
+   an X11 startup-notification id (carrying the user time of the
+   Enter press), GDK's Wayland launch id (a `gtk_shell1.notify_launch`
+   uuid on GTK 3.24.33/GNOME, a real xdg-activation token on GTK >=
+   3.24.35), or a hand-rolled `xdg_activation_v1` token authenticated
+   by our own keyboard serial + surface (non-GNOME compositors).
+   Minting follows GLib's gating: a handler that declares neither
+   `StartupNotify=true` nor `DBusActivatable=true` gets no credential
+   -- it could never redeem one, and an unredeemed X11 sequence would
+   pin a busy cursor.
+3. **Dispatch** through the first transport that works, every tier
+   carrying the same credential:
+   - `dbus` -- `org.freedesktop.Application` Open/Activate with
+     `desktop-startup-id` AND `activation-token` in platform-data
+     (what raises an existing GApplication window);
+   - `exec` -- the handler's own Exec line, field codes expanded, with
+     `DESKTOP_STARTUP_ID` and `XDG_ACTIVATION_TOKEN` in the child's
+     environment;
+   - `xdg-open` -- the pre-existing candidate table, same environment
+     attached (reveal uses its ShowItems candidates with the minted
+     id in the startup-id argument).
+   A tier falling through changes HOW the launch is transported,
+   never what opens.
+4. **Watch and raise (X11 and XWayland)**: whenever an X display is
+   reachable, a bounded watcher (~6s, 200ms polls) looks for the
+   launched window -- by spawned pid, by the minted id in
+   `_NET_STARTUP_ID`, or by WM_CLASS -- and activates it with a
+   `_NET_ACTIVE_WINDOW` client message carrying a FRESH X server
+   timestamp: byte-identical in form to what a taskbar click sends
+   (libwnck's activate), so it passes mutter's focus-stealing checks
+   and may switch workspaces (a zero timestamp cannot). A target that
+   already took focus by itself is left alone. If no new window ever
+   appears -- the launch handed off to an already-running instance,
+   e.g. a tab into an open editor -- the most-recently-used existing
+   window matching the handler's WM_CLASS is raised at the deadline:
+   mechanically the taskbar click you would have made. When the watch
+   ends, the X11 startup sequence is reaped (the libsn `remove:`
+   broadcast), so launchees that never complete startup notification
+   (chromium-family apps) cannot pin the busy cursor for mutter's 15s
+   timeout. Wayland sequences have no remove API; for non-redeeming
+   apps they time out server-side exactly like GNOME Shell's own
+   app-grid launches do.
+
+There is no config knob for any of this, by design: every fallback
+level is a transport downgrade, never a behavior change.
+
+Every launch logs exactly one line naming what it did:
+
+    launch: open /home/u/report.pdf handler=org.gnome.Evince.desktop credential=wayland-gdk:1b9ac0ff transport=dbus watcher=off
+
+(`handler=-` means no default handler resolved; `credential=none`
+means minting was skipped or unavailable; `transport` is
+`dbus`/`exec`/`xdg-open` -- reveal logs `showitems`; `watcher=on`
+means the X raise watcher armed.) At startup, one
+`launch: activation credentials enabled (session=...)` line announces
+the machinery.
+
+### Capability matrix
+
+| Situation | Mechanism | Result |
+|-----------|-----------|--------|
+| X11 -- new window | credential carries the Enter press's user time; mutter focuses new windows with fresh (or absent) credentials; watcher verifies | focused + raised |
+| X11 -- existing instance takes the target (editor tab, running browser) | Firefox >= 108 forwards the credential itself (`STARTUP_TOKEN` in its remoting) and presents; everything else: the watcher's MRU WM_CLASS match + fresh-timestamp `_NET_ACTIVE_WINDOW` | focused + raised |
+| Wayland GNOME -- new window | credential redeemed on first activation: GTK3 consumes `DESKTOP_STARTUP_ID` (`gtk_surface1.request_focus`), GTK4/Qt6/Electron >= 31.5 consume `XDG_ACTIVATION_TOKEN` (mutter 42 accepts a notify_launch uuid on that path with only a recency check) | focused + raised |
+| Wayland GNOME -- existing GTK/GApplication instance (gedit, nautilus opening a file) | `dbus` transport: Open() with the credential in platform-data; `gtk_window_present` redeems it | focused + raised |
+| Wayland GNOME -- existing XWayland instance (VS Code <= 1.106, the VS Code snap, anything forced to `--ozone-platform=x11`) | the X raise watcher over XWayland: MRU WM_CLASS match, fresh timestamp | focused + raised |
+| Wayland GNOME -- existing native-Wayland instance that forwards the token (Firefox >= 121 is native Wayland and does since 108) | the app serializes our `XDG_ACTIVATION_TOKEN` through its own single-instance remoting and redeems it on the existing surface (this is why BOTH env variables carry the id) | focused + raised |
+| Wayland GNOME -- existing native-Wayland instance that drops the token (stock VS Code >= 1.107: Electron consumes and unsets both variables before any JS runs, and its own singleton does not forward them) | none exists: no compositor channel can raise a foreign Wayland window, and xdg-activation redemption requires the TARGET's own surface | "<App> is ready" notification (honest limitation; a GNOME shell-extension companion could close it some day) |
+| Wayland non-GNOME (sway, KDE Plasma, ...) | hand-rolled `xdg_activation_v1` token (serial + surface authenticated); XWayland apps additionally watcher-covered when DISPLAY is set | compositor/app dependent: honored where xdg-activation is respected |
+| Reveal on X11/XWayland | ShowItems with the minted startup id + the watcher on the file manager's WM_CLASS | focused + raised |
+| Reveal on Wayland with a RUNNING nautilus | nautilus 42 accepts the ShowItems startup-id argument and discards it (a bare `gtk_window_present` with no credential) | notification (upstream nautilus behavior; a freshly started nautilus still gets focus) |
+| macOS / Windows | `open` / ShellExecute | focused + raised (native OS behavior; none of this machinery runs) |
+
+### Launch caveats
+
+- **Reveal into a running nautilus on Wayland** stays a notification
+  until nautilus honors the startup id it is handed (it is passed
+  anyway -- fixing it upstream fixes this app for free). On X11 and
+  XWayland the raise watcher already compensates.
+- **Native-Wayland apps that drop activation tokens** (stock VS Code
+  >= 1.107 handing a file to a running instance) cannot be raised by
+  any launcher on GNOME. The XWayland builds (snap, `--ozone-platform
+  =x11`) do not have this limitation.
+- The bar's window now has a proper `WM_CLASS` / Wayland `app_id`
+  (`competent-search-thing`): wails never set a program name, which
+  also broke the startup-notification id prefix.
 
 ## Tray icon
 

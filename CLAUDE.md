@@ -192,8 +192,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   frontend echoes back (defense in depth), logs it, then executes:
   copy_text -> ClipboardSetText (bar stays open); open_path (abs
   path only) and open_url (http/https + host only) -> the open seam;
-  run_command (1..16 non-empty <=1024-byte argv) -> the run seam
-  (launcher, detached); run_builtin -> rescan (Rescanner.Request;
+  run_command (1..16 non-empty <=1024-byte argv; a non-empty
+  DesktopID must be a bare *.desktop file name per
+  launch.ValidDesktopID) -> runCommandAction (launch.go): with a
+  DesktopID on linux it resolves handlerByID and takes the
+  credentialed path -- dbus Activate for DBusActivatable apps (what
+  focuses an already-running app), else the validated argv through
+  the run seam WITH the credential env -- plus watcher + launch log;
+  without one, byte-identical old behavior (run seam, detached, nil
+  env); run_builtin -> rescan (Rescanner.Request;
   friendly error while the index is still building) / reload
   (newRegistry, swap under mutex, Close the old) / config (open
   config.json) / version (copy `Version`, stays open) / quit
@@ -209,17 +216,50 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
   incl. run/activateWindow/appSource plus getenv/executable/args0/detectSession/
-  startPortal/ensureGnomeBinding, in window.go; defaults in New, plus
+  startPortal/ensureGnomeBinding AND the launch seams --
+  open/reveal/run take extraEnv now (reveal also startupID),
+  launchExec, resolveHandler, handlerByID, mintCredential,
+  prepareLaunch, dbusLaunch, watchState, snRemove -- in window.go;
+  defaults in New, plus
   the `newRegistry` and `newTray` seams); unit tests MUST replace
   them (see
   newTestApp, which also nils appSource, stubs newRegistry AND
-  newTray so no config, X11 or session-bus IO happens, pins getenv to
-  "" and detectSession to
+  newTray so no config, X11 or session-bus IO happens, pins goos to
+  "linux" -- identical launch-path behavior on the darwin CI job;
+  tests exercising other OSes set goos themselves -- pins getenv to
+  "" (no DISPLAY = raise watcher off) and detectSession to
   the unknown session -- keeping every test on the native
-  hotkey/positioning path unless it overrides detectSession -- and
-  makes startPortal/ensureGnomeBinding recording fakes) -- real
-  runtime funcs abort the process without a Wails context. Open/Reveal call the platform launcher and hide the
-  bar on success. `app.Result` is a type alias of `index.Result`
+  hotkey/positioning path unless it overrides detectSession -- makes
+  startPortal/ensureGnomeBinding recording fakes, and stubs the
+  launch seams: the handler never resolves, the mint yields none,
+  prepareLaunch stays deliberately silent; launch_test.go overrides
+  members per test) -- real
+  runtime funcs abort the process without a Wails context. Open/Reveal
+  run the CREDENTIALED LAUNCH PATH (launch.go) and hide the bar on
+  success: linux-only (launchEnabled gates on goos; macOS/Windows
+  keep the plain launcher call), ordering per launch = resolve the
+  handler (resolveHandler seam; reveal resolves Target{IsDir:true} =
+  the file MANAGER) -> mint a credential while the bar still holds
+  focus (mintCredential seam, gated by launch.ShouldMint -- no mint
+  for handlers with neither StartupNotify nor DBusActivatable) ->
+  watcherBefore snapshot (only when getenv DISPLAY != "" and the
+  watchState seam works) -> transport cascade (dispatchOpen: dbus
+  org.freedesktop.Application Open via launch.ApplicationDBusCall +
+  dbusLaunch seam, then the handler's own launch.ExpandExec argv via
+  launchExec seam unless Terminal, then the open seam = xdg-open
+  candidates; every tier carries launch.CredentialEnv, every
+  fall-through is logged) -> armRaiseWatcher (launch.RunWatcher
+  goroutine bounded by the app-lifetime launchCtx, cancelled in
+  Shutdown and left cancelled; when it ends -- and immediately on a
+  failed dispatch, or after launchReapDelay when no watcher could
+  arm -- endStartupSequence reaps an x11-sn sequence via the
+  snRemove seam) -> ONE log line launch.LogLine ("launch: <verb>
+  <target> handler=... credential=<kind>:<id8> transport=... watcher=
+  on|off"). openConfigFile routes through openTarget too. Startup
+  runs announceLaunch once (linux only): prepareLaunch seam (native
+  Wayland serial listener) + "launch: activation credentials enabled
+  (session=<kind>)". Blank targets skip straight to the launcher's
+  own validation. `app.Result` is a type alias of `index.Result`
   (the JSON tags path/name/isDir plus the optional hint live in
   internal/index). Search with an absolute-path query and ZERO index
   results may return ONE synthetic hint result (hint.go): the path
@@ -461,7 +501,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/plugin` -- the plugin system, pure and headless-testable
   (wired into the app by internal/app's plugins.go). schema.go:
   versioned JSON wire protocol
-  (Request/Response/Result/Action, v=1) and `SanitizeResponse`, which
+  (Request/Response/Result/Action, v=1; Action carries the
+  INTERNAL-ONLY DesktopID json:"desktop_id" -- the .desktop entry
+  behind a builtin run_command launch, consumed by the app's
+  credentialed launch path) and `SanitizeResponse`, which
   clamps/validates everything an external plugin returns: 20-result
   cap, rune caps (title 200/subtitle 300/badge 24/field 40+200, max 8
   fields), control chars -> spaces everywhere, icon = builtin name or
@@ -470,7 +513,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   copy_text <=8 KiB, run_command 1..16 argv <=1024 B each and the
   whole RESULT is dropped unless the manifest sets allow_run_command;
   internal-only set_query/run_builtin/activate_window always stripped
-  and a stray Action.Window on external types cleared; anything
+  and a stray Action.Window OR Action.DesktopID on external types
+  cleared; anything
   removed gets a human-readable reason for logging). trigger.go:
   `Trigger` Compile/Match/Boost -- prefix (case-insensitive,
   rune-folded) / regex (ci RE2 on the RAW query) / all_queries paths
@@ -533,7 +577,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   snapshot (empty query = first 15 alphabetical, prefix 100 /
   substring 80, cap 15, run_command argv via `parseDesktopExec`:
   quotes, backslash escapes, %-field codes stripped; the shared
-  scoring/sort/cap/result-build helper is `collectAppResults`);
+  scoring/sort/cap/result-build helper is `collectAppResults`, whose
+  actions also carry DesktopID = the InstalledApp.ID so the app can
+  launch with activation credentials);
   builtin_apps_search.go "apps-search"/Apps -- installed apps in
   NORMAL results: no bangs, a real all_queries Trigger (match
   override on builtinBase, effective min 2 runes), ranking exact 100
@@ -572,6 +618,53 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Exhaustively
   unit-tested, table-driven, plus an end-to-end manifest ->
   registry -> /bin/sh transport dispatch test.
+- `internal/launch` -- the pure decision half of "focus and raise on
+  launch" (README "Focus and raise on launch" holds the user-facing
+  capability matrix), exhaustively unit-tested headless; the
+  OS/display glue lives behind internal/platform/native seams wired
+  by internal/app launch.go. launch.go: `Target`/`ClassifyTarget`
+  (URL = scheme+host parse, else file path; URI = file:// form;
+  IsDir steers handler resolution to inode/directory), `Handler`
+  (DesktopID/Exec/WMClass/Exe/DBusActivatable/StartupNotify/
+  Terminal), `Credential` + kinds (none / x11-sn / wayland-gdk /
+  wayland-xdg), `ShouldMint` (unresolved handlers always mint;
+  resolved ones only with StartupNotify or DBusActivatable -- GLib's
+  dangling-busy-cursor gating), `CredentialEnv` (DESKTOP_STARTUP_ID
+  + XDG_ACTIVATION_TOKEN, BOTH carrying the same id -- launchees
+  pick whichever their toolkit understands, and Firefox >= 108
+  forwards it through its remoting), `LogLine` (the one-per-launch
+  log format), `ValidDesktopID` (bare *.desktop name). exec.go:
+  `ExpandExec` -- .desktop Exec tokenization (parseDesktopExec-
+  compatible quoting) with target substitution: %f/%F = raw path
+  (URL verbatim for URL targets, documented divergence), %u/%U =
+  URI, %% literal, %i/%c/%k + deprecated codes drop, unknown codes
+  keep their percent, NO target code = target appended last
+  (xdg-open-style divergence from GLib's silent no-file launch), and
+  an Exec whose program token does not survive a target-less
+  expansion is unlaunchable (nil -- the target must never become
+  argv[0]). dbus.go: `ApplicationDBusCall` derives the
+  org.freedesktop.Application call (bus name = id sans .desktop,
+  validated; path = "."->"/" + "-"->"_"; Open with URIs / Activate;
+  platform-data = desktop-startup-id + activation-token) and
+  `DBusActivate` performs it over a private never-autolaunched
+  session-bus conn (ctx-bounded; the method call itself
+  D-Bus-activates the service -- that IS the launch); tested against
+  a throwaway dbus-daemon like internal/portal. watcher.go: the
+  X-side raise watcher -- `XWindow`/`XState` (stacking order,
+  bottom-to-top), `NewIdentity` (pid + startup id + lowercased
+  WM_CLASS hints from StartupWMClass/exe base/argv0 base),
+  `RunWatcher` polls (default 6s deadline / 200ms interval,
+  ctx-bounded): an ACTIVE window matching the identity ends the
+  watch silently (self-raised; never double-activate), a NEW window
+  (not in the Before snapshot) matching pid/startup-id/class is
+  activated once (topmost match wins), and at the deadline the
+  most-recently-used EXISTING window matching the class hints
+  (highest _NET_WM_USER_TIME, ties toward the top of the stack) is
+  raised -- the editor-tab-into-running-instance fix -- else one
+  quiet give-up log. sn.go: `SNRemoveMessage` (the libsn `remove:
+  ID="..."` wire string, backslash-escaped, NUL-terminated) +
+  `SNChunks` (20-byte ClientMessage chunks, last zero-padded) behind
+  native.RemoveStartupSequence.
 - `internal/appctx` -- app-context collection for the plugin system,
   pure and headless-tested: the data types (AppInfo / InstalledApp /
   WindowInfo (ID uint32/Title/App/PID) /
@@ -863,7 +956,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   `RevealCommands`: linux xdg-open / dbus-send --print-reply
   FileManager1.ShowItems with xdg-open-parent fallback, darwin open /
   open -R, windows rundll32 FileProtocolHandler / explorer /select,)
-  and `Launcher` (injectable `Run`/`Start` seams + `Logf`; every
+  and `Launcher` (injectable `Run`/`Start` seams + `Logf`, BOTH
+  env-carrying now: Start(argv, extraEnv) returns (pid, wait, err)
+  and appends extraEnv to the inherited child environment -- nil =
+  byte-identical old behavior, never os.Setenv -- while
+  OpenEnv/RevealEnv/Launch thread the launch-credential env through
+  (Open/Reveal stay as nil-env wrappers); RevealCommands takes the
+  startupID injected into the ShowItems startup-id argument ("" =
+  the old call); `Launch(argv, extraEnv)` runs ONE resolved handler
+  command line under the same observed-grace semantics and returns
+  the child pid for the raise watcher; every
   spawn logs its exact argv; Open/Reveal observe the child for a 1.5s
   grace window -- a non-zero exit inside it returns an error with
   captured stderr (unlinked-temp-file capture, never a pipe a
@@ -911,10 +1013,51 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   walk kept per-WINDOW: skips untitled windows + os.Getpid()'s own,
   caps 100, no pid dedup -- and winlist_linux.go's ActivateWindow(id)
   = EWMH _NET_ACTIVE_WINDOW ClientMessage to the root window (format
-  32, source indication 2 = pager, SubstructureRedirect|Notify mask);
+  32, source indication 2 = pager, SubstructureRedirect|Notify mask)
+  now carrying a FRESH X server timestamp (launchwatch_linux.go's
+  serverTime: zero-length property-append on a scratch InputOnly
+  window + PropertyNotify, the gdk_x11_get_server_time trick; 0
+  fallback = old behavior) so it passes mutter's staleness gate and
+  may switch workspaces;
   winlist_other.go (!linux) = OpenWindows not-ok + ActivateWindow
   error, so the open-windows feature does not exist on
-  windows/darwin yet); windows = GetForegroundWindow / EnumWindows (package-
+  windows/darwin yet). LAUNCH GLUE (all linux-only, stubs in
+  launch_other.go): identity_linux.go = cgo init() g_set_prgname
+  ("competent-search-thing") at import time, before wails builds the
+  window -- wails sets no prgname, so the window had NO WM_CLASS and
+  NO wayland app_id (the CI screenshot script matches by title +
+  geometry, unaffected); launchmint_linux.{go,h,c} = the GTK-thread
+  credential mint: runOnGTKThread (g_main_context_is_owner inline
+  check, else g_idle_add + cgo.Handle trampoline csRunOnGtk, bounded
+  wait, abandoned callbacks self-clean) and cs_mint (X11 = gdk
+  app-launch-context startup-notify id incl. the libsn "new:"
+  broadcast; Wayland = the same call (notify_launch uuid on 3.24.33,
+  real token on >= 3.24.35) falling back to a hand-rolled
+  xdg_activation_v1 token on a DEDICATED wl_event_queue via proxy
+  wrappers -- never dispatching gdk's queue -- authenticated by the
+  last wl_keyboard serial from our own listener (cs_prepare_wayland,
+  scheduled at Startup via PrepareLaunch; the keymap fd is closed
+  per event) and the toplevel's live wl_surface fetched AT MINT TIME
+  (gdk recreates wayland objects per hide/show; never cache));
+  xdg-activation-v1-client-protocol.h +
+  xdg-activation-v1-protocol_linux.c are COMMITTED wayland-scanner
+  output (provenance + regen command in their headers;
+  ASCII-sanitized copyright sign; the _linux.c suffix keeps them off
+  darwin builds); launchresolve_linux.go = thread-safe gio handler
+  resolution (ResolveHandler: content-type guess by file NAME or
+  inode/directory, or URI scheme; HandlerByDesktopID; both fill
+  launch.Handler incl. DBusActivatable/StartupNotify/StartupWMClass/
+  Terminal/Exec/Exe); launchwatch_linux.go = WatchState (stacking
+  client list -- _NET_CLIENT_LIST_STACKING falling back to
+  _NET_CLIENT_LIST -- + active window + per-window pid/WM_CLASS
+  instance+class/_NET_STARTUP_ID/_NET_WM_USER_TIME, conn-per-call,
+  cap 100), internAtomAlways (only_if_exists=false -- scratch atoms
+  must be CREATED), scratchWindow, serverTime, and
+  RemoveStartupSequence = the libsn "remove:" broadcast (20-byte
+  format-8 ClientMessages to root, first chunk typed
+  _NET_STARTUP_INFO_BEGIN then _NET_STARTUP_INFO, PropertyChange
+  event mask, scratch sender window) reaping sequences
+  chromium-family launchees never complete; windows = GetForegroundWindow / EnumWindows (package-
   level callback) + IsWindowVisible + GetWindowTextW +
   GetWindowThreadProcessId + OpenProcess/QueryFullProcessImageNameW
   (Name = exe base sans extension), InstalledApps = HKLM+HKCU
@@ -1011,8 +1154,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   otherwise, merge order irrelevant) + `src/wails.d.ts` (ambient
   types for the Wails-injected `window.go` / `window.runtime` incl.
   EventsOn, the event payload shapes, and the plugin wire contract
-  TargetInfo/PluginAction (incl. activate_window + its window
-  field)/PluginResult/PluginEmission -- keep in sync
+  TargetInfo/PluginAction (incl. activate_window + its window field
+  and the internal desktop_id the frontend echoes back
+  unchanged)/PluginResult/PluginEmission -- keep in sync
   with internal/app + internal/plugin payload structs).
 - `examples/plugins/` -- three shipped example plugins, INERT until a
   user copies one into `<configDir>/plugins/` (each has a README with
