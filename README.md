@@ -210,6 +210,54 @@ index state** -- they differ only in how quickly a change shows up.
 | inotify hot set | a bounded budget of per-directory watches: the roots first, then your home subtree, then the rest, rotated LRU-style toward recently active directories | ~1 second (debounced) for watched directories | whenever fanotify is not available; the only live tier on macOS and Windows |
 | reconcile sweeps | every indexed directory, every pass | one sweep interval (default 20 minutes) | always (unless `watcher.sweepDisabled`) |
 
+### Enable full-filesystem watching (recommended)
+
+The fanotify tier is the one you want to be on: a handful of kernel
+marks cover every directory of the roots' filesystems, registration
+is near-instant, `max_user_watches` stops mattering, and freshness no
+longer depends on which directories happen to be in a watch budget.
+Linux gates it behind capabilities -- `CAP_SYS_ADMIN` for the marks,
+`CAP_DAC_READ_SEARCH` for resolving event paths -- so an unprivileged
+launch physically cannot use it. Grant both on the installed binary:
+
+```
+sudo setcap cap_sys_admin,cap_dac_read_search+ep /usr/local/bin/competent-search-thing
+```
+
+The app logs this exact command, with the real installed path filled
+in, at every startup that runs without fanotify. Re-run it after any
+upgrade that replaces the file (file capabilities live on the inode).
+
+With the grant, a change anywhere under your roots reaches search
+results in about a second. Without it, the watcher falls back to the
+bounded inotify hot set: the final index state is identical, but only
+hot-set directories get ~1s latency -- everything else waits for a
+sweep (see the tier table above). Running without fanotify is never
+silent:
+
+- the status bar keeps a persistent **"Partial file watching"** chip
+  up (hover it for what that means), or **"File watching off"** when
+  strict mode disabled the fallback (next paragraph);
+- the startup log names the effective backend and prints the setcap
+  command above.
+
+If a quiet inotify fallback is not acceptable, pin the backend:
+`"watcher": { "backend": "fanotify" }` in config.json is STRICT --
+when fanotify cannot start, live watching is disabled outright rather
+than falling back (the index still converges through sweeps), the log
+announces it loudly, and the bar shows "File watching off".
+`"backend": "inotify"` skips the fanotify probe entirely (debugging);
+the default `"auto"` tries fanotify and falls back.
+
+**Understand what the grant means before running it.** File
+capabilities apply process-wide to every run of that binary:
+`CAP_SYS_ADMIN` is root-equivalent for most practical purposes, and
+`CAP_DAC_READ_SEARCH` bypasses file permission checks when reading --
+anyone who can execute the binary gets both. Only do this on a
+single-user machine whose binary you trust.
+
+### How changes converge
+
 The consistency model in practice:
 
 - A change under live coverage (a fanotify mark or a hot-set watch)
@@ -227,35 +275,20 @@ The consistency model in practice:
   mtime check and converge at the next full rescan (`!rescan`, or the
   `rescanIntervalMinutes` timer if you set one).
 
-Startup announces the active tier and its numbers in one log line --
-look for it when in doubt (the second form means fanotify is on):
+Startup announces the active tier and its numbers in the log -- the
+second form means fanotify is on; the first is always followed by the
+ready-to-paste grant command:
 
 ```
 watch: backend inotify: 41230/612009 dirs live-watched (budget 65536); sweep interval 20m0s; full rescan interval off
+watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /usr/local/bin/competent-search-thing
 watch: backend fanotify: whole-filesystem marks active; per-directory watches not needed
 ```
 
-### Granting fanotify (optional, Linux)
-
-The fanotify tier covers whole filesystems with a handful of kernel
-marks -- registration is near-instant and `max_user_watches` stops
-mattering -- but Linux gates it behind capabilities:
-`CAP_SYS_ADMIN` for the marks and `CAP_DAC_READ_SEARCH` for resolving
-event paths. To enable it, grant both on the installed binary:
-
-```
-sudo setcap cap_sys_admin,cap_dac_read_search+ep /usr/local/bin/competent-search-thing
-```
-
-**Understand what that grants before running it.** File capabilities
-apply process-wide to every run of that binary: `CAP_SYS_ADMIN` is
-root-equivalent for most practical purposes, and
-`CAP_DAC_READ_SEARCH` bypasses file permission checks when reading --
-anyone who can execute the binary gets both. Only do this on a
-single-user machine whose binary you trust (and re-run it after
-upgrades that replace the file). The app is fully functional without
-it: the startup probe fails cleanly and the watcher falls back to the
-inotify hot set -- identical behavior, just per-directory watch cost.
+The same state is visible in the app itself: whenever the backend is
+not fanotify, the status bar keeps the "Partial file watching" /
+"File watching off" chip up (see
+[Enable full-filesystem watching](#enable-full-filesystem-watching-recommended)).
 
 ### Watcher configuration
 
@@ -264,6 +297,7 @@ The `watcher` section of config.json tunes the layer (see
 
 | Key | Default | Meaning |
 |-----|---------|---------|
+| `watcher.backend` | `"auto"` | Backend selection. `"auto"` uses fanotify when the binary can (see [Enable full-filesystem watching](#enable-full-filesystem-watching-recommended)) and falls back to the inotify hot set. `"fanotify"` is STRICT: when fanotify cannot start, live watching is disabled outright -- no inotify fallback; sweeps keep the index converging -- announced loudly in-app and in the log. `"inotify"` skips the fanotify probe (debugging). Empty or unknown values are repaired to `"auto"`. |
 | `watcher.maxWatches` | `0` | The hot-set budget. `0` = automatic: half of `fs.inotify.max_user_watches`, capped at 65536. Any negative value = explicitly unlimited (watch every indexed directory). Positive = exactly that many. Irrelevant while fanotify is active. |
 | `watcher.sweepMinutes` | `0` | Minutes between reconcile sweeps; `0` = the built-in 20 minutes. |
 | `watcher.sweepDisabled` | `false` | `true` turns the sweep tier off. Directories without a live watch then converge only at full rescans, and the app logs a loud warning at startup saying exactly that. |
@@ -540,7 +574,9 @@ Field reference:
   exact/prefix/substring matching only -- see
   [Fuzzy matching](#fuzzy-matching). Exact, prefix, and substring
   matches always rank above fuzzy ones either way.
-- `watcher` -- the live-watch layer: `maxWatches` (hot-set budget; 0 =
+- `watcher` -- the live-watch layer: `backend` (`auto` | `fanotify` =
+  strict, no inotify fallback | `inotify`; unset means `auto`),
+  `maxWatches` (hot-set budget; 0 =
   auto), `sweepMinutes` (sweep cadence; 0 = 20 minutes),
   `sweepDisabled` (kills the sweep tier, loudly) and `watchExcludes`
   (patterns never live-watched but still indexed and swept). The full

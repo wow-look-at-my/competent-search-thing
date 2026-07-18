@@ -124,8 +124,20 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   `startWatch` brings up the `watch.Watcher` + `watch.Rescanner` +
   `watch.Sweeper` trio honoring the Options watcher knobs
   (WatchMaxWatches, WatchExcludes -> a second watch-only Excluder,
-  SweepInterval, SweepDisabled = no Sweeper + one loud warning; see
-  the internal/watch bullet);
+  WatchBackend -> watch.Options.Backend, SweepInterval,
+  SweepDisabled = no Sweeper + one loud warning; see the
+  internal/watch bullet), then announces the effective backend ONCE:
+  `watchBackendFor(st.Backend)` builds the "watch:backend" payload
+  {backend "fanotify"|"inotify"|"none", full bool (fanotify only),
+  hint string (empty when full; the pinned hintPartialWatch /
+  hintWatchOff texts otherwise, hintWatchFailed when the watcher
+  itself failed to start -> backend forced to "none")}, and when NOT
+  full `logFanotifyGrant()` first logs -- once per App, linux only
+  (plat.goos), the grant line BEFORE the emit (tests synchronize on
+  the recorded event, then read the log) -- "watch: enable
+  full-filesystem watching with: sudo setcap
+  cap_sys_admin,cap_dac_read_search+ep <path>" with the path through
+  platform.StableExecutable(exe, args0), mirroring hotkey.go;
   `Shutdown` (wired to Wails OnShutdown) closes the IPC server first
   (when present), releases the hotkey (native stop func, cancel of
   the async portal/gsettings chain, idempotent+nil-safe close of the
@@ -207,7 +219,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   native.ActivateWindow); everything else hides the bar on success. Events
   emitted (all guarded so a nil ctx no-ops): "index:progress"
   {indexed,done,seconds}, "watch:degraded"
-  {watched,dropped,overflows}, "app:shown", "theme:changed" (no
+  {watched,dropped,overflows}, "watch:backend" {backend,full,hint}
+  (once, from startWatch; see above), "app:shown", "theme:changed" (no
   payload; frontend refetches GetTheme/GetCustomCSS),
   "plugin:results" (payload plugin.Emission
   {plugin,name,gen,results}). ALL Wails
@@ -396,8 +409,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   sweepMinutes 0 = the 20m default, sweepDisabled (zero value = sweeps
   ON, the tray.disabled convention), watchExcludes
   (json omitempty; excluder-syntax patterns never LIVE-WATCHED but
-  still indexed + swept) -- main.go copies all four into app.Options
-  {WatchMaxWatches, SweepInterval, SweepDisabled, WatchExcludes}},
+  still indexed + swept), backend (json omitempty; the
+  WatcherBackend* constants "auto"/"fanotify"/"inotify" -- fanotify =
+  STRICT, no inotify fallback; Normalize trims+lowercases and repairs
+  empty/unknown to "auto", schema enum in lockstep) -- main.go copies
+  all five into app.Options
+  {WatchMaxWatches, SweepInterval, SweepDisabled, WatchExcludes,
+  WatchBackend}},
   theme, plugins {disabled, entries
   {<id>: {disabled, settings}}}, bangs {sigils, aliases}, tray
   {disabled}, history {persistDisabled}, window {translucent -- the
@@ -738,11 +756,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   paths filtered with the SAME `index.Excluder` as the walks. The
   notifier seam (notify.go; optional `backendInfo` extension = kind()
   name + wideCoverage) keeps unit tests scripted; integration
-  tests run real inotify. BACKEND AUTO-SELECTION: New binds
-  `newAutoNotifier(normalized roots)` (fanotify_linux.go; the
+  tests run real inotify. BACKEND SELECTION: New binds
+  `newBackendNotifier(Options.Backend, normalized roots)` (notify.go;
+  config watcher.backend -> app.Options.WatchBackend): "inotify" =
+  plain fsnotify, no fanotify probe; "fanotify" = STRICT
+  `newStrictFanotifyNotifier` (fanotify_linux.go + the
+  fanotify_other.go always-none twin) -- constructor failure = one
+  LOUD 'backend "fanotify" required by config but unavailable ...
+  live watching DISABLED' line + the no-op `noopNotifier` (notify.go:
+  accepts everything, delivers nothing, kind ("none", wide) so
+  Watched/IndexedDirs stay 0 and addInitialWatches logs no
+  marks-active line for it; sweeps converge), NEVER an inotify
+  fallback; anything else = `newAutoNotifier` (fanotify_linux.go; the
   fanotify_other.go twin is plain fsnotify) -- try the fanotify
   whole-filesystem notifier, ANY constructor error = one log line +
-  per-directory fsnotify fallback. fanotifyNotifier: ONE
+  per-directory fsnotify fallback. The `newFanotifyFn` package var is
+  the constructor seam both selections probe (scripted in tests, no
+  CAP_SYS_ADMIN needed). fanotifyNotifier: ONE
   FAN_CLASS_NOTIF|FAN_REPORT_DFID_NAME|FAN_CLOEXEC|FAN_NONBLOCK
   group; FAN_MARK_FILESYSTEM marks (mask CREATE|DELETE|MOVED_FROM|
   MOVED_TO|ONDIR; FAN_RENAME deliberately unused) on every root's
@@ -779,7 +809,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   overflow = lost events -> Sweeper.Request when wired, else
   Rescanner fallback; OnDegraded edge-triggered once -> app's
   "watch:degraded".
-  Stats{Backend "inotify"|"fanotify", Budget, WatchedDirs,
+  Stats{Backend "inotify"|"fanotify"|"none" (strict mode refused: no
+  live watching, sweeps only), Budget, WatchedDirs,
   IndexedDirs, DroppedWatches, Evictions, Overflows, Degraded};
   `InitialRegistration()` closes when the first fill finished (the
   app waits on it before its summary log). `Sweeper` (sweep.go): the
@@ -1066,7 +1097,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `frontend/` -- vanilla TypeScript + Vite. No framework. `index.html`
   (query row with inline SVG magnifier + hidden bang chip; #results
   split into #file-results / static #empty ("No matches") /
-  #plugin-results zones; status bar + degraded chip; <template>s for
+  #plugin-results zones; status bar + degraded chip + backend chip;
+  <template>s for
   folder/file icons AND plugin section/row skeletons) + `src/main.ts`
   (search as-you-type: 15ms debounce + sequence-number stale-response
   drop; every generation also fire-and-forgets QueryPlugins(query,
@@ -1114,7 +1146,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the input (the bar always summons empty; the pre-hide text is
   deliberately dropped) + reset histCursor + focus + refresh (renders
   the cheat sheet; plugins re-query through the same path),
-  "index:progress" -> status text, "watch:degraded" -> warning chip)
+  "index:progress" -> status text, "watch:degraded" -> warning chip,
+  "watch:backend" -> the PERSISTENT #backend-chip when full=false
+  ("Partial file watching" for inotify / "File watching off" for
+  none, the Go hint on hover via title; full=true keeps it hidden;
+  independent of the degraded chip -- both can show, one shared
+  --sb-warning chip rule in style.css))
   + `src/render.ts` (pure text-node DOM builders, no innerHTML
   anywhere: file rows with highlighted match + dim parent dir (a
   non-empty result hint replaces the parent-dir text -- the
