@@ -47,7 +47,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   with its own cwd/PATH), then prefers the STABLE spelling of that
   path via platform.StableExecutable(exe, args0-seam) -- resolved
   os.Executable dies with versioned symlinked installs (Homebrew
-  Cellar/Nix/stow) on every upgrade, so the PATH-shim or argv[0]
+  Cellar/Nix/stow) on every upgrade, so the PATH-shim, the structural
+  Homebrew mapping (brewpath.go: the Cellar path taken apart into the
+  linked <prefix>/<rest> then opt fallback -- needs no PATH/argv[0]
+  cooperation, which the gsd-boot context lacks), or the argv[0]
   symlink wins whenever it is proven (os.SameFile) to be the running
   binary, logged once when it differs -- calls
   gsettings.EnsureBinding(hotkeyCtx, run, hk,
@@ -149,7 +152,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   back to dark; GetCustomCSS returns <configDir>/themes/custom.css
   verbatim when <= 64KB (the unvalidated escape hatch), else "". The
   hotkey callback `toggle` (rate-limited 250ms against key
-  autorepeat) hides the bar when visible; when hidden it FIRST
+  autorepeat) hides the bar when visible; a toggle finding the bar
+  hidden but hidden within the last toggleGap (lastHide, stamped by
+  every Hide) is DROPPED, not re-summoned -- pressing the combo on an
+  OPEN bar can hide it through a side channel before the callback
+  runs (grab activation delivers FocusOut to the focused bar ->
+  frontend blur handler -> Hide; on the gsettings backend the toggle
+  then arrives a "<exe> toggle" process spawn + IPC later), and
+  branching on the visible flag alone turned exactly those dismiss
+  presses into re-summons, so the combo could never dismiss there;
+  when hidden beyond that window it FIRST
   captures app context (`captureAppContext`: CaptureFocused +
   RefreshRunningAsync + RefreshWindowsAsync +
   EnsureFreshInstalled(5m) -- the bar window
@@ -900,13 +912,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the binding is never rewritten (user edits in GNOME Settings
   survive; Existing=true) and the stored command SELF-HEALS: it is
   rewritten (command key only; Repaired=true + PreviousCommand for
-  the app's loud old->new repair log) exactly when it can no longer
-  launch the running binary -- empty/unparseable (commandExecutable,
-  the GLib-shell inverse of ToggleCommand), a non-absolute
-  executable, a dead path, or a live path that is a different file
-  (os.Stat + os.SameFile vs the new command's exe; the
-  brew-upgrade-broke-the-shortcut field fix) -- while a textually
-  different but still-working spelling is kept verbatim (zero writes,
+  the app's loud old->new repair log) when it can no longer launch
+  the running binary -- empty/unparseable (commandExecutable, the
+  GLib-shell inverse of ToggleCommand), a non-absolute executable, a
+  dead path, or a live path that is a different file (os.Stat +
+  os.SameFile vs the new command's exe) -- AND when it still launches
+  it but through a Cellar-versioned spelling while the new command's
+  is not (platform.ParseBrewCellar on both exes; the migration that
+  keeps the binding alive across brew upgrades -- the
+  brew-upgrade-broke-the-shortcut field fix), while any other
+  still-working spelling (stable, custom symlink, and
+  versioned->versioned when no stable spelling was derivable) is kept
+  verbatim (zero writes,
   read-back verifies the on-disk command); a fresh entry gets the first free
   candidate of [configured, <Control><Alt>space, <Super>space]
   (normalization-deduped) checked against every accelerator in the
@@ -947,11 +964,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   token -> error naming it) into an OS-neutral `Hotkey{Mods,Key}`;
   `StableExecutable(exe, args0)` (stablepath.go: the stable spelling
   of the running binary's path for anything that outlives the process
-  -- exec.LookPath(base) hit kept UNRESOLVED, else abs/Abs-resolved
-  args0, else exe, every candidate same-binary-guarded via
-  os.Stat+os.SameFile so a foreign same-named binary never wins;
-  tested with real tempdir trees, symlinks and t.Setenv(PATH), no
-  seams);
+  -- exec.LookPath(base) hit kept UNRESOLVED, else the structural
+  Homebrew candidates (brewpath.go: `ParseBrewCellar` splits an
+  absolute <prefix>/Cellar/<formula>/<version>/<rest> path at its
+  LAST separator-bounded "Cellar" component, prefix read from the
+  path itself -- no hardcoded prefix list; candidates = linked
+  <prefix>/<rest> then opt <prefix>/opt/<formula>/<rest>, and they
+  precede args0 because in the gsd-boot context args0 IS the
+  versioned Cellar path), else abs/Abs-resolved args0, else exe,
+  every candidate same-binary-guarded via os.Stat+os.SameFile so a
+  foreign same-named binary never wins; tested with real tempdir
+  trees, symlinks and t.Setenv(PATH), no seams);
   geometry (`Rect`, `Display{Rect,Work,Primary}`, `PickDisplay`,
   `BarPosition` = centered, top at H/3 - winH/3, clamped;
   `DisplayForWindow` by window center; `WailsPosition` translating
