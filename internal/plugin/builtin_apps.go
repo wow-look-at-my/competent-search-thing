@@ -103,7 +103,7 @@ func collectAppResults(installed []InstalledApp, score func(name string) (float6
 			Subtitle: strings.Join(m.argv, " "),
 			Icon:     "app",
 			Score:    &s,
-			Action:   &Action{Type: ActionRunCommand, Argv: m.argv},
+			Action:   &Action{Type: ActionRunCommand, Argv: m.argv, DesktopID: m.app.ID},
 		})
 	}
 	return results
