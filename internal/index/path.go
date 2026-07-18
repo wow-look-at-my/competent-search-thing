@@ -93,7 +93,7 @@ var pathPlanPool = sync.Pool{New: func() any { return new(pathPlan) }}
 // machinery and the candCompare tie-breaks with the name scan. The dir
 // table holds original-case paths only, so every plan compare folds
 // case at match time in the pattern's regime (fold.go).
-func (s *Store) queryPath(pat []byte, ascii bool, limit int) []Result {
+func (s *Store) queryPath(pat []byte, ascii bool, limit int, b *Blend) []Result {
 	if len(pat) > maxPathQueryLen {
 		return nil
 	}
@@ -141,7 +141,7 @@ func (s *Store) queryPath(pat []byte, ascii bool, limit int) []Result {
 		}
 		wg.Wait()
 	}
-	return s.selectTop(heaps, limit)
+	return s.selectTop(heaps, limit, b)
 }
 
 // buildPathPlan precomputes the per-dir match state for the pre-folded,

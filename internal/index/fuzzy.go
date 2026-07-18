@@ -61,7 +61,7 @@ const fuzzyMaxDPUnits = match.MaxDPUnits
 // queryNamesFuzzy is the fuzzy-enabled name-mode scan: the substring
 // phase (identical results to queryNamesSub) followed, when the
 // substring hits leave room under limit, by the subsequence phase.
-func (s *Store) queryNamesFuzzy(qs string, ascii bool, n, limit int) []Result {
+func (s *Store) queryNamesFuzzy(qs string, ascii bool, n, limit int, b *Blend) []Result {
 	// 64-aligned shards touch disjoint bitset words, so phase 1 needs
 	// no atomics (shardPlanMarked, shared with the multi-term scans).
 	workers, per := shardPlanMarked(n)
@@ -91,7 +91,7 @@ func (s *Store) queryNamesFuzzy(qs string, ascii bool, n, limit int) []Result {
 				// The rarest pattern byte never occurs in the blob at
 				// all (exact histogram): no name can hold the
 				// subsequence, so phase 2 is provably empty.
-				return s.selectTop(heaps, limit)
+				return s.selectTop(heaps, limit, b)
 			}
 		}
 		patUnits := fuzzyPatternUnits(qs, ascii)
@@ -106,7 +106,7 @@ func (s *Store) queryNamesFuzzy(qs string, ascii bool, n, limit int) []Result {
 			}
 		})
 	}
-	return s.selectTop(heaps, limit)
+	return s.selectTop(heaps, limit, b)
 }
 
 // fuzzyViable reports whether the pattern can have fuzzy-only matches:

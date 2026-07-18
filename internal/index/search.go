@@ -29,6 +29,11 @@ type QueryOptions struct {
 	// name-mode queries; the query then behaves exactly like the
 	// substring-only engine. The zero value keeps fuzzy matching on.
 	FuzzyDisabled bool
+	// Blend folds the frecency/recency/noise signals into the final
+	// ordering of the merged top-K candidates (see blend.go). Nil --
+	// or an inactive blend -- leaves the ranking byte-identical to
+	// the pre-blend engine.
+	Blend *Blend
 }
 
 // Query returns up to limit entries whose name matches q,
@@ -71,7 +76,7 @@ func (s *Store) QueryWith(q string, limit int, opts QueryOptions) []Result {
 		// Path mode stays literal single-pattern: paths legitimately
 		// contain spaces, so a separator disables term splitting.
 		// (queryPath normalizes '/' to the native separator IN pat.)
-		res := s.queryPath(pat, ascii, limit)
+		res := s.queryPath(pat, ascii, limit, opts.Blend)
 		fillPathRanges(res, string(pat), ascii)
 		return res
 	}
@@ -86,12 +91,12 @@ func (s *Store) QueryWith(q string, limit int, opts QueryOptions) []Result {
 		// (" report ") behaves as its trimmed term.
 		t := terms[0]
 		if opts.FuzzyDisabled {
-			res = s.queryNamesSub(t.Pat, t.ASCII, n, limit)
+			res = s.queryNamesSub(t.Pat, t.ASCII, n, limit, opts.Blend)
 		} else {
-			res = s.queryNamesFuzzy(t.Pat, t.ASCII, n, limit)
+			res = s.queryNamesFuzzy(t.Pat, t.ASCII, n, limit, opts.Blend)
 		}
 	default:
-		res = s.queryNamesMulti(terms, n, limit, opts.FuzzyDisabled)
+		res = s.queryNamesMulti(terms, n, limit, opts.FuzzyDisabled, opts.Blend)
 	}
 	fillNameRanges(res, terms, !opts.FuzzyDisabled)
 	return res
@@ -173,7 +178,7 @@ func runShards(workers, per, n int, shard func(w, lo, hi int)) {
 // queryNamesSub is the substring-only name scan: the pre-fuzzy engine,
 // dispatched when the fuzzy tier is disabled. It must stay
 // behavior-identical to the original Query body.
-func (s *Store) queryNamesSub(qs string, ascii bool, n, limit int) []Result {
+func (s *Store) queryNamesSub(qs string, ascii bool, n, limit int, b *Blend) []Result {
 	workers := runtime.NumCPU()
 	if max := (n + minShardEntries - 1) / minShardEntries; workers > max {
 		workers = max
@@ -203,7 +208,7 @@ func (s *Store) queryNamesSub(qs string, ascii bool, n, limit int) []Result {
 		wg.Wait()
 	}
 
-	return s.selectTop(heaps, limit)
+	return s.selectTop(heaps, limit, b)
 }
 
 // scanNames scans one shard with the folding regime the pattern was
@@ -308,8 +313,11 @@ func (s *Store) makeCand(e int32, pos uint32, patLen int) cand {
 
 // selectTop merges the per-shard heaps, fully sorts the small merged
 // candidate set (at most workers*limit items), and builds Results for
-// the best limit entries.
-func (s *Store) selectTop(heaps []*topK, limit int) []Result {
+// the best limit entries. An ACTIVE blend reorders the merged set by
+// the frecency/recency/noise signals here -- the only ranking stage
+// that ever sees them (blend.go); inactive (the normal case) takes
+// the exact pre-blend path below.
+func (s *Store) selectTop(heaps []*topK, limit int, b *Blend) []Result {
 	var all []cand
 	for _, h := range heaps {
 		if h == nil {
@@ -319,6 +327,9 @@ func (s *Store) selectTop(heaps []*topK, limit int) []Result {
 	}
 	if len(all) == 0 {
 		return nil
+	}
+	if b.active() {
+		return s.selectBlended(all, limit, b)
 	}
 	sort.Slice(all, func(i, j int) bool { return s.candCompare(all[i], all[j]) < 0 })
 	if len(all) > limit {

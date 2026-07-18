@@ -3,13 +3,17 @@ package index
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/wow-look-at-my/competent-search-thing/internal/frecency"
 )
 
 // TestMain exists to clean up the on-disk walk-benchmark fixture, which
@@ -295,6 +299,101 @@ func BenchmarkSearchPath(b *testing.B) {
 	}
 }
 
+// blendBenchSignals seeds an ACTIVE frecency blend over st: nSeed
+// spread-out entry paths get 1..5 recorded opens (some above the
+// tier-jump threshold), the recency probe stats through an in-memory
+// fake -- the bench measures the blend's bookkeeping and goroutine
+// machinery, never real disk latency -- and a cwd boost is live so
+// every signal's code path runs. Also returns the probe factory so
+// the cold-probe row can rebuild an empty-cache probe per iteration.
+func blendBenchSignals(st *Store, nSeed int) (*Blend, func() *frecency.Probe) {
+	now := time.Now()
+	nowFn := func() time.Time { return now }
+	fstore := frecency.New("", frecency.Options{Now: nowFn})
+	n := st.Len()
+	step := n / nSeed
+	if step == 0 {
+		step = 1
+	}
+	seeded := 0
+	for i := 0; i < n && seeded < nSeed; i += step {
+		path := st.EntryPath(int32(i))
+		for k := 0; k <= seeded%5; k++ {
+			_ = fstore.RecordOpen(path) // memory-only: never errors
+		}
+		seeded++
+	}
+	lstat := func(path string) (os.FileInfo, error) {
+		return fakeInfo{mod: now.Add(-time.Duration(len(path)) * time.Hour)}, nil
+	}
+	newProbe := func() *frecency.Probe {
+		return frecency.NewProbe(frecency.ProbeOptions{Lstat: lstat, Now: nowFn})
+	}
+	return &Blend{
+		Signals: frecency.Signals{
+			Store:     fstore,
+			Probe:     newProbe(),
+			Cwd:       "/bench",
+			CwdWeight: 1,
+		},
+		WeightFrecency: 1,
+		WeightRecency:  1,
+		WeightNoise:    1,
+		TierJump:       3,
+		Now:            nowFn,
+	}, newProbe
+}
+
+// BenchmarkSearchBlend measures the frecency blend's whole cost
+// envelope on the 1M store: the post-scan top-K pass (boost, penalty,
+// and cwd lookups over the <= workers*limit merged candidates) plus
+// the budgeted cold-candidate recency stats. "off" is the identical
+// query with no blend (the pre-blend engine). "on" reuses one probe
+// across iterations -- the steady state, where the TTL cache absorbs
+// repeat keystrokes -- and "coldprobe" rebuilds the probe every
+// iteration so every query pays the full stat batch, the worst case.
+// "rare" merges a handful of candidates; "common" fills every shard
+// heap, the largest merged set the blend can ever see.
+func BenchmarkSearchBlend(b *testing.B) {
+	_, s1M := searchFixtures()
+	queries := []struct{ name, q string }{
+		{"rare", "zzqx"},
+		{"common", "data"},
+	}
+	for _, bq := range queries {
+		hits := countMatches(s1M, bq.q)
+		b.Run("1M/off/"+bq.name, func(b *testing.B) {
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = s1M.Query(bq.q, 50)
+			}
+			b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N), "ms/query")
+			b.ReportMetric(float64(hits), "hits")
+		})
+		b.Run("1M/on/"+bq.name, func(b *testing.B) {
+			blend, _ := blendBenchSignals(s1M, 200)
+			opts := QueryOptions{Blend: blend}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = s1M.QueryWith(bq.q, 50, opts)
+			}
+			b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N), "ms/query")
+			b.ReportMetric(float64(hits), "hits")
+		})
+		b.Run("1M/coldprobe/"+bq.name, func(b *testing.B) {
+			blend, newProbe := blendBenchSignals(s1M, 200)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				bl := *blend
+				bl.Signals.Probe = newProbe()
+				_ = s1M.QueryWith(bq.q, 50, QueryOptions{Blend: &bl})
+			}
+			b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N), "ms/query")
+			b.ReportMetric(float64(hits), "hits")
+		})
+	}
+}
+
 // On-disk walk fixture: ~50k entries (250 dirs x 200 files), built once
 // per process on first use, removed by TestMain. Kept at 50k (not 100k)
 // to bound CI benchmark wall time; see BENCH notes.
@@ -452,6 +551,24 @@ func BenchmarkSearchHuge(b *testing.B) {
 		b.Run("multi/"+row.name, func(b *testing.B) {
 			hits := countMultiMatches(st, row.q, row.disabled)
 			opts := QueryOptions{FuzzyDisabled: row.disabled}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = st.QueryWith(row.q, 50, opts)
+			}
+			b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N), "ms/query")
+			b.ReportMetric(float64(hits), "hits")
+		})
+	}
+
+	// The frecency-blend rows: the rare and common name queries with
+	// the ranking blend active (seeded open counts, fake-stat probe,
+	// live cwd boost; see BenchmarkSearchBlend). The blend-off twins
+	// are the "name/rare" and "name/common" rows above.
+	blend, _ := blendBenchSignals(st, 200)
+	for _, row := range []struct{ name, q string }{{"rare", "zzqx"}, {"common", "data"}} {
+		b.Run("blend/"+row.name, func(b *testing.B) {
+			hits := hugeHitCount(st, row.q, false)
+			opts := QueryOptions{Blend: blend}
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				_ = st.QueryWith(row.q, 50, opts)
