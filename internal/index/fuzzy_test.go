@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/wow-look-at-my/competent-search-thing/internal/match"
 )
 
 // naiveSubseq is the reference subsequence check, INDEPENDENT of the
@@ -109,6 +110,7 @@ func naiveQueryFuzzy(entries []refEntry, q string, limit int) []Result {
 	for i, m := range matches {
 		out[i] = Result{Path: m.path, Name: m.name, IsDir: m.isDir}
 	}
+	fillNameRanges(out, match.Terms(q), true) // see naiveQuery's note
 	return out
 }
 

@@ -359,12 +359,47 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   ErrNotRunning (test with IsNotRunning) so callers can branch
   "nothing to talk to" vs a broken exchange. Handlers run on conn
   goroutines and must be goroutine-safe.
+- `internal/match` -- THE shared matching engine, pure (stdlib only),
+  consumed by internal/index AND internal/plugin: ONE fold definition
+  (FoldTable/FoldRune/FoldPattern, the per-string ASCII+rune helpers;
+  index re-exports them under the old names), ONE tier ladder
+  (TierTriggered > TierExact > TierPrefix > TierWordStart >
+  TierSubstring > TierFuzzy > TierNone; MatchTerm per term+target,
+  word = letter/digit runs), ONE multi-term semantics (Terms =
+  strings.Fields + per-term fold; MatchFields = every term must match
+  ANY of the ordered fields, candidate tier = worst per-term best
+  tier, WorstField = worst best-field index), ONE position-aware
+  scorer (score.go: the fzf-v2 constants/bonuses, DPState.Align =
+  DP<=MaxDPUnits else greedy, PrepareASCII/PrepareFold fill
+  units+bonus, TermScore one-shot, NormalizeScore for band scaling),
+  ONE per-character position implementation (positions.go: Range =
+  [2]int half-open RUNE pairs on the DISPLAY string; Positions =
+  union over terms of the tier-earning occurrence -- prefix start /
+  word-start occurrence / first substring / AlignPositions = the
+  backpointered DP recovering the optimal fuzzy alignment, greedy
+  past the bound; computed only for selected rows, never in scans),
+  and ONE ranking mint (rank.go: Candidate{Display, Texts, TieBreak,
+  SortKey, Hint, Payload} deliberately has NO score/position fields;
+  Ranked's fields are unexported with no constructor so only Rank can
+  mint; canonical wire bands triggered 86..100 (86+0.14*hint), exact
+  83, prefix 73, word-start 63, substring 53, ScoreListed 50, fuzzy
+  16..46+nudge, hint = external self-score demoted to a +/-2
+  intra-tier nudge; modes: PreRanked = keep order, 100-i floored at
+  86; Claimed = triggered tier, hint-ordered, source order on ties;
+  Targeted+no-terms = list all at 50; default = MatchFields gate +
+  sort tier/WorstField/score/TieBreak/foldedDisplay/Display/SortKey +
+  cap + Positions). Exhaustively unit-tested (fold parity vs
+  strings.ToLower, the fire/fox/firefox repro at engine level,
+  AlignPositions score==Align cross-check on randomized inputs).
 - `internal/index` -- the index engine. `Store`: compact
   column-oriented data (interned parent-dir table; ONE original-case
   name blob with 0x00 separators and one offset table -- deliberately
   no lowercased twin of the names or the dir table, case-insensitivity
-  is folded in at scan time; tombstone removals). fold.go is the
-  folding machinery: foldPattern picks the regime per query --
+  is folded in at scan time; tombstone removals). fold.go keeps the
+  BLOB scan machinery (ciScan/ciIndexASCII + the static
+  name-frequency anchor table) while the FOLD DEFINITION lives in
+  internal/match and is re-exported under the historical names:
+  foldPattern picks the regime per query --
   all-ASCII queries fold byte-wise (foldTable, 'A'-'Z' only) and scan
   the blob with ciIndexASCII (rarest-byte anchor via a static
   name-frequency table, bytes.IndexByte over both case variants,
@@ -384,7 +419,30 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   `Store.Query`: case-insensitive substring
   search, sharded across NumCPU goroutines with per-shard bounded
   top-K heaps; ranking exact > prefix > substring > fuzzy, dirs before
-  files, shorter then lexicographic paths. fuzzy.go is the fuzzy
+  files, shorter then lexicographic paths. QueryWith dispatches by
+  match.Terms: whitespace-only = nil, ONE term = the pre-multi engine
+  byte-identical (a padded query behaves as its trimmed term), 2+
+  terms = multiterm.go: ALL terms must match the name order-free;
+  classSub when every term substring-matches, classFuzzy when all
+  match with >=1 subsequence-only term (never exact/prefix; score =
+  summed per-term alignment); the ASCII fast path is a DRIVER-term
+  scan (driver = term whose rarest byte has the fewest blob
+  occurrences by exact histogram, any zero-count term = nil fast
+  reject; phase A = the anchored substring scan for the driver
+  fully judging candidates against the rest -- substring first,
+  subsequence fallback -- marking every visited entry in the pooled
+  bitset; phase B = the rarest-byte sweep for driver-subsequence-only
+  entries, skipping marks, itself skipped when the phase-A classSub
+  total fills the limit / fuzzy off / single-unit driver); any
+  non-ASCII term = the sharded per-entry slow path
+  (queryMultiFold). Every returned Result carries MatchRanges
+  (half-open RUNE ranges on Name, [][2]int json matchRanges,
+  computed POST-selection via match.Positions; path mode = the
+  best-effort final-segment name-prefix range or nothing; the naive
+  references model ranges via the same fill helpers while keeping
+  matching/ordering independent -- multiterm_test.go holds the
+  independent multi-term reference ladder and the "fire fox" /
+  "my backup" repro pins). fuzzy.go is the fuzzy
   (subsequence) tier for name-mode queries: entries holding the query
   as an in-order-with-gaps subsequence (same fold regimes) match with
   classFuzzy (ordinal 3, shared with classPathSub -- modes never mix;
@@ -469,7 +527,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   fuzzy-tier kill switch, zero value = fuzzy ON per the tray.disabled
   convention; main.go wires it to Manager.SetFuzzyDisabled},
   theme, plugins {disabled, entries
-  {<id>: {disabled, settings}}}, bangs {sigils, aliases}, tray
+  {<id>: {disabled, settings}}}, bangs {sigils, aliases}, rewrites
+  [{name, pattern, replacement, title?, icon?, disabled?}] (the regex
+  rewrite rules; passed to plugin.Options.Rewrites), tray
   {disabled}, history {persistDisabled}, stats {disabled -- the
   system-stats sampler kill switch, zero value = on per the
   tray.disabled convention; internal/app's buildStats reads it, so it
@@ -617,9 +677,40 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   and requires it token-for-token identical to dark.json -- edit both
   together or the build fails.
 - `internal/plugin` -- the plugin system, pure and headless-testable
-  (wired into the app by internal/app's plugins.go). schema.go:
+  (wired into the app by internal/app's plugins.go). INVERTED over the
+  shared engine (engine.go): builtin providers are candidate SOURCES
+  (interface candidateSource = provider + candidates(ctx,req)
+  []match.Candidate + limit() + preRanked(); payload = the wire
+  Result MINUS score/ranges) and sourceResults -> match.Rank ->
+  mintResults is the ONLY path stamping Score/MatchRanges (rogue
+  payload scores are overwritten; non-Result payloads dropped);
+  external plugins (resultProvider; production always
+  *externalProvider) are sanitized then engine-passed by rankExternal:
+  claimed queries (req.Targeted or Trigger.Claims = prefix/regex path
+  matched) ride TierTriggered with self-score as the hint and
+  response order kept on ties, all_queries results are text-gated
+  against Title+Keywords (misses dropped with a throttled reason) --
+  dispatch_test fakes implement bare resultProvider and bypass, the
+  routing test (engine_test.go TestEveryRegisteredSourceRoutesThrough
+  Engine) pins that every PRODUCTION registration is one of the two
+  shapes. Old per-provider score ladders/wordStart copies are GONE;
+  each source declares ordered match Texts instead (apps [name],
+  windows [title, app], sites [host-sans-www, title, url], tabs
+  [title, host-sans-www, url]) and the engine's canonical bands
+  apply. Options gains FuzzyDisabled (config search.fuzzyDisabled,
+  threaded into every Rank) and Rewrites (builtin_rewrites.go:
+  "rewrites" preRanked source at the triggered tier -- RE2 rules
+  compiled at New via compileRewrites, full-match ^(?:pat)$ unless
+  user-anchored, invalid = one Errors() line + skipped; on match ONE
+  result per rule in config order, replacement/title expanded via
+  ExpandString ($1/${name}/$$), open_url ONLY -- non-http(s)
+  expansions logged + dropped; nothing registers when no rule
+  compiles). schema.go:
   versioned JSON wire protocol
-  (Request/Response/Result/Action, v=1; Action carries the
+  (Request/Response/Result/Action, v=1; Result also carries Keywords
+  <=8x64 runes -- extra engine match texts -- and MatchRanges <=32
+  half-open RUNE pairs on Title, normalizeRanges clamps/sorts/merges
+  against the post-truncation title; Action carries the
   INTERNAL-ONLY DesktopID json:"desktop_id" -- the .desktop entry
   behind a builtin run_command launch, consumed by the app's
   credentialed launch path) and `SanitizeResponse`, which
@@ -1385,7 +1476,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   is a dash too; glyphs (em dash, arrows) are \uXXXX escapes --
   ASCII-only source)
   + `src/render.ts` (pure text-node DOM builders, no innerHTML
-  anywhere: file rows with highlighted match + dim parent dir (a
+  anywhere: appendHighlighted renders the Go-minted matchRanges
+  (half-open RUNE pairs; the walk counts code points because JS
+  strings are UTF-16) as .hl spans -- LETTER COLOR ONLY via
+  --sb-highlight, on file-row names AND plugin titles, no frontend
+  re-matching (the old indexOf highlight is gone; renderResults no
+  longer takes the query) -- file rows with the highlighted match + dim parent dir (a
   non-empty result hint replaces the parent-dir text -- the
   outside-indexed-roots note); plugin
   sections -- unselectable header, rows with icon/title/dim

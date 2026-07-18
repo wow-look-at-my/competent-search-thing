@@ -282,7 +282,10 @@ func TestSearchQueriesManager(t *testing.T) {
 
 	got := a.Search("  shopping  ") // query is trimmed
 	require.Len(t, got, 1)
-	require.Equal(t, Result{Path: "/notes/shopping-list.txt", Name: "shopping-list.txt", IsDir: false}, got[0])
+	require.Equal(t, Result{
+		Path: "/notes/shopping-list.txt", Name: "shopping-list.txt", IsDir: false,
+		MatchRanges: [][2]int{{0, 8}}, // the engine highlights the matched prefix
+	}, got[0])
 
 	miss := a.Search("no-such-entry")
 	require.NotNil(t, miss, "no-match result is empty but non-nil")

@@ -101,6 +101,17 @@ func (a *App) buildRegistry() dispatcher {
 		entries[id] = plugin.Entry{Disabled: e.Disabled, Settings: e.Settings}
 	}
 	sites, tabs := a.firefoxSources(cfg.Firefox)
+	rewrites := make([]plugin.RewriteRule, len(cfg.Rewrites))
+	for i, rw := range cfg.Rewrites {
+		rewrites[i] = plugin.RewriteRule{
+			Name:        rw.Name,
+			Pattern:     rw.Pattern,
+			Replacement: rw.Replacement,
+			Title:       rw.Title,
+			Icon:        rw.Icon,
+			Disabled:    rw.Disabled,
+		}
+	}
 	reg := plugin.New(plugin.Options{
 		Manifests:        manifests,
 		LoadErrors:       loadErrs,
@@ -115,6 +126,8 @@ func (a *App) buildRegistry() dispatcher {
 		FrequentSitesMax: cfg.Firefox.FrequentSites.MaxResults,
 		OpenTabs:         tabs,
 		OpenTabsMax:      cfg.Firefox.OpenTabs.MaxResults,
+		FuzzyDisabled:    cfg.Search.FuzzyDisabled,
+		Rewrites:         rewrites,
 		Logf:             log.Printf,
 	})
 	for _, err := range reg.Errors() {

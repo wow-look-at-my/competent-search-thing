@@ -417,7 +417,7 @@ function runSearch(app: WailsAppBindings): void {
       }
       const ms = performance.now() - t0;
       state.fileItems = items;
-      state.fileRows = renderResults(fileResultsEl, items, query, rowHandlers);
+      state.fileRows = renderResults(fileResultsEl, items, rowHandlers);
       renderPluginArea(); // re-offset plugin rows below the new file rows
       // Auto-select the first row only for a real query: the
       // empty-query cheat sheet stays unselected (Enter = no-op).

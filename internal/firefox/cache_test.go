@@ -174,6 +174,9 @@ func TestCacheFailureKeepsDataAndLogsOnce(t *testing.T) {
 	require.Equal(t, int32(2), calls.Load(), "a failure is not retried on every keystroke")
 
 	// ...after it the retry runs, and the identical error stays quiet.
+	// (The settle discipline above guarantees no refresh is in flight
+	// here, so a lone Sites() kick cannot be swallowed by the
+	// single-flight latch.)
 	clock.advance(failureRetryGap)
 	c.Sites()
 	require.Eventually(t, func() bool { return calls.Load() == 3 }, 3*time.Second, 5*time.Millisecond)
@@ -188,8 +191,7 @@ func TestCacheFailureKeepsDataAndLogsOnce(t *testing.T) {
 	settleCacheRefresh(t, c)
 	fail.Store(true)
 	clock.advance(11 * time.Minute)
-	c.Sites()
-	require.Eventually(t, func() bool { return len(lg.all()) == 2 }, 3*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { c.Sites(); return len(lg.all()) == 2 }, 3*time.Second, 5*time.Millisecond)
 }
 
 func TestCacheContextCancelStopsRefreshes(t *testing.T) {

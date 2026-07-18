@@ -32,10 +32,7 @@ func tabsQuery(t *testing.T, p *tabsProvider, q string) []Result {
 		return nil
 	}
 	require.Zero(t, boost)
-	results, dropped, err := p.query(context.Background(), baseRequest(q, stripped, 1, nil))
-	require.NoError(t, err)
-	require.Empty(t, dropped)
-	return results
+	return srcResults(t, p, baseRequest(q, stripped, 1, nil))
 }
 
 func TestTabsProviderMatchGatesShortQueries(t *testing.T) {
@@ -57,19 +54,19 @@ func TestTabsProviderRanking(t *testing.T) {
 		want  string  // first result title
 		score float64 // its score
 	}{
-		{query: "pull", want: "Pull requests", score: tabScoreTitleWord},
-		{query: "hacker", want: "Hacker News", score: tabScoreTitleWord},
-		{query: "started", want: "Tutorial: Get started", score: tabScoreTitleWord},
-		// The title word-start OUTRANKS a host prefix here: "go" is a
-		// word start in "go - Google Search", so that tab beats the
-		// go.dev host prefix.
-		{query: "go", want: "go - Google Search", score: tabScoreTitleWord},
-		{query: "github", want: "Pull requests", score: tabScoreHostPrefix},
-		{query: "news.y", want: "Hacker News", score: tabScoreHostPrefix},
-		{query: "blog.example", want: "blog.example.org", score: tabScoreHostPrefix},
-		{query: "tarted", want: "Tutorial: Get started", score: tabScoreTitleSubstr}, // mid-word title hit
-		{query: "ycombinator", want: "Hacker News", score: tabScoreURLSubstr},        // mid-host = URL hit
-		{query: "pulls", want: "Pull requests", score: tabScoreURLSubstr},            // URL-only hit
+		{query: "pull", want: "Pull requests", score: 73},            // title prefix
+		{query: "hacker", want: "Hacker News", score: 73},            // title prefix
+		{query: "started", want: "Tutorial: Get started", score: 63}, // title word start
+		// The TITLE field outranks the host field within a tier: "go"
+		// title-prefixes "go - Google Search" AND host-prefixes go.dev;
+		// the title hit wins the tie.
+		{query: "go", want: "go - Google Search", score: 73},
+		{query: "github", want: "Pull requests", score: 73},          // host prefix
+		{query: "news.y", want: "Hacker News", score: 73},            // host prefix
+		{query: "blog.example", want: "blog.example.org", score: 73}, // host prefix
+		{query: "tarted", want: "Tutorial: Get started", score: 53},  // mid-word title hit
+		{query: "ycombinator", want: "Hacker News", score: 63},       // host segment = word start (after '.')
+		{query: "pulls", want: "Pull requests", score: 63},           // URL path segment = word start (after '/')
 	}
 	for _, tt := range tests {
 		t.Run(tt.query, func(t *testing.T) {
@@ -148,10 +145,8 @@ func TestTabsProviderNoMatchesAndNoSource(t *testing.T) {
 	require.Empty(t, tabsQuery(t, empty, "git"))
 
 	nilFn := newTabsProvider(nil, 0)
-	results, dropped, err := nilFn.query(context.Background(), baseRequest("git", "git", 1, nil))
-	require.NoError(t, err)
-	require.Empty(t, dropped)
-	require.Empty(t, results, "a nil source is inert, never a panic")
+	require.Empty(t, srcResults(t, nilFn, baseRequest("git", "git", 1, nil)),
+		"a nil source is inert, never a panic")
 }
 
 func TestNewRegistersTabsProviderOnlyWithSource(t *testing.T) {

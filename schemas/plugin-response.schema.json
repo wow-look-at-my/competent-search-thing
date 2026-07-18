@@ -79,6 +79,30 @@
     },
     "action": {
      "$ref": "#/$defs/action"
+    },
+    "keywords": {
+     "type": "array",
+     "maxItems": 8,
+     "items": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+     },
+     "description": "Extra match texts for the engine's text gating: query terms match a result when they match its title OR any keyword. All-queries plugins should list whatever the result should be findable by; the app trims, strips control characters, caps each keyword at 64 runes and keeps at most 8. Triggered (prefix/regex/bang) plugins do not need keywords."
+    },
+    "matchRanges": {
+     "type": "array",
+     "maxItems": 32,
+     "items": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+       "type": "integer",
+       "minimum": 0
+      }
+     },
+     "description": "Optional per-character highlight ranges on title: half-open [start, end) RUNE index pairs. Absent means the app computes them for text-matched results (and none for triggered-tier results); supplying your own wins. The app clamps pairs into the title's rune length, drops empty/inverted pairs, sorts, merges overlaps, and keeps at most 32."
     }
    },
    "additionalProperties": false

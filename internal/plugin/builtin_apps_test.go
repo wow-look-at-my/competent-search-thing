@@ -16,8 +16,7 @@ func TestAppsProviderBasics(t *testing.T) {
 	_, _, ok := p.match("firefox", nil)
 	require.False(t, ok, "targeted-only provider")
 
-	results, _, err := p.query(context.Background(), targetedReq("app", ""))
-	require.NoError(t, err)
+	results := srcResults(t, p, targetedReq("app", ""))
 	require.Empty(t, results, "nil InstalledApps getter yields nothing")
 }
 
@@ -32,12 +31,11 @@ func TestAppsProviderEmptyQueryListsAlphabetically(t *testing.T) {
 	}
 	p := newAppsProvider(func() []InstalledApp { return list })
 
-	results, _, err := p.query(context.Background(), targetedReq("app", ""))
-	require.NoError(t, err)
+	results := srcResults(t, p, targetedReq("app", ""))
 	require.Len(t, results, maxAppResults)
 	require.Equal(t, "App 01", results[0].Title)
 	require.Equal(t, "App 15", results[14].Title)
-	require.Equal(t, DefaultScore, *results[0].Score)
+	require.Equal(t, DefaultScore, *results[0].Score, "listed rows keep the neutral 50")
 }
 
 func TestAppsProviderSearchScoring(t *testing.T) {
@@ -49,16 +47,15 @@ func TestAppsProviderSearchScoring(t *testing.T) {
 	}
 	p := newAppsProvider(func() []InstalledApp { return list })
 
-	results, _, err := p.query(context.Background(), targetedReq("launch", "FiRe"))
-	require.NoError(t, err)
+	results := srcResults(t, p, targetedReq("launch", "FiRe"))
 	require.Len(t, results, 3, "case-insensitive substring match")
 
 	require.Equal(t, "Firefox", results[0].Title, "prefix matches first, alphabetical within")
-	require.Equal(t, float64(100), *results[0].Score)
+	require.Equal(t, float64(73), *results[0].Score, "the engine's prefix band")
 	require.Equal(t, "Fireplace", results[1].Title)
-	require.Equal(t, float64(100), *results[1].Score)
+	require.Equal(t, float64(73), *results[1].Score)
 	require.Equal(t, "Sunfire", results[2].Title, "substring matches after prefixes")
-	require.Equal(t, float64(80), *results[2].Score)
+	require.Equal(t, float64(53), *results[2].Score, "the engine's substring band")
 
 	require.Equal(t, "firefox", results[0].Subtitle, "subtitle is the cleaned exec line")
 	require.Equal(t, "app", results[0].Icon)
@@ -75,20 +72,17 @@ func TestAppsProviderSkipsUnlaunchableAndCaps(t *testing.T) {
 	}
 	p := newAppsProvider(func() []InstalledApp { return list })
 
-	results, _, err := p.query(context.Background(), targetedReq("app", ""))
-	require.NoError(t, err)
+	results := srcResults(t, p, targetedReq("app", ""))
 	require.Len(t, results, maxAppResults)
 	require.Equal(t, "Tool 01", results[0].Title, "unlaunchable apps are skipped before the cap")
 
-	results, _, err = p.query(context.Background(), targetedReq("app", "tool"))
-	require.NoError(t, err)
+	results = srcResults(t, p, targetedReq("app", "tool"))
 	require.Len(t, results, maxAppResults, "search results are capped too")
 }
 
 func TestAppsProviderIgnoresNonTargeted(t *testing.T) {
 	p := newAppsProvider(func() []InstalledApp { return []InstalledApp{{Name: "X", Exec: "x"}} })
-	results, _, err := p.query(context.Background(), baseRequest("x", "x", 1, nil))
-	require.NoError(t, err)
+	results := srcResults(t, p, baseRequest("x", "x", 1, nil))
 	require.Empty(t, results)
 }
 

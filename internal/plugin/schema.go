@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -70,7 +71,10 @@ type Response struct {
 
 // Result is one virtual search result. Score uses a pointer so that
 // "absent" is detectable: SanitizeResponse fills absent scores with
-// DefaultScore and clamps the rest to 0..100.
+// DefaultScore and clamps the rest to 0..100 -- and the ENGINE
+// (internal/match via the registry) then overwrites it with the
+// canonical tier band on every emitted row: a plugin's self-score is
+// only ever an intra-tier hint, never the wire score.
 type Result struct {
 	Title       string   `json:"title"`
 	Subtitle    string   `json:"subtitle,omitempty"`
@@ -80,6 +84,18 @@ type Result struct {
 	Score       *float64 `json:"score,omitempty"`
 	Fields      []Field  `json:"fields,omitempty"`
 	Action      *Action  `json:"action,omitempty"`
+	// Keywords are extra match texts for the engine's text gating:
+	// query terms match a result when they match its title OR any
+	// keyword. All-queries plugins should fill these with whatever
+	// their result should be findable by; triggered (prefix/regex/
+	// bang) plugins do not need them.
+	Keywords []string `json:"keywords,omitempty"`
+	// MatchRanges are per-character highlight ranges on Title:
+	// half-open [start, end) RUNE index pairs. Optional on the wire --
+	// absent means the engine computes them for text-matched results
+	// (and none for the triggered tier); a plugin doing its own
+	// matching may supply them and they win over engine positions.
+	MatchRanges [][2]int `json:"matchRanges,omitempty"`
 }
 
 // Field is one label/value detail line on a result.
@@ -130,6 +146,9 @@ const (
 	maxFieldValueRunes    = 200
 	maxFields             = 8
 	maxIconBytes          = 32
+	maxKeywords           = 8
+	maxKeywordRunes       = 64
+	maxMatchRanges        = 32
 	maxActionPathBytes    = 2048
 	maxActionURLBytes     = 2048
 	maxActionCopyBytes    = 8192
@@ -201,6 +220,25 @@ func sanitizeResult(r Result, idx int, allowRunCommand bool) (clean Result, reas
 	}
 	score = math.Min(100, math.Max(0, score))
 	r.Score = &score
+
+	if len(r.Keywords) > 0 {
+		kws := make([]string, 0, min(len(r.Keywords), maxKeywords))
+		for _, kw := range r.Keywords {
+			kw = truncateRunes(strings.TrimSpace(stripControl(kw)), maxKeywordRunes)
+			if kw == "" {
+				continue
+			}
+			kws = append(kws, kw)
+			if len(kws) == maxKeywords {
+				break
+			}
+		}
+		if len(kws) == 0 {
+			kws = nil
+		}
+		r.Keywords = kws
+	}
+	r.MatchRanges = normalizeRanges(r.MatchRanges, utf8.RuneCountInString(r.Title))
 
 	if len(r.Fields) > maxFields {
 		r.Fields = r.Fields[:maxFields]
@@ -291,6 +329,49 @@ func sanitizeAction(a Action, idx int, allowRunCommand bool) (act *Action, reaso
 	default:
 		return nil, fmt.Sprintf("result %d: unknown action type %q stripped", idx, a.Type), false
 	}
+}
+
+// normalizeRanges validates plugin-supplied matchRanges against the
+// (post-truncation) title rune length: pairs are clamped into range,
+// empty/inverted pairs dropped, the rest sorted and merged, capped at
+// maxMatchRanges. Nothing valid left = nil.
+func normalizeRanges(rs [][2]int, runeLen int) [][2]int {
+	if len(rs) == 0 || runeLen <= 0 {
+		return nil
+	}
+	clamped := make([][2]int, 0, len(rs))
+	for _, r := range rs {
+		lo, hi := r[0], r[1]
+		if lo < 0 {
+			lo = 0
+		}
+		if hi > runeLen {
+			hi = runeLen
+		}
+		if lo >= hi {
+			continue
+		}
+		clamped = append(clamped, [2]int{lo, hi})
+	}
+	if len(clamped) == 0 {
+		return nil
+	}
+	sort.Slice(clamped, func(i, j int) bool { return clamped[i][0] < clamped[j][0] })
+	merged := clamped[:1]
+	for _, r := range clamped[1:] {
+		last := &merged[len(merged)-1]
+		if r[0] <= last[1] {
+			if r[1] > last[1] {
+				last[1] = r[1]
+			}
+			continue
+		}
+		merged = append(merged, r)
+	}
+	if len(merged) > maxMatchRanges {
+		merged = merged[:maxMatchRanges]
+	}
+	return merged
 }
 
 // sanitizeIcon keeps an icon only when it is a builtin icon name
