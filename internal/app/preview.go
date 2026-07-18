@@ -29,13 +29,15 @@ const (
 )
 
 // PreviewConfigInfo is the GetPreviewConfig answer: whether the pane
-// is on, and whether the web-search/AI providers have credentials
-// (config key or environment variable). The keys themselves never
-// cross to the frontend.
+// is on, whether the web-search/AI providers have credentials (config
+// key or environment variable), and the pixel width the left results
+// column keeps while the pane is on (the flag-off bar width, config
+// window.width). The keys themselves never cross to the frontend.
 type PreviewConfigInfo struct {
 	Enabled          bool `json:"enabled"`
 	KagiConfigured   bool `json:"kagiConfigured"`
 	OpenAIConfigured bool `json:"openaiConfigured"`
+	ResultsWidth     int  `json:"resultsWidth"`
 }
 
 // aiCacheFileName is the persistent AI answer cache, next to
@@ -136,13 +138,21 @@ func (a *App) QueryPreview(target preview.Target, gen int) {
 // GetPreviewConfig reports the preview pane's frontend-relevant
 // configuration. "Configured" means a non-empty API key in the config
 // or the matching environment variable; the key values themselves are
-// never exposed (or logged).
+// never exposed (or logged). ResultsWidth is Options.ResultsWidth
+// (main.go wires config window.width, already Normalize-repaired),
+// falling back to the flag-off default so a zero value never produces
+// a collapsed column.
 func (a *App) GetPreviewConfig() PreviewConfigInfo {
 	p := a.opt.Preview
+	rw := a.opt.ResultsWidth
+	if rw <= 0 {
+		rw = config.DefaultWindowWidth
+	}
 	return PreviewConfigInfo{
 		Enabled:          p.Enabled,
 		KagiConfigured:   p.Kagi.APIKey != "" || a.plat.getenv(envKagiAPIKey) != "",
 		OpenAIConfigured: p.OpenAI.APIKey != "" || a.plat.getenv(envOpenAIAPIKey) != "",
+		ResultsWidth:     rw,
 	}
 }
 

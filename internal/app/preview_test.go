@@ -389,3 +389,16 @@ func TestStartPreviewInvalidBaseURLKeepsTerseFetchError(t *testing.T) {
 	require.Equal(t, "openai: invalid baseUrl (preview.openai.baseUrl / OPENAI_BASE_URL)", p.Err)
 	require.NotContains(t, p.Err, "answers.example")
 }
+
+func TestGetPreviewConfigResultsWidth(t *testing.T) {
+	// The wired flag-off bar width (config window.width via main.go)
+	// is reported as-is...
+	a, _ := newTestApp(t, nil, Options{ResultsWidth: 900})
+	require.Equal(t, 900, a.GetPreviewConfig().ResultsWidth)
+
+	// ...and an unset value (bare-Options tests, or a caller predating
+	// the knob) falls back to the flag-off default, never a collapsed
+	// column.
+	b, _ := newTestApp(t, nil, Options{})
+	require.Equal(t, config.DefaultWindowWidth, b.GetPreviewConfig().ResultsWidth)
+}

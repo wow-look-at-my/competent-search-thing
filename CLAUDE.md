@@ -969,7 +969,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   keys and base URLs flow only into preview.Options, never into logs
   or payloads;
   bound methods QueryPreview(target, gen) / GetPreviewConfig()
-  (enabled + kagi/openai configured, keys never exposed) /
+  (enabled + kagi/openai configured + resultsWidth = the flag-off bar
+  width, Options.ResultsWidth wired from config window.width in
+  main.go with a DefaultWindowWidth fallback when unset; keys never
+  exposed) /
   FetchWebPreview / FetchAIPreview (gen store + dispatcher FetchWeb/
   FetchAI; nil dispatcher = no-op, so the frontend's Ctrl+K / Ctrl+I
   strip is the ONLY call path and nothing automatic ever dials);
@@ -1526,9 +1529,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   design tokens apply when present and the standalone default
   otherwise, merge order irrelevant; plus the appended .preview-* /
   body.with-preview block: with-preview turns #bar into a grid --
-  680px left column holding query row/results/status/stats row
-  exactly as before (four explicit rows; the pane spans 1 / 5 and a
-  hidden #stats collapses its row to zero), pane in the rest behind
+  the left column (query row/results/status/stats row exactly as
+  before; four explicit rows, the pane spans 1 / 5 and a hidden
+  #stats collapses its row to zero) keeps the FLAG-OFF bar width via
+  var(--preview-results-col, 680px), the custom property preview.ts
+  sets on <body> from GetPreviewConfig.resultsWidth (= config
+  window.width; the 680px fallback is the pre-knob constant), pane
+  in the rest behind
   a border-left divider, minmax(0,..)
   tracks so pane content scrolls instead of growing the window --
   and without the class every preview rule is inert, so flag-off

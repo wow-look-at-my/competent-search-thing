@@ -1664,8 +1664,10 @@ Off by default; enable it in `config.json`:
 
 With the pane enabled the window opens at `preview.windowWidth` x
 `preview.windowHeight` (defaults 1600 x 800, read once at startup):
-the classic 680-wide results column stays on the left, exactly as
-before, and the pane fills the remaining width behind a divider. With
+the results column stays on the left at the flag-off bar width -- it
+follows `window.width` (default 780), so it renders exactly as the
+bar would without the pane -- and the pane fills the remaining width
+behind a divider. With
 the pane disabled the window is the configured `window.width` x
 `window.height` (defaults 780 x 550 -- see
 [Configuration](#configuration)) and none of this exists -- no pane

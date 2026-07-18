@@ -73,6 +73,7 @@ func runGUI(opts cli.RunOptions) error {
 		Preview:                cfg.Preview,
 		WindowWidth:            width,
 		WindowHeight:           height,
+		ResultsWidth:           cfg.Window.Width,
 	})
 
 	wailsOpts := &options.App{
