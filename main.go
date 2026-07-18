@@ -62,6 +62,7 @@ func runGUI(opts cli.RunOptions) error {
 		TrayDisabled:           cfg.Tray.Disabled,
 		HistoryPersistDisabled: cfg.History.PersistDisabled,
 		ConfigNotes:            cfg.MigrationNotes,
+		Frecency:               cfg.Search.Frecency,
 	})
 
 	wailsOpts := &options.App{

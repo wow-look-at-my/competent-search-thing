@@ -11,6 +11,7 @@ import (
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
 	"github.com/wow-look-at-my/competent-search-thing/internal/firefox"
+	"github.com/wow-look-at-my/competent-search-thing/internal/frecency"
 	"github.com/wow-look-at-my/competent-search-thing/internal/gsettings"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform/native"
@@ -95,6 +96,11 @@ type platformSeams struct {
 	// frequent-sites discovery probes; production is
 	// firefox.DefaultBaseDirs (the real home), tests pin it.
 	firefoxBases func() []string
+	// procTree builds a fresh process-tree snapshot for one focused-app
+	// cwd derivation (the frecency cwd boost, see frecency.go); nil
+	// means the platform has no source and the boost stays off.
+	// Production: appctx.NewProcTree("/proc") per capture, linux only.
+	procTree func() frecency.ProcTree
 }
 
 func defaultPlatformSeams() platformSeams {
@@ -126,7 +132,19 @@ func defaultPlatformSeams() platformSeams {
 		activateWindow:  native.ActivateWindow,
 		appSource:       native.AppSource(),
 		firefoxBases:    firefox.DefaultBaseDirs,
+		procTree:        defaultProcTree(goruntime.GOOS),
 	}
+}
+
+// defaultProcTree returns the per-capture process-tree factory for
+// the frecency cwd derivation: a fresh /proc snapshot on linux, nil
+// elsewhere (windows/darwin have no /proc; the cwd boost simply does
+// not exist there yet, documented in the README).
+func defaultProcTree(goos string) func() frecency.ProcTree {
+	if goos != "linux" {
+		return nil
+	}
+	return func() frecency.ProcTree { return appctx.NewProcTree("/proc") }
 }
 
 // runtimeCtx returns the Wails context, or nil before Startup.

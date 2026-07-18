@@ -160,16 +160,18 @@ func (a *App) appctxCache() *appctx.Cache {
 }
 
 // captureAppContext snapshots the focused app and kicks the async
-// running/installed/open-window refreshes. The toggle path runs it
-// BEFORE showing the bar, because the bar window steals focus and the
-// focused app must be the one the user was just using. Safe before
-// Startup (nil cache no-ops).
+// running/installed/open-window refreshes, plus the async frecency
+// cwd derivation off the fresh focused snapshot (see frecency.go).
+// The toggle path runs it BEFORE showing the bar, because the bar
+// window steals focus and the focused app must be the one the user
+// was just using. Safe before Startup (nil cache no-ops).
 func (a *App) captureAppContext() {
 	c := a.appctxCache()
 	c.CaptureFocused()
 	c.RefreshRunningAsync()
 	c.RefreshWindowsAsync()
 	c.EnsureFreshInstalled(installedAppsTTL)
+	a.captureFrecencyCwd(c)
 }
 
 // installedApps adapts the cached installed-apps snapshot to the
