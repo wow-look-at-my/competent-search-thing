@@ -1524,15 +1524,23 @@ the command (never the key) and logs the repair:
     hotkey: repaired the GNOME keybinding command: "/home/you/.linuxbrew/Cellar/competent-search-thing/1.0.0/bin/competent-search-thing toggle" -> "/home/you/.linuxbrew/bin/competent-search-thing toggle" (the stored command no longer launched this binary)
 
 Symlinked install layouts (Homebrew's versioned Cellar, Nix, stow)
-are why both rules exist: the app registers the stable path -- the
-PATH shim, e.g. `~/.linuxbrew/bin/competent-search-thing` -- rather
-than the resolved version-pinned path, so upgrading no longer breaks
-the shortcut, and an entry written by an older version heals to the
-stable path on the first launch after an upgrade. (The flip side: a
-command you pointed at some other program yourself is healed back to
-the app on the next launch -- the repair line above is the paper
-trail. A textually different command that still launches this binary
-is left alone.) To
+are why both rules exist: the app registers the upgrade-stable
+spelling of its own path, never the resolved version-pinned one. For
+a Homebrew install the stable spelling is derived structurally from
+the Cellar path itself -- `<prefix>/Cellar/<formula>/<version>/bin/...`
+maps to the linked `<prefix>/bin/...` (or `<prefix>/opt/<formula>/...`
+when the formula is unlinked) -- independent of PATH, argv[0] and the
+rest of the launch environment, and a candidate is only ever
+substituted when it is proven to be the very binary that is running.
+A stored command still pinned to a Cellar version self-heals to the
+stable spelling at startup (that is the migration path for bindings
+written by older builds), so after one launch of a build with this
+mapping the binding survives arbitrary future upgrades with zero user
+action and zero dead windows. (The flip side: a command you pointed
+at some other program yourself is healed back to the app on the next
+launch -- the repair line above is the paper trail. A working custom
+spelling of this binary -- your own symlink, say -- is left
+alone.) To
 remove it, delete the shortcut in GNOME Settings, or -- if it is your
 only custom shortcut -- reset the whole custom-keybindings list:
 
@@ -1574,13 +1582,13 @@ nothing? Work through these, in order:
    grab (step 2).
 
 4. **Moved, upgraded or deleted the binary?** The keybinding stores
-   an absolute path (preferring the stable PATH shim of a
-   Homebrew/Nix-style install over the resolved versioned path), and
-   a stored command whose executable is gone or no longer this binary
-   self-heals -- but only at app startup. Start the app once from the
-   new location and look for the `hotkey: repaired the GNOME
-   keybinding command: "..." -> "..."` line; the shortcut works again
-   from then on.
+   the upgrade-stable spelling of the binary's absolute path (for a
+   Homebrew install, derived structurally from the Cellar layout:
+   the linked `<prefix>/bin` path first, `<prefix>/opt/<formula>` as
+   the fallback), and a stored command that is dead, names a
+   different binary, or is still pinned to a Cellar version
+   self-heals at app startup -- the `hotkey: repaired the GNOME
+   keybinding command: "..." -> "..."` line is the paper trail.
 
 5. **Force a backend** for debugging with
    `COMPETENT_SEARCH_HOTKEY_BACKEND` (see
