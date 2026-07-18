@@ -1117,25 +1117,33 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 ## CI notes
 
 - `.github/workflows/ci.yml` runs on every push (`on: push:`, no
-  filters). Jobs: `linux` (the original single build job, content
-  unchanged) and `darwin` (macos-latest: darwin/arm64 cgo build + the
-  full unit-test suite, tags `desktop,production`, no screenshots/deb/
-  publishing). There is deliberately NO aggregator job: the org-required
+  filters). Jobs: `linux` (the original single build job + cache
+  hand-offs of the linux and windows app binaries), `darwin`
+  (macos-latest: darwin/arm64 cgo build + the full unit-test suite,
+  tags `desktop,production`, no screenshots/deb; hands off the
+  darwin/arm64 app binary the same way) and `publish` (needs: [linux,
+  darwin];
+  publishes ONE buildhost release per push -- see "Binary publishing"
+  below). There is deliberately NO aggregator job: the org-required
   `all-builds` context is a COMMIT STATUS posted by the
   required-builds-manager app, which tallies the repo's real build jobs
   itself (it excludes any job literally named all-builds from its own
-  math -- its status text reads "N/M builds ..."), so a green merge
-  needs BOTH `linux` and `darwin` green, and renaming/adding jobs is
-  safe. The aggregator job #23 briefly added was redundant and was
-  removed in the 2026-07-17 ci.yml cleanup (#25).
+  math -- its status text reads "N/M builds ..."; `publish` counts as a
+  real job in that tally), so a green merge needs `linux`, `darwin` AND
+  `publish` green, and renaming/adding jobs is safe. The aggregator job
+  #23 briefly added was redundant and was removed in the 2026-07-17
+  ci.yml cleanup (#25).
 - The `linux` job: checkout -> apt install gtk/webkit/x11 dev packages plus
   xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run build`
   in `frontend/` -> `wow-look-at-my/go-toolchain@v1`
   with `targets: linux/amd64,windows/amd64`, `cgo: 'true'`,
   `timeout: '20'`, and env
-  `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> deb build +
-  publish (next bullet) -> screenshot capture ->
-  `actions/upload-artifact@v4`.
+  `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> two
+  `wow-look-at-my/actions@cache-upload#latest` hand-offs
+  (`app-linux-amd64`, `app-windows-amd64` -- job hand-offs ride the
+  org's cache trio, never GitHub artifacts) -> deb build + publish
+  (next bullet) -> screenshot capture -> `actions/upload-artifact@v4`
+  (screenshots).
 - Deb packaging: buildhost's own `fmt=deb`/APT-repo debs carry NO
   `Depends` (hardcoded control in buildhost internal/repackage/deb.go),
   so on a machine without the WebKitGTK/GTK runtime libs the app dies
@@ -1164,15 +1172,33 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   against the Apple SDK, so darwin targets must never be added to the
   LINUX job's targets list -- darwin is built by the dedicated
   `darwin` job on a mac runner.
-- Binary publishing: go-toolchain's `autorelease` (which used to push
-  the raw `build/` binaries to buildhost projects
-  `competent-search-thing` + `competent-search-thing/server` on every
-  push) was REMOVED in the 2026-07-17 ci.yml cleanup (#25) -- only the
-  .deb still publishes (previous bullet), and README "Install"'s
-  raw-binary/`latest` URLs now serve the last pre-cleanup versions
-  until autorelease is deliberately restored. The workflow keeps
-  `actions: read` + `id-token: write` permissions (the deb publish
-  uses OIDC; `actions: read` only matters if autorelease returns).
+- Binary publishing: the dedicated `publish` job (needs: [linux,
+  darwin], ubuntu-latest, no checkout) restores the `app-linux-amd64`
+  + `app-windows-amd64` + `app-darwin-arm64` cache hand-offs (the
+  org-standard `wow-look-at-my/actions@cache-upload#latest` /
+  `@cache-download#latest` trio -- NOT GitHub artifacts, which this
+  org does not use for job hand-offs; distinct hand-off names keep
+  the `cache-xfer-<name>-<run_id>-<run_attempt>` keys collision-free,
+  single-file hand-offs restore as `<dest>/<basename>`, and a
+  "re-run failed jobs" restores the prior attempt via the
+  restore-keys prefix) and publishes ONE buildhost release per
+  push to project `competent-search-thing` carrying linux/amd64,
+  windows/amd64 and darwin/arm64, via the same first-party
+  buildhost-{create-release,upload-artifact,publish-release}@master
+  actions the deb uses (the actions mint their own OIDC token, audience
+  https://pazer.build, from the workflow's `id-token: write` grant; no
+  version input = auto-increment; git_branch defaults to
+  github.ref_name). Branch pushes create branch releases
+  (`?branch=<name>` downloads, slashes URL-encoded); the bare "latest"
+  URL only ever follows the default branch (master) -- a buildhost
+  guarantee, do not re-verify it per project. This replaced
+  go-toolchain's `autorelease` (removed in the 2026-07-17 cleanup #25;
+  restored as the explicit job the same day). The old autorelease also
+  pushed the color-http example server binary to project
+  `competent-search-thing/server`; that is deliberately NOT restored
+  (dev sample, not a user-facing deliverable). Deb publishing (previous
+  bullet) is unchanged, and README "Install" documents the real install
+  paths (deb / linux raw binary / macOS / windows).
 - `frontend/package-lock.json` is committed (required by `npm ci`).
 
 ## CI screenshots
