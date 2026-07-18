@@ -61,6 +61,21 @@ func eventuallySites(t *testing.T, c *Cache) []Site {
 	return got
 }
 
+// settleSiteRefresh waits until no refresh goroutine is in flight
+// (settleTabRefresh is the TabCache twin). Waiting on the calls
+// counter alone is not enough: it increments when a fetch STARTS,
+// while the outcome (sites/lastErr/nextAttempt) is stored only after
+// it returns -- a fail-flag flip, clock advance or Sites kick issued
+// in that window races the store.
+func settleSiteRefresh(t *testing.T, c *Cache) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return !c.inFlight
+	}, 3*time.Second, time.Millisecond)
+}
+
 func TestCacheFirstQuerySingleFlight(t *testing.T) {
 	var calls atomic.Int32
 	gate := make(chan struct{})
@@ -145,9 +160,13 @@ func TestCacheFailureKeepsDataAndLogsOnce(t *testing.T) {
 	require.Equal(t, int32(2), calls.Load(), "a failure is not retried on every keystroke")
 
 	// ...after it the retry runs, and the identical error stays quiet.
+	// Settling before the flag flips keeps them strictly ordered
+	// after the fetch that must not see them, and pins the refresh's
+	// completion-time nextAttempt before the next clock advance.
 	clock.advance(failureRetryGap)
 	c.Sites()
 	require.Eventually(t, func() bool { return calls.Load() == 3 }, 3*time.Second, 5*time.Millisecond)
+	settleSiteRefresh(t, c)
 	require.Len(t, lg.all(), 1, "the same message is logged once, not per refresh")
 
 	// Recovery resets the dedup, so a NEW round of failures logs again.
@@ -155,6 +174,7 @@ func TestCacheFailureKeepsDataAndLogsOnce(t *testing.T) {
 	clock.advance(failureRetryGap)
 	c.Sites()
 	require.Eventually(t, func() bool { return calls.Load() == 4 }, 3*time.Second, 5*time.Millisecond)
+	settleSiteRefresh(t, c)
 	fail.Store(true)
 	clock.advance(11 * time.Minute)
 	c.Sites()
