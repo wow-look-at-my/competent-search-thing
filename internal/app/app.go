@@ -98,6 +98,13 @@ type Options struct {
 	// bare-Options tests working.
 	WindowWidth  int
 	WindowHeight int
+	// ResultsWidth is the pixel width the left results column keeps
+	// while the preview pane is on -- the flag-off bar width (wire
+	// config's window.width here), so the column matches what the bar
+	// would be without the pane. Zero or negative values fall back to
+	// config.DefaultWindowWidth in GetPreviewConfig, keeping
+	// bare-Options tests working. Unused while the pane is off.
+	ResultsWidth int
 }
 
 // App is the Wails-bound application object. It carries the Wails

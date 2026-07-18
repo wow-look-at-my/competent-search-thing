@@ -553,7 +553,11 @@ func TestPreviewConfig(t *testing.T) {
 	require.Equal(t, DefaultPreview(), c.Preview)
 
 	// Zero and negative knobs and an empty model are repaired; real
-	// values -- the API keys verbatim included -- survive.
+	// values -- the API keys and base URLs verbatim included --
+	// survive. The base URLs are passthrough like the Firefox
+	// profileDirs: Normalize never touches them (validation happens at
+	// the consumer), and an odd spelling -- trailing slash included --
+	// survives byte-for-byte.
 	c = Config{Preview: PreviewConfig{
 		Enabled:       true,
 		WindowWidth:   0,
@@ -561,8 +565,17 @@ func TestPreviewConfig(t *testing.T) {
 		TextMaxKB:     512,
 		ImageMaxEdge:  0,
 		DirMaxEntries: 50,
-		Kagi:          PreviewKagiConfig{APIKey: "kagi-secret", MaxResults: 0},
-		OpenAI:        PreviewOpenAIConfig{APIKey: "sk-secret", Model: "", MaxOutputTokens: -5},
+		Kagi: PreviewKagiConfig{
+			APIKey:     "kagi-secret",
+			BaseURL:    "https://kagi.internal.example/",
+			MaxResults: 0,
+		},
+		OpenAI: PreviewOpenAIConfig{
+			APIKey:          "sk-secret",
+			BaseURL:         "not even a url",
+			Model:           "",
+			MaxOutputTokens: -5,
+		},
 	}}
 	c.Normalize()
 	require.True(t, c.Preview.Enabled)
@@ -572,8 +585,10 @@ func TestPreviewConfig(t *testing.T) {
 	require.Equal(t, DefaultPreviewImageMaxEdge, c.Preview.ImageMaxEdge)
 	require.Equal(t, 50, c.Preview.DirMaxEntries)
 	require.Equal(t, "kagi-secret", c.Preview.Kagi.APIKey, "the key is never touched")
+	require.Equal(t, "https://kagi.internal.example/", c.Preview.Kagi.BaseURL, "the base URL is never touched")
 	require.Equal(t, DefaultPreviewKagiMax, c.Preview.Kagi.MaxResults)
 	require.Equal(t, "sk-secret", c.Preview.OpenAI.APIKey, "the key is never touched")
+	require.Equal(t, "not even a url", c.Preview.OpenAI.BaseURL, "the base URL is never touched")
 	require.Equal(t, DefaultPreviewOpenAIModel, c.Preview.OpenAI.Model)
 	require.Equal(t, DefaultPreviewOpenAITokens, c.Preview.OpenAI.MaxOutputTokens)
 

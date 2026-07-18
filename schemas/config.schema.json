@@ -395,6 +395,11 @@
           "default": "",
           "description": "SECRET: the Kagi Search API token. Passed through verbatim and never logged; keep config.json private when set. Empty means 'use the KAGI_API_KEY environment variable, if set'; with neither, the web-search preview stays unavailable."
         },
+        "baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Custom API base URL, e.g. a self-hosted Kagi-compatible server; empty = the official endpoint (https://kagi.com). No environment fallback. Requests go to <baseUrl>/api/v1/search; a non-http(s) or host-less value leaves the provider unavailable with an error naming this key."
+        },
         "maxResults": {
           "type": "integer",
           "minimum": 1,
@@ -412,6 +417,11 @@
           "type": "string",
           "default": "",
           "description": "SECRET: the OpenAI API key. Passed through verbatim and never logged; keep config.json private when set. Empty means 'use the OPENAI_API_KEY environment variable, if set'; with neither, the answer preview stays unavailable."
+        },
+        "baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Custom API base URL, e.g. an OpenAI-compatible server; empty means 'use the OPENAI_BASE_URL environment variable, if set', else the official endpoint (https://api.openai.com). Requests go to <baseUrl>/v1/responses (the target must implement the Responses API); a non-http(s) or host-less value leaves the provider unavailable with an error naming this key."
         },
         "model": {
           "type": "string",

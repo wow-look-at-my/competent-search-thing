@@ -21,16 +21,23 @@ const eventPreviewResult = "preview:result"
 const (
 	envKagiAPIKey   = "KAGI_API_KEY"
 	envOpenAIAPIKey = "OPENAI_API_KEY"
+	// envOpenAIBaseURL is the SDK-conventional endpoint override: an
+	// empty preview.openai.baseUrl defers to it, e.g. for an
+	// OpenAI-compatible server. The Kagi base URL deliberately has NO
+	// env fallback (config only).
+	envOpenAIBaseURL = "OPENAI_BASE_URL"
 )
 
 // PreviewConfigInfo is the GetPreviewConfig answer: whether the pane
-// is on, and whether the web-search/AI providers have credentials
-// (config key or environment variable). The keys themselves never
-// cross to the frontend.
+// is on, whether the web-search/AI providers have credentials (config
+// key or environment variable), and the pixel width the left results
+// column keeps while the pane is on (the flag-off bar width, config
+// window.width). The keys themselves never cross to the frontend.
 type PreviewConfigInfo struct {
 	Enabled          bool `json:"enabled"`
 	KagiConfigured   bool `json:"kagiConfigured"`
 	OpenAIConfigured bool `json:"openaiConfigured"`
+	ResultsWidth     int  `json:"resultsWidth"`
 }
 
 // aiCacheFileName is the persistent AI answer cache, next to
@@ -42,9 +49,13 @@ const aiCacheFileName = "aicache.json"
 // no-op on the nil dispatcher), otherwise a preview.Dispatcher whose
 // parent context Shutdown cancels. The provider API keys resolve here
 // -- config value first, else the environment variable through the
-// getenv seam -- exactly the resolution GetPreviewConfig reports; the
-// resolved keys flow only into the dispatcher options and are never
-// logged.
+// getenv seam -- exactly the resolution GetPreviewConfig reports, and
+// the OpenAI base URL resolves the same way (preview.openai.baseUrl,
+// else OPENAI_BASE_URL; the Kagi base is config-only). The resolved
+// keys and base URLs flow only into the dispatcher options and are
+// never logged (a base URL may carry userinfo); the dispatcher trims
+// one trailing "/" and turns an invalid base into a terse fetch-path
+// error instead of a broken client.
 func (a *App) startPreview() {
 	if !a.opt.Preview.Enabled {
 		return
@@ -57,6 +68,10 @@ func (a *App) startPreview() {
 	openaiKey := p.OpenAI.APIKey
 	if openaiKey == "" {
 		openaiKey = a.plat.getenv(envOpenAIAPIKey)
+	}
+	openaiBase := p.OpenAI.BaseURL
+	if openaiBase == "" {
+		openaiBase = a.plat.getenv(envOpenAIBaseURL)
 	}
 	cachePath := ""
 	if dir, err := config.Dir(); err == nil {
@@ -71,8 +86,10 @@ func (a *App) startPreview() {
 		DirMaxEntries:         p.DirMaxEntries,
 		Emit:                  a.previewEmit,
 		KagiAPIKey:            kagiKey,
+		KagiBaseURL:           p.Kagi.BaseURL,
 		KagiMaxResults:        p.Kagi.MaxResults,
 		OpenAIAPIKey:          openaiKey,
+		OpenAIBaseURL:         openaiBase,
 		OpenAIModel:           p.OpenAI.Model,
 		OpenAIMaxOutputTokens: p.OpenAI.MaxOutputTokens,
 		AICachePath:           cachePath,
@@ -121,13 +138,21 @@ func (a *App) QueryPreview(target preview.Target, gen int) {
 // GetPreviewConfig reports the preview pane's frontend-relevant
 // configuration. "Configured" means a non-empty API key in the config
 // or the matching environment variable; the key values themselves are
-// never exposed (or logged).
+// never exposed (or logged). ResultsWidth is Options.ResultsWidth
+// (main.go wires config window.width, already Normalize-repaired),
+// falling back to the flag-off default so a zero value never produces
+// a collapsed column.
 func (a *App) GetPreviewConfig() PreviewConfigInfo {
 	p := a.opt.Preview
+	rw := a.opt.ResultsWidth
+	if rw <= 0 {
+		rw = config.DefaultWindowWidth
+	}
 	return PreviewConfigInfo{
 		Enabled:          p.Enabled,
 		KagiConfigured:   p.Kagi.APIKey != "" || a.plat.getenv(envKagiAPIKey) != "",
 		OpenAIConfigured: p.OpenAI.APIKey != "" || a.plat.getenv(envOpenAIAPIKey) != "",
+		ResultsWidth:     rw,
 	}
 }
 

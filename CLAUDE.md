@@ -593,10 +593,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the numeric knobs are Normalize-repaired to defaults when <= 0,
   both profileDirs are passed through verbatim), preview {enabled,
   windowWidth 1600, windowHeight 800, textMaxKB 256, imageMaxEdge 800,
-  dirMaxEntries 200, kagi {apiKey, maxResults 8}, openai {apiKey,
-  model "gpt-5-mini", maxOutputTokens 1024}} -- the opt-in preview
+  dirMaxEntries 200, kagi {apiKey, baseUrl, maxResults 8}, openai
+  {apiKey, baseUrl, model "gpt-5-mini", maxOutputTokens 1024}} -- the
+  opt-in preview
   pane (zero value = off); numerics and an empty model are
-  Normalize-repaired, the API keys pass through verbatim and are never
+  Normalize-repaired, the API keys AND base URLs pass through verbatim
+  (empty baseUrl = the official endpoint; validation happens in
+  internal/preview, not here) and are never
   logged. Lives under
   os.UserConfigDir(); the `COMPETENT_SEARCH_CONFIG_DIR` env var
   overrides the directory (tests rely on this); `Dir()` exposes that
@@ -986,8 +989,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   "meta"|"text"|"image"|"dir"|"web"|"ai"|"error", title, path, meta,
   text, image, dir, web, ai, err, durMs}. dispatch.go:
   `New(parentCtx, Options{TextMaxKB, ImageMaxEdge, DirMaxEntries,
-  Emit, KagiAPIKey, KagiMaxResults, OpenAIAPIKey, OpenAIModel,
-  OpenAIMaxOutputTokens, AICachePath, Logf})` -> Dispatcher;
+  Emit, KagiAPIKey, KagiBaseURL, KagiMaxResults, OpenAIAPIKey,
+  OpenAIBaseURL, OpenAIModel,
+  OpenAIMaxOutputTokens, AICachePath, Logf})` -> Dispatcher (the
+  base URLs go through normalizeBaseURL: empty = the client default,
+  ONE trailing "/" trimmed, anything not http(s)-with-a-host leaves
+  that provider UNAVAILABLE -- webErr/aiErr carry the terse
+  invalid-baseUrl message the fetch path emits, and the URL value is
+  never logged or emitted because it may carry userinfo);
   `Preview(target, gen)` is synchronous bookkeeping only (mutex'd
   cancel of the previous request + gen store; kind none/"" =
   cancel-only) and spawns ONE goroutine per request; file targets
@@ -1005,10 +1014,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   arm()): exactly ONE payload per accepted fetch -- kind "web"
   {query, results, cached} / "ai" {query, answer, model, cached} /
   "error" (blank query = "empty query"; no key = an error naming the
-  config key + env fallback; provider failure; 10s web / 90s ai hard
+  config key + env fallback; invalid baseUrl = "kagi: invalid baseUrl
+  (preview.kagi.baseUrl)" / "openai: invalid baseUrl
+  (preview.openai.baseUrl / OPENAI_BASE_URL)"; provider failure; 10s
+  web / 90s ai hard
   timeouts spelled out by fetchErrMsg). kagi.go: KagiClient
   (NewKagiClient(key, maxResults); BaseURL/HTTPClient/Now exported
-  seams) -- Kagi Search API v1 verified 2026-07-18: GET
+  seams -- BaseURL doubles as the production preview.kagi.baseUrl
+  override) -- Kagi Search API v1 verified 2026-07-18: GET
   {base}/api/v1/search?q=&limit=, header `Authorization: Bot <key>`,
   response data.search rows {url,title,snippet} (the deprecated v0
   flat data array with t==0 rows is still accepted on parse);
@@ -1054,11 +1067,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (config section) gates startPreview, which resolves each API key
   ONCE -- config value, else the env var through the getenv seam
   (KAGI_API_KEY / OPENAI_API_KEY), exactly the resolution
-  GetPreviewConfig reports -- and passes <configDir>/aicache.json
+  GetPreviewConfig reports -- resolves the OpenAI base URL the same
+  way (preview.openai.baseUrl else OPENAI_BASE_URL; the Kagi base is
+  config-only, no env) -- and passes <configDir>/aicache.json
   (config.Dir() failure = one log line + memory-only cache); the
-  keys flow only into preview.Options, never into logs or payloads;
+  keys and base URLs flow only into preview.Options, never into logs
+  or payloads;
   bound methods QueryPreview(target, gen) / GetPreviewConfig()
-  (enabled + kagi/openai configured, keys never exposed) /
+  (enabled + kagi/openai configured + resultsWidth = the flag-off bar
+  width, Options.ResultsWidth wired from config window.width in
+  main.go with a DefaultWindowWidth fallback when unset; keys never
+  exposed) /
   FetchWebPreview / FetchAIPreview (gen store + dispatcher FetchWeb/
   FetchAI; nil dispatcher = no-op, so the frontend's Ctrl+K / Ctrl+I
   strip is the ONLY call path and nothing automatic ever dials);
@@ -1638,9 +1657,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   design tokens apply when present and the standalone default
   otherwise, merge order irrelevant; plus the appended .preview-* /
   body.with-preview block: with-preview turns #bar into a grid --
-  680px left column holding query row/results/status/stats row
-  exactly as before (four explicit rows; the pane spans 1 / 5 and a
-  hidden #stats collapses its row to zero), pane in the rest behind
+  the left column (query row/results/status/stats row exactly as
+  before; four explicit rows, the pane spans 1 / 5 and a hidden
+  #stats collapses its row to zero) keeps the FLAG-OFF bar width via
+  var(--preview-results-col, 680px), the custom property preview.ts
+  sets on <body> from GetPreviewConfig.resultsWidth (= config
+  window.width; the 680px fallback is the pre-knob constant), pane
+  in the rest behind
   a border-left divider, minmax(0,..)
   tracks so pane content scrolls instead of growing the window --
   and without the class every preview rule is inert, so flag-off

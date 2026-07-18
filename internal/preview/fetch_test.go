@@ -175,12 +175,11 @@ func TestNewWiresProvidersFromKeys(t *testing.T) {
 	require.True(t, d.AIConfigured())
 }
 
-// TestFetchAIEndToEndWithCache drives the aiFn wiring shape New
+// TestFetchAIEndToEndWithCache drives the PRODUCTION aiFn wiring New
 // builds -- OpenAI client + persistent cache -- against an httptest
-// server (rebuilt here because Options deliberately carries no
-// BaseURL knob; production always talks to the real endpoint): the
-// first fetch dials and persists, the second is served from the cache
-// file with zero network and Cached=true.
+// server reached through the OpenAIBaseURL knob: the first fetch
+// dials and persists, the second is served from the cache file with
+// zero network and Cached=true.
 func TestFetchAIEndToEndWithCache(t *testing.T) {
 	var hits atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -191,25 +190,18 @@ func TestFetchAIEndToEndWithCache(t *testing.T) {
 	defer srv.Close()
 
 	cachePath := filepath.Join(t.TempDir(), "aicache.json")
-	openai := NewOpenAIClient("sk-test", "m", 16)
-	openai.BaseURL = srv.URL
-	openai.HTTPClient = srv.Client()
-	cache := NewAICache(cachePath)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	ch := make(chan Payload, 8)
-	d := New(ctx, Options{Emit: func(p Payload) { ch <- p }})
-	d.aiFn = func(fctx context.Context, query string) (*AIPreview, error) {
-		if answer, ok := cache.Get(openai.Model(), query); ok {
-			return &AIPreview{Query: query, Answer: answer, Model: openai.Model(), Cached: true}, nil
-		}
-		answer, model, err := openai.Ask(fctx, query)
-		if err != nil {
-			return nil, err
-		}
-		_ = cache.Put(openai.Model(), query, answer)
-		return &AIPreview{Query: query, Answer: answer, Model: model, Cached: false}, nil
-	}
+	d := New(ctx, Options{
+		Emit:                  func(p Payload) { ch <- p },
+		OpenAIAPIKey:          "sk-test",
+		OpenAIBaseURL:         srv.URL,
+		OpenAIModel:           "m",
+		OpenAIMaxOutputTokens: 16,
+		AICachePath:           cachePath,
+	})
+	require.True(t, d.AIConfigured())
 
 	d.FetchAI("q", 1)
 	p := waitPayload(t, ch)
@@ -233,4 +225,98 @@ func TestFetchAIEndToEndWithCache(t *testing.T) {
 	answer, ok := cache2.Get("m", "q")
 	require.True(t, ok)
 	require.Equal(t, "cached answer", answer)
+}
+
+// TestNormalizeBaseURL pins the base-URL preparation contract: empty
+// = the client default, exactly ONE trailing "/" trimmed, http(s)
+// with a host required, and error text that never quotes the value.
+func TestNormalizeBaseURL(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"empty stays empty", "", "", false},
+		{"plain origin", "https://api.example.com", "https://api.example.com", false},
+		{"one trailing slash trimmed", "https://api.example.com/", "https://api.example.com", false},
+		{"only one slash trimmed", "https://api.example.com//", "https://api.example.com/", false},
+		{"path-carrying base", "https://proxy.example.com/openai/", "https://proxy.example.com/openai", false},
+		{"http with port", "http://localhost:8080", "http://localhost:8080", false},
+		{"no scheme", "api.example.com", "", true},
+		{"non-http scheme", "ftp://api.example.com", "", true},
+		{"no host", "https:///v1", "", true},
+		{"userinfo without host", "https://user:secretpass@", "", true},
+		{"unparsable", "http://bad url", "", true},
+		{"bare slash trims to nothing", "/", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeBaseURL(tc.in)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.NotContains(t, err.Error(), tc.in,
+					"the error never quotes the value (it may carry userinfo)")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestNewRejectsInvalidBaseURLs: a key plus an unusable base leaves
+// the provider unavailable, and the fetch path explains it tersely --
+// naming the knob, never the value.
+func TestNewRejectsInvalidBaseURLs(t *testing.T) {
+	ch := make(chan Payload, 4)
+	d := New(context.Background(), Options{
+		Emit:                  func(p Payload) { ch <- p },
+		KagiAPIKey:            "k",
+		KagiBaseURL:           "not a url",
+		OpenAIAPIKey:          "o",
+		OpenAIBaseURL:         "ftp://answers.example",
+		OpenAIModel:           "m",
+		OpenAIMaxOutputTokens: 8,
+	})
+	require.False(t, d.WebConfigured(), "an invalid base never installs a client")
+	require.False(t, d.AIConfigured(), "an invalid base never installs a client")
+
+	d.FetchWeb("q", 1)
+	p := waitPayload(t, ch)
+	require.Equal(t, KindError, p.Kind)
+	require.Equal(t, "kagi: invalid baseUrl (preview.kagi.baseUrl)", p.Err)
+	require.NotContains(t, p.Err, "not a url", "the configured value is never emitted")
+
+	d.FetchAI("q", 2)
+	p = waitPayload(t, ch)
+	require.Equal(t, KindError, p.Kind)
+	require.Equal(t, "openai: invalid baseUrl (preview.openai.baseUrl / OPENAI_BASE_URL)", p.Err)
+}
+
+// TestNewWiresKagiBaseURLToClient proves the configured base reaches
+// the real Kagi client -- with ONE trailing slash trimmed, so the
+// request path is exactly the API path.
+func TestNewWiresKagiBaseURLToClient(t *testing.T) {
+	var gotPath atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath.Store(r.URL.Path)
+		_, _ = w.Write([]byte(`{"data":{"search":[{"url":"https://r.example","title":"R","snippet":"s"}]}}`))
+	}))
+	defer srv.Close()
+
+	ch := make(chan Payload, 4)
+	d := New(context.Background(), Options{
+		Emit:        func(p Payload) { ch <- p },
+		KagiAPIKey:  "k",
+		KagiBaseURL: srv.URL + "/",
+	})
+	require.True(t, d.WebConfigured())
+	d.FetchWeb("q", 1)
+	p := waitPayload(t, ch)
+	require.Equal(t, KindWeb, p.Kind)
+	require.Len(t, p.Web.Results, 1)
+	require.Equal(t, "https://r.example", p.Web.Results[0].URL)
+	require.Equal(t, "/api/v1/search", gotPath.Load(),
+		"one trailing slash on the base is trimmed, no double slash")
 }

@@ -175,13 +175,16 @@ interface PreviewPayload {
 }
 
 // GetPreviewConfig answer (internal/app PreviewConfigInfo): whether
-// the pane is on and whether the web/AI providers have credentials
-// (config key or environment variable). The key values themselves
-// never cross to the frontend.
+// the pane is on, whether the web/AI providers have credentials
+// (config key or environment variable), and the pixel width the left
+// results column keeps while the pane is on (the flag-off bar width,
+// config window.width). The key values themselves never cross to the
+// frontend.
 interface PreviewConfigInfo {
   enabled: boolean;
   kagiConfigured: boolean;
   openaiConfigured: boolean;
+  resultsWidth: number;
 }
 
 interface WailsAppBindings {
