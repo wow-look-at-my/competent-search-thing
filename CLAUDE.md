@@ -1117,11 +1117,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 ## CI notes
 
 - `.github/workflows/ci.yml` runs on every push (`on: push:`, no
-  filters). Jobs: `linux` (the original single build job + a
-  `binaries-linux` artifact upload), `darwin` (macos-latest:
-  darwin/arm64 cgo build + the full unit-test suite, tags
-  `desktop,production`, no screenshots/deb; uploads the
-  `binaries-darwin` artifact) and `publish` (needs: [linux, darwin];
+  filters). Jobs: `linux` (the original single build job + cache
+  hand-offs of the linux and windows app binaries), `darwin`
+  (macos-latest: darwin/arm64 cgo build + the full unit-test suite,
+  tags `desktop,production`, no screenshots/deb; hands off the
+  darwin/arm64 app binary the same way) and `publish` (needs: [linux,
+  darwin];
   publishes ONE buildhost release per push -- see "Binary publishing"
   below). There is deliberately NO aggregator job: the org-required
   `all-builds` context is a COMMIT STATUS posted by the
@@ -1137,11 +1138,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   in `frontend/` -> `wow-look-at-my/go-toolchain@v1`
   with `targets: linux/amd64,windows/amd64`, `cgo: 'true'`,
   `timeout: '20'`, and env
-  `GOFLAGS: "-tags=webkit2_41,desktop,production"` ->
-  `actions/upload-artifact@v4` (`binaries-linux`: the linux/amd64
-  binary + the windows/amd64 .exe, for the publish job) -> deb build +
-  publish (next bullet) -> screenshot capture ->
-  `actions/upload-artifact@v4` (screenshots).
+  `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> two
+  `wow-look-at-my/actions@cache-upload#latest` hand-offs
+  (`app-linux-amd64`, `app-windows-amd64` -- job hand-offs ride the
+  org's cache trio, never GitHub artifacts) -> deb build + publish
+  (next bullet) -> screenshot capture -> `actions/upload-artifact@v4`
+  (screenshots).
 - Deb packaging: buildhost's own `fmt=deb`/APT-repo debs carry NO
   `Depends` (hardcoded control in buildhost internal/repackage/deb.go),
   so on a machine without the WebKitGTK/GTK runtime libs the app dies
@@ -1171,8 +1173,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   LINUX job's targets list -- darwin is built by the dedicated
   `darwin` job on a mac runner.
 - Binary publishing: the dedicated `publish` job (needs: [linux,
-  darwin], ubuntu-latest, no checkout) downloads the `binaries-linux` +
-  `binaries-darwin` artifacts and publishes ONE buildhost release per
+  darwin], ubuntu-latest, no checkout) restores the `app-linux-amd64`
+  + `app-windows-amd64` + `app-darwin-arm64` cache hand-offs (the
+  org-standard `wow-look-at-my/actions@cache-upload#latest` /
+  `@cache-download#latest` trio -- NOT GitHub artifacts, which this
+  org does not use for job hand-offs; distinct hand-off names keep
+  the `cache-xfer-<name>-<run_id>-<run_attempt>` keys collision-free,
+  single-file hand-offs restore as `<dest>/<basename>`, and a
+  "re-run failed jobs" restores the prior attempt via the
+  restore-keys prefix) and publishes ONE buildhost release per
   push to project `competent-search-thing` carrying linux/amd64,
   windows/amd64 and darwin/arm64, via the same first-party
   buildhost-{create-release,upload-artifact,publish-release}@master

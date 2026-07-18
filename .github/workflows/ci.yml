@@ -31,17 +31,25 @@ jobs:
           cgo: 'true'
           timeout: '20'
 
-      - name: Upload app binaries for the publish job
-        # Only the app binaries ride to the publish job; the example
-        # color-http server binaries also land in build/ but are a dev
-        # sample, not a published deliverable.
-        uses: actions/upload-artifact@v4
+      - name: Hand off the linux binary to the publish job
+        # Org-standard cache-backed hand-off (the wow-look-at-my/actions
+        # cache-upload/cache-download trio) -- this org does not use the
+        # GitHub artifact service for job hand-offs. Only the app binaries
+        # ride to the publish job; the example color-http server binaries
+        # also land in build/ but are a dev sample, not a published
+        # deliverable. Distinct hand-off names keep the cache keys
+        # (cache-xfer-<name>-<run_id>-<run_attempt>) collision-free across
+        # jobs.
+        uses: wow-look-at-my/actions@cache-upload#latest
         with:
-          name: binaries-linux
-          path: |
-            build/competent-search-thing_linux_amd64
-            build/competent-search-thing_windows_amd64.exe
-          if-no-files-found: error
+          name: app-linux-amd64
+          path: build/competent-search-thing_linux_amd64
+
+      - name: Hand off the windows binary to the publish job
+        uses: wow-look-at-my/actions@cache-upload#latest
+        with:
+          name: app-windows-amd64
+          path: build/competent-search-thing_windows_amd64.exe
 
       - name: Build Debian package (carries runtime lib Depends)
         # buildhost's on-the-fly deb repackaging cannot declare package
@@ -135,12 +143,12 @@ jobs:
           cgo: 'true'
           timeout: '30'
 
-      - name: Upload app binary for the publish job
-        uses: actions/upload-artifact@v4
+      - name: Hand off the darwin binary to the publish job
+        # Same org-standard cache hand-off the linux job uses.
+        uses: wow-look-at-my/actions@cache-upload#latest
         with:
-          name: binaries-darwin
+          name: app-darwin-arm64
           path: build/competent-search-thing_darwin_arm64
-          if-no-files-found: error
 
   publish:
     # ONE buildhost release per push, carrying every platform CI actually
@@ -156,16 +164,27 @@ jobs:
     needs: [linux, darwin]
     runs-on: ubuntu-latest
     steps:
-      - name: Download linux and windows binaries
-        uses: actions/download-artifact@v4
+      - name: Download the linux binary hand-off
+        # Single-file hand-offs restore as <dest>/<basename>, so the three
+        # binaries land in binaries/ under their build/ names. A missing
+        # hand-off fails the job loudly (fail-if-missing defaults true),
+        # and on a "re-run failed jobs" the restore-keys prefix picks up
+        # the earlier attempt's uploads.
+        uses: wow-look-at-my/actions@cache-download#latest
         with:
-          name: binaries-linux
+          name: app-linux-amd64
           path: binaries
 
-      - name: Download darwin binary
-        uses: actions/download-artifact@v4
+      - name: Download the windows binary hand-off
+        uses: wow-look-at-my/actions@cache-download#latest
         with:
-          name: binaries-darwin
+          name: app-windows-amd64
+          path: binaries
+
+      - name: Download the darwin binary hand-off
+        uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: app-darwin-arm64
           path: binaries
 
       - name: Create buildhost release
