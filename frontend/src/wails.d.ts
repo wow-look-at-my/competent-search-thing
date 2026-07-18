@@ -63,6 +63,110 @@ interface PluginEmission {
   results: PluginResult[]; // non-empty (empty answers never emit)
 }
 
+// The preview target QueryPreview sends (internal/preview Target).
+// kind selects which fields matter: "file" carries path/isDir,
+// "plugin" carries title/subtitle/pluginName, "none" cancels the
+// in-flight preview. Absent fields marshal as Go zero values.
+interface PreviewTarget {
+  kind: "file" | "plugin" | "none";
+  path?: string;
+  isDir?: boolean;
+  title?: string;
+  subtitle?: string;
+  pluginName?: string;
+}
+
+// One label/value line of a preview metadata card (internal/preview
+// MetaRow).
+interface PreviewMetaRow {
+  label: string;
+  value: string;
+}
+
+// A capped text-file read (internal/preview TextPreview).
+interface PreviewText {
+  content: string;
+  lang: string; // highlight.js language name; "" = plain text
+  truncated: boolean;
+  sizeBytes: number;
+}
+
+// A downscaled thumbnail (internal/preview ImagePreview).
+interface PreviewImage {
+  dataUri: string; // data:image/png;base64,... or data:image/jpeg;...
+  w: number;
+  h: number;
+  origW: number;
+  origH: number;
+  sizeBytes: number;
+}
+
+// One row of a directory listing (internal/preview DirEntry).
+interface PreviewDirEntry {
+  name: string;
+  isDir: boolean;
+  size: number;
+}
+
+// A capped, sorted directory listing (internal/preview DirPreview).
+interface PreviewDir {
+  entries: PreviewDirEntry[];
+  total: number; // whole-directory count, before the cap
+  truncated: boolean;
+}
+
+// One web-search hit (internal/preview WebResult).
+interface PreviewWebResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+// A web-search answer (internal/preview WebPreview).
+interface PreviewWeb {
+  query: string;
+  results: PreviewWebResult[];
+  cached: boolean;
+}
+
+// An AI answer (internal/preview AIPreview).
+interface PreviewAI {
+  query: string;
+  answer: string;
+  model: string;
+  cached: boolean;
+}
+
+// Payload of the "preview:result" event (internal/preview Payload).
+// kind selects which optional section is set. Payloads whose gen is
+// not the current preview generation are DROPPED, and multiple
+// emissions per gen REPLACE the pane content -- a fast "meta" card
+// often precedes the rich payload (cache hits skip the meta card).
+interface PreviewPayload {
+  gen: number;
+  kind: "meta" | "text" | "image" | "dir" | "web" | "ai" | "error";
+  title: string;
+  path: string;
+  meta?: PreviewMetaRow[];
+  text?: PreviewText;
+  image?: PreviewImage;
+  dir?: PreviewDir;
+  web?: PreviewWeb;
+  ai?: PreviewAI;
+  err?: string; // human-readable failure (kind "error")
+  durMs: number;
+}
+
+// GetPreviewConfig answer (internal/app PreviewConfigInfo): whether
+// the pane is on and whether the web/AI providers have credentials
+// (config key or environment variable). The key values themselves
+// never cross to the frontend.
+interface PreviewConfigInfo {
+  enabled: boolean;
+  kagiConfigured: boolean;
+  openaiConfigured: boolean;
+}
+
 interface WailsAppBindings {
   Search(query: string): Promise<WailsSearchResult[]>;
   Open(path: string): Promise<void>;
@@ -87,6 +191,17 @@ interface WailsAppBindings {
   GetTheme(): Promise<Record<string, string>>;
   // Contents of <configDir>/themes/custom.css (<= 64KB), else "".
   GetCustomCSS(): Promise<string>;
+  // Preview pane (internal/app preview.go). QueryPreview asks for
+  // target under generation gen; answers arrive asynchronously as
+  // "preview:result" events carrying gen. A {kind: "none"} target
+  // cancels the in-flight request without starting a new one.
+  // Fetch{Web,AI}Preview are the EXPLICIT web-search / AI triggers --
+  // never called from a keystroke or selection path. All three are
+  // safe no-ops while the pane is disabled.
+  QueryPreview(target: PreviewTarget, gen: number): Promise<void>;
+  GetPreviewConfig(): Promise<PreviewConfigInfo>;
+  FetchWebPreview(query: string, gen: number): Promise<void>;
+  FetchAIPreview(query: string, gen: number): Promise<void>;
 }
 
 // The subset of the Wails runtime API this app uses (see the wails v2

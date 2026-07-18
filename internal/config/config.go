@@ -46,6 +46,20 @@ const (
 // OpenTabsConfig).
 const DefaultFirefoxTabsMaxResults = 6
 
+// Preview pane defaults (see PreviewConfig). The window grows to
+// DefaultPreviewWindowWidth x DefaultPreviewWindowHeight when the pane
+// is enabled; the size knobs bound what one preview may cost.
+const (
+	DefaultPreviewWindowWidth  = 1600
+	DefaultPreviewWindowHeight = 800
+	DefaultPreviewTextMaxKB    = 256
+	DefaultPreviewImageMaxEdge = 800
+	DefaultPreviewDirMax       = 200
+	DefaultPreviewKagiMax      = 8
+	DefaultPreviewOpenAIModel  = "gpt-5-mini"
+	DefaultPreviewOpenAITokens = 1024
+)
+
 // Config is the on-disk configuration.
 type Config struct {
 	// Roots are the directories to index. The default is the whole
@@ -86,6 +100,8 @@ type Config struct {
 	// Firefox configures the Firefox history integration (see
 	// internal/firefox).
 	Firefox FirefoxConfig `json:"firefox"`
+	// Preview configures the preview pane (see internal/preview).
+	Preview PreviewConfig `json:"preview"`
 
 	// MigrationNotes describes, in human-readable lines, what the
 	// roots migration changed on this Load (empty when nothing did).
@@ -208,6 +224,76 @@ type OpenTabsConfig struct {
 	ProfileDir string `json:"profileDir"`
 }
 
+// PreviewConfig configures the preview pane: a right-hand pane inside
+// a widened window showing the selected result (file contents, image
+// thumbnails, directory listings, metadata). The zero value -- the
+// default -- keeps the pane off and the window at its classic size.
+type PreviewConfig struct {
+	// Enabled turns the preview pane on. It is read once at startup
+	// (the window size cannot change while the app runs).
+	Enabled bool `json:"enabled"`
+	// WindowWidth is the window width in pixels while the pane is
+	// enabled (default 1600). Ignored when Enabled is false.
+	WindowWidth int `json:"windowWidth"`
+	// WindowHeight is the window height in pixels while the pane is
+	// enabled (default 800). Ignored when Enabled is false.
+	WindowHeight int `json:"windowHeight"`
+	// TextMaxKB caps how much of a text file one preview reads, in
+	// KiB (default 256); longer files are truncated with a marker.
+	TextMaxKB int `json:"textMaxKB"`
+	// ImageMaxEdge caps an image thumbnail's longest edge in pixels
+	// (default 800); larger sources are downscaled.
+	ImageMaxEdge int `json:"imageMaxEdge"`
+	// DirMaxEntries caps a directory listing preview (default 200).
+	DirMaxEntries int `json:"dirMaxEntries"`
+	// Kagi configures the explicit-trigger Kagi web-search preview.
+	Kagi PreviewKagiConfig `json:"kagi"`
+	// OpenAI configures the explicit-trigger OpenAI answer preview.
+	OpenAI PreviewOpenAIConfig `json:"openai"`
+}
+
+// PreviewKagiConfig configures the Kagi web-search preview provider.
+type PreviewKagiConfig struct {
+	// APIKey is the Kagi Search API token (secret; passed through
+	// verbatim, never logged). Empty means "use the KAGI_API_KEY
+	// environment variable, if set"; with neither, the web-search
+	// preview stays unavailable.
+	APIKey string `json:"apiKey"`
+	// MaxResults caps one web-search preview (default 8).
+	MaxResults int `json:"maxResults"`
+}
+
+// PreviewOpenAIConfig configures the OpenAI answer preview provider.
+type PreviewOpenAIConfig struct {
+	// APIKey is the OpenAI API key (secret; passed through verbatim,
+	// never logged). Empty means "use the OPENAI_API_KEY environment
+	// variable, if set"; with neither, the answer preview stays
+	// unavailable.
+	APIKey string `json:"apiKey"`
+	// Model names the model answering (default "gpt-5-mini").
+	Model string `json:"model"`
+	// MaxOutputTokens caps one answer (default 1024).
+	MaxOutputTokens int `json:"maxOutputTokens"`
+}
+
+// DefaultPreview returns the default preview pane config: disabled,
+// with every knob at its documented default so enabling is a one-key
+// edit.
+func DefaultPreview() PreviewConfig {
+	return PreviewConfig{
+		WindowWidth:   DefaultPreviewWindowWidth,
+		WindowHeight:  DefaultPreviewWindowHeight,
+		TextMaxKB:     DefaultPreviewTextMaxKB,
+		ImageMaxEdge:  DefaultPreviewImageMaxEdge,
+		DirMaxEntries: DefaultPreviewDirMax,
+		Kagi:          PreviewKagiConfig{MaxResults: DefaultPreviewKagiMax},
+		OpenAI: PreviewOpenAIConfig{
+			Model:           DefaultPreviewOpenAIModel,
+			MaxOutputTokens: DefaultPreviewOpenAITokens,
+		},
+	}
+}
+
 // DefaultFirefox returns the default Firefox integration config.
 func DefaultFirefox() FirefoxConfig {
 	return FirefoxConfig{
@@ -243,6 +329,7 @@ func Default() Config {
 		Plugins:               PluginsConfig{Entries: map[string]PluginEntry{}},
 		Bangs:                 BangsConfig{Sigils: DefaultBangSigils(), Aliases: map[string]string{}},
 		Firefox:               DefaultFirefox(),
+		Preview:               DefaultPreview(),
 	}
 }
 
@@ -329,11 +416,13 @@ func Save(c Config) error {
 
 // Normalize repairs missing or nonsensical fields in place: empty roots
 // fall back to the default root, relative roots are absolutized,
-// zero/negative knobs get their defaults (the firefox.frequentSites
-// and firefox.openTabs numbers included), an empty theme name gets the
+// zero/negative knobs get their defaults (the firefox.frequentSites,
+// firefox.openTabs and preview numbers included, plus an empty
+// preview.openai.model), an empty theme name gets the
 // default theme, nil
 // plugin entries and bang aliases become empty maps, and an empty
-// sigil list gets the default sigils. Excludes are left as the user
+// sigil list gets the default sigils. The preview API keys are passed
+// through verbatim, untouched. Excludes are left as the user
 // wrote them (an explicitly empty list means "exclude nothing").
 func (c *Config) Normalize() {
 	if len(c.Roots) == 0 {
@@ -389,5 +478,30 @@ func (c *Config) Normalize() {
 	}
 	if c.Firefox.OpenTabs.MaxResults <= 0 {
 		c.Firefox.OpenTabs.MaxResults = DefaultFirefoxTabsMaxResults
+	}
+	pv := &c.Preview
+	if pv.WindowWidth <= 0 {
+		pv.WindowWidth = DefaultPreviewWindowWidth
+	}
+	if pv.WindowHeight <= 0 {
+		pv.WindowHeight = DefaultPreviewWindowHeight
+	}
+	if pv.TextMaxKB <= 0 {
+		pv.TextMaxKB = DefaultPreviewTextMaxKB
+	}
+	if pv.ImageMaxEdge <= 0 {
+		pv.ImageMaxEdge = DefaultPreviewImageMaxEdge
+	}
+	if pv.DirMaxEntries <= 0 {
+		pv.DirMaxEntries = DefaultPreviewDirMax
+	}
+	if pv.Kagi.MaxResults <= 0 {
+		pv.Kagi.MaxResults = DefaultPreviewKagiMax
+	}
+	if pv.OpenAI.Model == "" {
+		pv.OpenAI.Model = DefaultPreviewOpenAIModel
+	}
+	if pv.OpenAI.MaxOutputTokens <= 0 {
+		pv.OpenAI.MaxOutputTokens = DefaultPreviewOpenAITokens
 	}
 }
