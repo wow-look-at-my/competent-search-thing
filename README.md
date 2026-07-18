@@ -383,6 +383,16 @@ The file is created with defaults on first run:
       "maxResults": 6,
       "profileDir": ""
     }
+  },
+  "preview": {
+    "enabled": false,
+    "windowWidth": 1600,
+    "windowHeight": 800,
+    "textMaxKB": 256,
+    "imageMaxEdge": 800,
+    "dirMaxEntries": 200,
+    "kagi": { "apiKey": "", "maxResults": 8 },
+    "openai": { "apiKey": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 }
   }
 }
 ```
@@ -486,6 +496,19 @@ Field reference:
   transmitted; disable the sections via
   `plugins.entries["firefox-frequent"].disabled` and
   `plugins.entries["firefox-tabs"].disabled`.
+- `preview` -- the preview pane (opt-in). `enabled` (default `false`)
+  turns on a right-hand pane showing the selected result and widens
+  the window to `windowWidth` x `windowHeight` (defaults 1600 x 800;
+  read once at startup). `textMaxKB` (default 256) caps how much of a
+  text file one preview reads; `imageMaxEdge` (default 800) caps a
+  thumbnail's longest edge; `dirMaxEntries` (default 200) caps a
+  directory listing. `kagi.apiKey` / `openai.apiKey` are SECRETS
+  (passed through verbatim, never logged; the `KAGI_API_KEY` /
+  `OPENAI_API_KEY` environment variables work too) enabling the
+  explicit-trigger web-search and answer previews; `kagi.maxResults`
+  (default 8), `openai.model` (default `gpt-5-mini`) and
+  `openai.maxOutputTokens` (default 1024) tune them. Zero or negative
+  numbers and an empty model are repaired to the defaults.
 
 The full format is formally described by
 [`schemas/config.schema.json`](schemas/config.schema.json) -- add a
