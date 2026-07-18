@@ -391,8 +391,8 @@ The file is created with defaults on first run:
     "textMaxKB": 256,
     "imageMaxEdge": 800,
     "dirMaxEntries": 200,
-    "kagi": { "apiKey": "", "maxResults": 8 },
-    "openai": { "apiKey": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 }
+    "kagi": { "apiKey": "", "baseUrl": "", "maxResults": 8 },
+    "openai": { "apiKey": "", "baseUrl": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 }
   }
 }
 ```
@@ -507,7 +507,11 @@ Field reference:
   `OPENAI_API_KEY` environment variables work too) enabling the
   explicit-trigger web-search and answer previews; `kagi.maxResults`
   (default 8), `openai.model` (default `gpt-5-mini`) and
-  `openai.maxOutputTokens` (default 1024) tune them. Zero or negative
+  `openai.maxOutputTokens` (default 1024) tune them. `kagi.baseUrl` /
+  `openai.baseUrl` point either provider at a compatible server
+  (empty = the official endpoint; an empty `openai.baseUrl` also
+  honors `OPENAI_BASE_URL`); both pass through verbatim and are never
+  logged. Zero or negative
   numbers and an empty model are repaired to the defaults. See
   [Preview pane](#preview-pane).
 
@@ -1434,20 +1438,41 @@ calls out to the network by itself. Each provider needs its API key:
   `preview.openai.model` (default `gpt-5-mini`) and
   `preview.openai.maxOutputTokens` (default 1024) shape the answer.
 
+Both endpoints are configurable for self-hosted or compatible
+servers -- empty (the default) means the official endpoint:
+
+- `preview.kagi.baseUrl` (config only, no environment fallback):
+  searches go to `<baseUrl>/api/v1/search`, so the target must speak
+  the Kagi Search API.
+- `preview.openai.baseUrl`, or the `OPENAI_BASE_URL` environment
+  variable (the SDK convention; the config value wins): answers go to
+  `<baseUrl>/v1/responses`, so the target must implement the OpenAI
+  RESPONSES API -- pointing it at a server that only offers
+  `/v1/chat/completions` will not work.
+
+One trailing `/` on a base URL is trimmed. A value that is not
+`http(s)` with a host is rejected: the provider stays unavailable and
+the fetch answers with a terse error naming the knob
+(`kagi: invalid baseUrl (preview.kagi.baseUrl)` / `openai: invalid
+baseUrl (preview.openai.baseUrl / OPENAI_BASE_URL)`) -- never the
+configured value, which may carry credentials.
+
 The keys are passed through verbatim and NEVER logged or exposed to
 the page -- the frontend only learns "configured or not", and an
 unconfigured provider's button renders disabled with a hint naming
 the config key.
 
 Web searches go to the Kagi Search API (v1: `GET
-https://kagi.com/api/v1/search`, `Authorization: Bot <key>`). Repeat
+<baseUrl>/api/v1/search`, default base `https://kagi.com`,
+`Authorization: Bot <key>`). Repeat
 queries are served from a 15-minute in-memory cache (marked `cached`
 in the pane, zero network), and a client-side courtesy rate limit --
 a burst of 3 requests refilling at 1 per second -- fails fast with
 "rate limited, retry shortly" instead of dialing. Searches time out
 hard at 10 seconds.
 
-AI answers go to the OpenAI Responses API (`POST /v1/responses` with
+AI answers go to the OpenAI Responses API (`POST
+<baseUrl>/v1/responses`, default base `https://api.openai.com`, with
 your `model` and `maxOutputTokens`; answers cut off by the token cap
 end with a `[truncated by max_output_tokens]` marker line). Answers
 are cached PERSISTENTLY in `<configDir>/aicache.json` -- up to 128
