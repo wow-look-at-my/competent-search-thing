@@ -6,10 +6,12 @@
 // (CheatSheet, rendered unselected), the query history (the bar
 // summons empty; Up/Down recall committed queries -- see the history
 // section below), and the runtime events the Go side emits
-// (app:shown, index:progress, watch:degraded, theme:changed).
-// Rendering lives in render.ts; theme token/custom-css application
-// lives in theme.ts; the opt-in preview pane lives in preview.ts
-// (wired below through GetPreviewConfig + the selection/query hooks).
+// (app:shown, index:progress, watch:degraded, theme:changed,
+// stats:update -- the system stats row at the bottom edge). Rendering
+// lives in render.ts (results) and stats.ts (the stats row's
+// formatting); theme token/custom-css application lives in theme.ts;
+// the opt-in preview pane lives in preview.ts (wired below through
+// GetPreviewConfig + the selection/query hooks).
 
 import {
   initPreview,
@@ -22,6 +24,8 @@ import {
   renderResults,
 } from "./render";
 import type { PluginRowRef, PluginSection } from "./render";
+import { renderStats } from "./stats";
+import type { StatsNodes } from "./stats";
 import { initTheme } from "./theme";
 
 const SEARCH_DEBOUNCE_MS = 15;
@@ -41,6 +45,14 @@ const statusTextEl = document.getElementById("status-text") as HTMLSpanElement;
 const degradedChipEl = document.getElementById(
   "degraded-chip",
 ) as HTMLSpanElement;
+const statsEl = document.getElementById("stats") as HTMLDivElement;
+const statsNodes: StatsNodes = {
+  cpu: document.getElementById("stat-cpu") as HTMLSpanElement,
+  gpu: document.getElementById("stat-gpu") as HTMLSpanElement,
+  ram: document.getElementById("stat-ram") as HTMLSpanElement,
+  swap: document.getElementById("stat-swap") as HTMLSpanElement,
+  net: document.getElementById("stat-net") as HTMLSpanElement,
+};
 
 // A selectable row: a file hit or one plugin result. The flat
 // keyboard/hover selection runs over files first, then plugin rows.
@@ -122,6 +134,38 @@ function refreshIdleStatus(): void {
   if (inputEl.value.trim() === "") {
     setStatus(state.indexMsg);
   }
+}
+
+/* --- stats row ------------------------------------------------------ */
+
+// applyStats renders one stats snapshot into the bottom row -- or
+// hides the whole row when the feature is off (stats.disabled: the Go
+// side sends enabled false). Per-metric dashes are stats.ts's job.
+function applyStats(snap: StatsSnapshot | undefined): void {
+  if (snap === undefined) {
+    return; // malformed payload; keep whatever is on screen
+  }
+  if (!snap.enabled) {
+    statsEl.hidden = true;
+    return;
+  }
+  statsEl.hidden = false;
+  renderStats(snap, statsNodes);
+}
+
+// refreshStats re-renders from the Go side's cached snapshot --
+// instant Go-side (a mutex-guarded copy, never IO), so calling it on
+// the show path costs nothing. Live updates then arrive as
+// "stats:update" events while the bar stays visible.
+function refreshStats(app: WailsAppBindings): void {
+  app
+    .GetStats()
+    .then((snap) => {
+      applyStats(snap);
+    })
+    .catch((err: unknown) => {
+      console.warn("stats fetch failed: " + String(err));
+    });
 }
 
 /* --- selection ------------------------------------------------------ */
@@ -524,6 +568,13 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
     state.histCursor = -1;
     inputEl.focus();
     scheduleSearch(app);
+    // Instant cached snapshot (the summon's fresh samples follow as
+    // stats:update events moments later).
+    refreshStats(app);
+  });
+
+  rt.EventsOn("stats:update", (...data: unknown[]) => {
+    applyStats(data[0] as StatsSnapshot | undefined);
   });
 
   rt.EventsOn("index:progress", (...data: unknown[]) => {
@@ -602,6 +653,10 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   // EventsOn registration was still in flight would otherwise be
   // missed and leave the bar blank until the first keystroke.
   scheduleSearch(app);
+  // Same reasoning for the stats row: render it (or hide it when
+  // disabled) before the first summon. Pre-first-summon the enabled
+  // snapshot is all dashes -- the sampler has not run yet.
+  refreshStats(app);
 }
 
 // window.go and window.runtime are injected by the Wails runtime

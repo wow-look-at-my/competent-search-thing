@@ -7,8 +7,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 
 - `main.go` -- glue only: embeds `frontend/dist` (go:embed) and calls
   cli.Execute(app.Version, runGUI); runGUI configures the window
-  (frameless, always-on-top, start-hidden, hide-on-close, fixed
-  680x460), binds the App object and wires OnStartup / OnDomReady /
+  (frameless, always-on-top, start-hidden, hide-on-close,
+  non-resizable, sized by app.PreviewWindowSize() (internal/app
+  previewsize.go: fresh config.Load, same standalone-read pattern as
+  translucent.go; preview off or any config error = the configured
+  base size window.width/height -- the app.WindowSize() read,
+  internal/app size.go; Load repairs zero/too-small values to the
+  780x550 defaults / 320x240 floors even on error -- while
+  preview.enabled widens to preview.windowWidth/Height) -- the SAME
+  two values are wired into app Options WindowWidth/WindowHeight so
+  the positioning math always matches the native window; zero
+  Options fall back to the defaults via the unexported
+  App.windowSize(), which keeps newTestApp wiring-free), binds the
+  App object and wires OnStartup / OnDomReady /
   OnShutdown. When app.WindowTranslucent() (internal/app
   translucent.go: fresh config.Load, window.translucent, any error =
   false) reports true, runGUI adds BackgroundColour = zero RGBA
@@ -24,7 +35,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/app` -- the Wails-bound App object and its methods
   (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/DomReady/
   Shutdown/QueryPlugins/RunPluginAction/CheatSheet/GetHistory/
-  AddHistory). Bound methods
+  AddHistory/GetStats). Bound methods
   appear in JS as `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
   saves the runtime ctx, brings up the global hotkey once through a
   session-dependent backend plan (hotkey.go: empty spec = skip, parse
@@ -90,7 +101,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   error), Open config -> openConfigFile (the !config behavior minus
   the bar-hide), Quit -> runBuiltin("quit"); the tooltip getter wraps
   hotkeyDescription(), so no shortcut is promised until one is
-  proven), wires the
+  proven), starts the system-stats sampler once (stats.go in this
+  package: the `newStats` builder seam -- production buildStats does a
+  fresh config.Load (translucent.go pattern), stats.disabled = one
+  "stats: disabled in config" log + nil, else sysstats.New wired with
+  OnUpdate = emitStats (the guarded "stats:update" emit) and
+  log.Printf -- and a non-nil sampler is Start()ed under a dedicated
+  ctx cancelled in Shutdown; the sampler idles until the bar first
+  shows, so startup cost is zero and newTestApp-stubbed apps spawn
+  nothing), wires the
   single-instance IPC handlers when Options.IPC is set (Toggle =
   toggle, Show = showIfHidden, Hide = Hide; Options.ShowOnStartup
   latches a pending show), brings the plugin
@@ -131,7 +150,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   active portal handle -- a handle the chain stores after Shutdown
   ran is closed by the chain itself), closes the tray (cancels a
   Start still waiting on the bus, then the nil-safe idempotent
-  Close), cancels the in-flight plugin
+  Close), cancels the stats sampler's goroutines (statsCancel +
+  detach; nothing else to close), cancels the in-flight plugin
   generation + Close()s the registry + cancels the firefox refresh
   context (an in-flight places.sqlite copy/query aborts between
   chunks), cancels a still-running
@@ -219,7 +239,20 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   values sharing Open are filtered by its absolute-path guard, and
   openConfigFile bypasses Open deliberately -- recording async, write
   errors logged once (frecErrOnce), never blocking or failing the
-  action. `RunPluginAction(pluginID
+  action. `GetStats() sysstats.Snapshot` (stats.go) returns the
+  sampler's cached snapshot -- instant, never IO on this path -- with
+  Enabled stamped true (the sampler itself never sets that field;
+  emitStats stamps the event payloads the same way); nil sampler
+  (disabled, pre-Startup, post-Shutdown) = zero Snapshot, Enabled
+  false = the frontend hides the #stats row entirely, while Enabled
+  true with per-metric OK=false renders dashes. Bar
+  visibility drives the sampler through nil-safe statsVisible:
+  showOnCursorDisplay -- the ONE shared show helper every summon path
+  funnels through (hotkey toggle, IPC showIfHidden's hidden branch,
+  the DomReady deferred show) -- calls SetVisible(true) right before
+  WindowShow (the kick's baseline sample is in flight while the
+  window maps), and Hide() calls SetVisible(false); both are flag
+  flips + a non-blocking kick, never IO. `RunPluginAction(pluginID
   string, action plugin.Action) error` RE-validates every action the
   frontend echoes back (defense in depth), logs it, then executes:
   copy_text -> ClipboardSetText (bar stays open); open_path (abs
@@ -244,7 +277,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   {watched,dropped,overflows}, "app:shown", "theme:changed" (no
   payload; frontend refetches GetTheme/GetCustomCSS),
   "plugin:results" (payload plugin.Emission
-  {plugin,name,gen,results}). ALL Wails
+  {plugin,name,gen,results}), "stats:update" (payload
+  sysstats.Snapshot {enabled,cpuPct,cpuOk,gpuPct,gpuOk,memUsed,
+  memTotal,memOk,swapUsed,swapTotal,swapOk,netRxBps,netTxBps,netOk};
+  enabled always true on the event -- it only ever fires from a live
+  sampler). ALL Wails
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
   incl. run/activateWindow/appSource plus getenv/executable/args0/detectSession/
@@ -253,11 +290,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   launchExec, resolveHandler, handlerByID, mintCredential,
   prepareLaunch, dbusLaunch, watchState, snRemove -- in window.go;
   defaults in New, plus
-  the `newRegistry` and `newTray` seams); unit tests MUST replace
-  them (see
+  the `newRegistry`, `newTray` and `newStats` seams); unit tests MUST
+  replace them (see
   newTestApp, which also nils appSource AND procTree, stubs
-  newRegistry AND
-  newTray so no config, X11, /proc or session-bus IO happens, pins goos to
+  newRegistry, newTray
+  AND newStats so no config, X11, session-bus or /proc//sys IO
+  happens, pins goos to
   "linux" -- identical launch-path behavior on the darwin CI job;
   tests exercising other OSes set goos themselves -- pins getenv to
   "" (no DISPLAY = raise watcher off) and detectSession to
@@ -537,11 +575,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   {<id>: {disabled, settings}}}, bangs {sigils, aliases}, rewrites
   [{name, pattern, replacement, title?, icon?, disabled?}] (the regex
   rewrite rules; passed to plugin.Options.Rewrites), tray
-  {disabled}, history {persistDisabled}, window {translucent -- the
+  {disabled}, history {persistDisabled}, stats {disabled -- the
+  system-stats sampler kill switch, zero value = on per the
+  tray.disabled convention; internal/app's buildStats reads it, so it
+  applies on the next launch}, window {translucent -- the
   per-pixel-alpha window flag main.go reads via
   app.WindowTranslucent(); zero value = opaque = the safe default,
   needs a compositor, README "Translucent window" holds the measured
-  evidence}, firefox {frequentSites
+  evidence; width/height -- the bar window size main.go reads via
+  app.WindowSize(), defaults 780x550: Normalize repairs <= 0 (and
+  absent) to the defaults and clamps positive values below the
+  320x240 floors up to them, so the app never builds an unusably
+  tiny window}, firefox {frequentSites
   {minVisitsMonth 11, minVisitsWeek 1, refreshMinutes 10, maxResults
   6, profileDir ""}, openTabs {maxResults 6, profileDir ""}} -- the
   frequentSites defaults encode ">10 visits in 30 days AND >=1 in 7";
@@ -658,6 +703,61 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Exhaustively unit-tested, headless, table-driven: fake clocks,
   counting/blocking lstat fakes, scripted ProcTree fakes, real
   tempdir files (os.Chtimes) for the atime/mtime max path.
+- `internal/sysstats` -- the system-stats sampler behind the
+  frontend's stats row, pure and headless-tested (fixture proc/sys
+  trees, injectable clock + gpuExec seams). `Snapshot` is the wire
+  contract (json tags enabled/cpuPct/cpuOk/gpuPct/gpuOk/memUsed/
+  memTotal/memOk/swapUsed/swapTotal/swapOk/netRxBps/netTxBps/netOk;
+  bytes for mem/swap, bytes/sec for net, 0..100 pcts; *Ok=false =
+  "render a dash"; Enabled is the APP layer's field -- the sampler
+  always leaves it false, internal/app stamps it true on every
+  GetStats return and emitStats payload, so Enabled false = feature
+  off = the frontend hides the row). `New(Options{ProcRoot "/proc",
+  SysRoot "/sys", GOOS
+  runtime.GOOS, Interval 1500ms, GPUInterval 5s, GPUTimeout 1s,
+  LookPath exec.LookPath, OnUpdate, Logf; unexported test seams
+  gpuExec + now})` probes sources ONCE, cheaply (no subprocess
+  spawns): GOOS != linux = zero sources + one "placeholders" log;
+  linux = the three proc files assumed present, GPU = first readable
+  glob hit of SysRoot/class/drm/card*/device/gpu_busy_percent
+  (amdgpu) else LookPath("nvidia-smi") else none (intel: deliberately
+  absent, no cheap sysfs busy%), all summarized in ONE "stats:
+  sources: cpu=... gpu=..." line. THE invariant: nothing outside the
+  sampler goroutines ever does IO -- Snapshot() is a mutex-guarded
+  copy, SetVisible(v) is a flag flip (+ non-blocking 1-buffered kick
+  send on true), and while hidden the loops sample NOTHING, so the
+  start-hidden app reads zero bytes until first summon. Start(ctx):
+  zero sources = log + return, else ONE fast goroutine (select ctx /
+  kick / Interval ticker / one-shot follow-up timer) + ONE slow
+  nvidia goroutine only for the nvidia source (GPUInterval ticker,
+  exec via gpuExec seam under a GPUTimeout CommandContext with 250ms
+  WaitDelay -- a hung nvidia-smi is killed -- parse leading int,
+  store value+timestamp; the fast loop folds it in and expires it to
+  GPUOK=false past 3*GPUInterval; no summon kick here by design, an
+  exec has no business on the summon path). A kick = immediate
+  baseline sample (point-in-time mem/swap/amdgpu published; previous
+  RATE values kept, never blanked) then a one-shot follow-up at
+  Interval/5 (~300ms) so cpu/net rates turn fresh right away. Rates
+  (cpu pct, net Bps) come from counter deltas ONLY when the stored
+  counters are <= 3*Interval old (rateWindow) -- older = re-store +
+  keep previous values -- and negative/zero deltas (wrap) skip the
+  update; cpu busy = total - idle - iowait over the first 8 "cpu "
+  aggregate fields (guest/guest_nice excluded, already inside
+  user/nice), pct clamped 0..100; mem used = MemTotal - MemAvailable
+  (missing MemAvailable = MemOK false; kB * 1024 = bytes); swap =
+  SwapTotal/SwapFree, total 0 valid (SwapOK true, dash); net = sum of
+  rx/tx bytes over real interfaces -- "lo" exact plus the virtual
+  prefixes veth/docker/br-/virbr/vnet/tap/tun/wg/zt/dummy/ifb/kube/
+  cni/flannel/cali skipped, eth/en/wl/ww/bond kept. Per-metric
+  failures = that metric OK=false + one log per distinct message
+  (bounded map, 64), everything else unaffected; OnUpdate fires on
+  the sampler goroutine after each published sample while visible
+  (nil tolerated). Exhaustively table-tested (parsers incl. malformed
+  input + wrap + the iface filter, probe variants, direct-sample rate
+  math on a fake clock, full lifecycle over a real loop, nvidia fake
+  incl. ctx-deadline + real /bin/sh subprocess kill) plus
+  BenchmarkSample: one full fast-path sample against the real /proc
+  (skips where unreadable). Consumed by internal/app's stats.go.
 - `internal/theme` -- design-token resolution. WARNING: the 22
   `TokenNames` (bg, bg-elevated, fg, fg-dim, accent, accent-fg,
   selection-bg, selection-fg, border, highlight, warning, badge-bg,
@@ -967,9 +1067,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (the QueryPlugins pattern); Shutdown cancels the dispatcher's
   parent ctx. previewsize.go `PreviewWindowSize()` (translucent.go
   pattern: fresh config.Load, any error = disabled) tells main.go the
-  window size BEFORE wails.Run; flag off = exactly 680x460, flag on =
-  preview.windowWidth/Height, threaded into Options.WindowW/WindowH
-  for the positioning math (app.winW/winH).
+  window size BEFORE wails.Run; flag off = the configured base size
+  (window.width/height, defaults 780x550 -- the WindowSize read),
+  flag on = preview.windowWidth/Height, threaded into
+  Options.WindowWidth/WindowHeight for the positioning math
+  (App.windowSize()).
 - `internal/appctx` -- app-context collection for the plugin system,
   pure and headless-tested: the data types (AppInfo / InstalledApp /
   WindowInfo (ID uint32/Title/App/PID) /
@@ -1415,7 +1517,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `frontend/` -- vanilla TypeScript + Vite. No framework. `index.html`
   (query row with inline SVG magnifier + hidden bang chip; #results
   split into #file-results / static #empty ("No matches") /
-  #plugin-results zones; status bar + degraded chip; #preview-pane
+  #plugin-results zones; status bar + degraded chip; the #stats row
+  BELOW the status bar -- the bottom-most chrome, five STATIC
+  label/value span pairs (CPU GPU RAM SWP NET, value ids
+  stat-cpu/-gpu/-ram/-swap/-net), starts hidden, JS only ever writes
+  the value text; #preview-pane
   (spinner + #preview-body + command strip with the web/AI buttons
   and the pane flash) as one more #bar child, display:none unless
   body.with-preview; <template>s for
@@ -1465,8 +1571,26 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Esc + window blur -> Hide; runtime events: "app:shown" -> CLEAR
   the input (the bar always summons empty; the pre-hide text is
   deliberately dropped) + reset histCursor + focus + refresh (renders
-  the cheat sheet; plugins re-query through the same path),
-  "index:progress" -> status text, "watch:degraded" -> warning chip)
+  the cheat sheet; plugins re-query through the same path) + a
+  refreshStats re-render (GetStats is the instant cached snapshot;
+  the summon's fresh samples follow as events),
+  "index:progress" -> status text, "watch:degraded" -> warning chip,
+  "stats:update" -> applyStats. STATS ROW wiring (all in main.ts):
+  applyStats hides the whole #stats row when snapshot.enabled is
+  false (stats.disabled) and otherwise unhides + delegates to
+  stats.ts renderStats; wire() calls refreshStats once at startup
+  (same missed-app:shown reasoning as the cheat-sheet prefetch --
+  pre-first-summon the enabled snapshot renders all dashes) and
+  events keep it live while visible)
+  + `src/stats.ts` (the stats row formatters + renderStats(snap,
+  nodes): formatPct "12%" (rounded); formatBytesPair "6.2/15.9G" --
+  BOTH values in the unit the TOTAL picks, GiB else MiB below 1 GiB,
+  shared decimal rule one-decimal-below-10-else-none; formatRate
+  humanizes bytes/sec B/K/M/G (binary) with the same rule, net
+  renders as "<down>rx <up>tx" arrow pairs; any *Ok=false -> em-dash
+  placeholder, and swapOk=true with swapTotal 0 (no swap configured)
+  is a dash too; glyphs (em dash, arrows) are \uXXXX escapes --
+  ASCII-only source)
   + `src/render.ts` (pure text-node DOM builders, no innerHTML
   anywhere: appendHighlighted renders the Go-minted matchRanges
   (half-open RUNE pairs; the walk counts code points because JS
@@ -1490,19 +1614,27 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   before the name; thin scrollbar; ALL colors/sizes/effects flow
   through var(--sb-*) -- the :root block holds the dark fallbacks and
   MUST stay identical to internal/theme/builtin/dark.json, enforced
-  by internal/theme/sync_test.go; appended namespaced plugin block
+  by internal/theme/sync_test.go; the #stats row block (flex 0 0
+  auto single nowrap line so it can never squeeze the results area,
+  ~0.85x small font, fg-dim on a --sb-border top border, tokens only
+  -- and an explicit #stats[hidden]{display:none} because the
+  author-level display:flex would defeat the UA sheet's [hidden]
+  rule); appended namespaced plugin block
   (.plugin-*, .bang-chip, .status-flash) where every accent rule
   consumes var(--plugin-accent, var(--accent, #89b4fa)) and a :root
   bridge defines --accent: var(--sb-accent, #89b4fa), so the theming
   design tokens apply when present and the standalone default
   otherwise, merge order irrelevant; plus the appended .preview-* /
   body.with-preview block: with-preview turns #bar into a grid --
-  680px left column holding query row/results/status exactly as
-  before, pane in the rest behind a border-left divider, minmax(0,..)
+  680px left column holding query row/results/status/stats row
+  exactly as before (four explicit rows; the pane spans 1 / 5 and a
+  hidden #stats collapses its row to zero), pane in the rest behind
+  a border-left divider, minmax(0,..)
   tracks so pane content scrolls instead of growing the window --
   and without the class every preview rule is inert, so flag-off
   layout is behavior-identical to the classic bar; CI screenshots run
-  preview-off and must stay that way, the 680x460 window regex in
+  preview-off and must stay that way, the 780x550 default-geometry
+  window regex in
   screenshots.ts depends on it) + `src/preview.ts` (ALL pane logic;
   initPreview is called from wire() with the GetPreviewConfig answer
   and installs NOTHING when enabled is false -- no body class, no
@@ -1546,13 +1678,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   token -- the :root block is a sync_test.go contract) +
   `src/wails.d.ts` (ambient
   types for the Wails-injected `window.go` / `window.runtime` incl.
-  EventsOn, the event payload shapes, and the plugin wire contract
-  TargetInfo/PluginAction (incl. activate_window + its window field
-  and the internal desktop_id the frontend echoes back
+  EventsOn, the event payload shapes (incl. StatsSnapshot -- the
+  GetStats return AND "stats:update" payload, field names lockstep
+  with internal/sysstats.Snapshot json tags), and the plugin wire
+  contract TargetInfo/PluginAction (incl. activate_window + its
+  window field and the internal desktop_id the frontend echoes back
   unchanged)/PluginResult/PluginEmission plus the preview contract
   Preview{Target,Payload,ConfigInfo,MetaRow,Text,Image,Dir,DirEntry,
   Web,WebResult,AI} and the four preview bound methods -- keep in
-  sync with internal/app + internal/plugin + internal/preview payload
+  sync with internal/app + internal/plugin + internal/preview +
+  internal/sysstats payload
   structs).
 - `examples/plugins/` -- three shipped example plugins, INERT until a
   user copies one into `<configDir>/plugins/` (each has a README with
@@ -1778,9 +1913,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   client menu, which wins the race and makes the app's XGrabKey fail
   with BadAccess -- then the REAL `xdotool key --clearmodifiers
   alt+space` summon, `xdotool type`, arrow keys, `import -window`,
-  Escape-hides assertion. The app window is found by name + 680x460
+  Escape-hides assertion. The app window is found by name + 780x550
   geometry in `xwininfo -root -tree` (xdotool search --onlyvisible
-  --class does not match it). One full retry with
+  --class does not match it; the geometry is the DEFAULT
+  window.width/height -- the script's temp config.json sets no size,
+  so it must track the internal/config defaults). One full retry with
   `WEBKIT_DISABLE_DMABUF_RENDERER=1` (not needed under Xvfb so far).
   The binary is `build/competent-search-thing_linux_amd64` in CI
   (go-toolchain matrix naming) or `build/competent-search-thing`

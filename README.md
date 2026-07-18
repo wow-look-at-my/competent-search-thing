@@ -491,7 +491,8 @@ The file is created with defaults on first run:
   "bangs": { "sigils": ["!", "/", "@"], "aliases": {} },
   "tray": { "disabled": false },
   "history": { "persistDisabled": false },
-  "window": { "translucent": false },
+  "stats": { "disabled": false },
+  "window": { "translucent": false, "width": 780, "height": 550 },
   "firefox": {
     "frequentSites": {
       "minVisitsMonth": 11,
@@ -613,6 +614,11 @@ Field reference:
   history in memory only: nothing is read from or written to
   `history.json`, while in-session Up/Down recall keeps working.
   Delete `history.json` to forget previously saved entries.
+- `stats` -- the [system stats row](#system-stats-row). `disabled`
+  (default `false`) turns the feature off entirely: no sampler runs
+  and the row disappears from the bar. Leaving it on costs nothing
+  while the bar is hidden: sampling only ever happens while the bar
+  is on screen.
 - `window` -- the native window layer. `translucent` (default `false`)
   requests a per-pixel-alpha (RGBA) window so the area outside the
   bar's rounded corners is truly see-through instead of a squared-off
@@ -620,6 +626,14 @@ Field reference:
   has one, but on a compositor-less X11 setup the corners render
   solid black, which is why the flag is opt-in. Evidence and
   per-desktop status: [Translucent window](#translucent-window).
+  `width` and `height` (defaults `780` and `550`) set the bar
+  window's size in pixels; the size is fixed at startup (the bar is
+  not resizable), so changes take effect on the next launch. Zero,
+  negative, or missing values get the defaults, and positive values
+  below the 320x240 floors are raised to them. A taller window shows
+  more result rows before scrolling kicks in -- how many results a
+  query returns is still governed by `maxResults` above (there is
+  deliberately no separate max-rows knob).
 - `firefox` -- the Firefox-backed sections. `frequentSites` configures
   [Frequent sites (Firefox)](#frequent-sites-firefox): the visit
   thresholds (`minVisitsMonth`, `minVisitsWeek`), the cache refresh
@@ -1559,6 +1573,52 @@ line says why. A future option is a GNOME Shell extension that exports
 the window list over D-Bus (for example "Window Calls"), which the app
 could consume opt-in; nothing like that ships today.
 
+## System stats row
+
+The bar's bottom edge -- below the status bar -- carries a compact
+system-stats row with five tiny readouts: CPU busy % (`CPU 12%`), GPU
+busy % (`GPU 4%`), memory used/total (`RAM 6.2/15.9G`), swap
+used/total (`SWP 0.5/8.0G`), and network throughput received/sent
+(`NET` with down/up arrows, e.g. `1.2M 5.6K` bytes/second, summed
+over the real interfaces -- loopback, container veths, bridges,
+tunnels, and VPN interfaces are excluded). Sizes use binary units
+(`G`/`M`) with one decimal below 10.
+
+The design guarantee is that the stats can never slow the search
+experience down:
+
+- Sampling happens ONLY while the bar is visible, on a background
+  goroutine, every ~1.5s. A hidden app reads nothing at all.
+- Summoning the bar triggers one immediate sample plus a quick (~300ms)
+  follow-up so the delta-based rates (CPU, network) turn fresh right
+  away; everything the frontend touches is a cached snapshot, so
+  nothing on the search, render, or summon path ever waits on IO.
+- Rates come from counter deltas between two reads. Right at summon
+  the row briefly shows the previous values (or dashes on the first
+  ever summon) until the follow-up lands.
+
+Per metric honesty, on Linux:
+
+- **CPU, memory, swap, network** are read from `/proc/stat`,
+  `/proc/meminfo`, and `/proc/net/dev`. A swap total of zero (no swap
+  configured) renders as a dash.
+- **GPU** is best-effort per hardware: AMD exposes a cheap sysfs busy
+  file (`gpu_busy_percent`), read on the fast path; NVIDIA has no
+  sysfs equivalent, so `nvidia-smi` is polled on a separate slow loop
+  (every ~5s, bounded by a ~1s timeout that kills a hung child) --
+  the number can lag a few seconds behind. Intel exposes no cheap
+  busy-percent file, so Intel GPUs show a dash (running a whole
+  `intel_gpu_top` pipeline is not worth it here).
+
+Any metric whose source is missing or failing shows a dash instead of
+a stale or fake number, and the failure is logged once, not per
+sample. On Windows and macOS there are no sources wired up yet, so
+the whole row shows dashes there for now.
+
+`stats.disabled` in `config.json` turns the feature off entirely: no
+sampler is built and the row is removed from the bar (not dashes --
+gone), taking effect on the next launch.
+
 ## Focus and raise on launch
 
 Everything launched from the bar -- Enter on a file or URL, Ctrl+Enter
@@ -1675,8 +1735,10 @@ With the pane enabled the window opens at `preview.windowWidth` x
 `preview.windowHeight` (defaults 1600 x 800, read once at startup):
 the classic 680-wide results column stays on the left, exactly as
 before, and the pane fills the remaining width behind a divider. With
-the pane disabled the window is the classic 680 x 460 and none of
-this exists -- no pane markup is active and no preview code runs.
+the pane disabled the window is the configured `window.width` x
+`window.height` (defaults 780 x 550 -- see
+[Configuration](#configuration)) and none of this exists -- no pane
+markup is active and no preview code runs.
 
 What the pane shows for the selected row:
 

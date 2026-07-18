@@ -191,9 +191,13 @@ async function stop(p: Proc): Promise<void> {
 
 // Per-theme assertion bounds, derived from real local captures on the same
 // fixture (do not guess -- re-derive if the UI changes). Measured values
-// (re-derived 2026-07-17, when 01 gained the empty-query cheat sheet):
-//   dark  01/02/03 = 22420/38510/38518 bytes, means  7149/ 8338/ 8329
-//   light 01/02/03 = 22652/38920/38885 bytes, means 61601/61052/61055
+// (re-derived 2026-07-18, when the window grew to 780x550 and gained the
+// bottom stats row; the bands still hold with wide margins, so only these
+// evidence numbers changed):
+//   dark  01/02/03 = 26576/68782/68810 bytes, means  7044/ 8584/ 8578
+//   light 01/02/03 = 26869/70196/70217 bytes, means 61725/60666/60668
+// Previous derivation (2026-07-17, 680x460, when 01 gained the empty-query
+// cheat sheet): dark means 7149/8338/8329, light 61601/61052/61055.
 // A dead/black webview captures near mean 0; solid white near 65535. The
 // light theme sits ~61k, so its band must clear 60k yet still reject a
 // blank-white window; the size floors do the rest (a flat rectangle
@@ -225,7 +229,7 @@ const shotRoot = path.join(workspace, "screenshots");
 
 async function findBarWindow(): Promise<string | undefined> {
   const out = await $`xwininfo -root -tree`.silent().nothrow();
-  const m = /^\s*(0x[0-9a-f]+)\s+"competent-search-thing".*\s680x460\+/m.exec(String(out.stdout));
+  const m = /^\s*(0x[0-9a-f]+)\s+"competent-search-thing".*\s780x550\+/m.exec(String(out.stdout));
   return m?.[1];
 }
 
