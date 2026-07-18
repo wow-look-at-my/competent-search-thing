@@ -85,9 +85,9 @@ func TestRecordOpenPaths(t *testing.T) {
 
 	// A FAILED open records nothing (the guard is synchronous, so no
 	// wait is needed once the next success has round-tripped).
-	a.plat.open = func(path string) error { return errors.New("boom") }
+	a.plat.open = func(path string, _ []string) error { return errors.New("boom") }
 	require.Error(t, a.Open("/docs/failed.txt"))
-	a.plat.open = func(path string) error { r.call("open:" + path); return nil }
+	a.plat.open = func(path string, _ []string) error { r.call("open:" + path); return nil }
 
 	// open_url shares Open but is filtered by the absolute-path guard.
 	require.NoError(t, a.RunPluginAction("test", plugin.Action{Type: plugin.ActionOpenURL, Value: "https://example.com/page"}))
