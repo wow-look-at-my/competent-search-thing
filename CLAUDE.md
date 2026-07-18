@@ -389,7 +389,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   6, profileDir ""}, openTabs {maxResults 6, profileDir ""}} -- the
   frequentSites defaults encode ">10 visits in 30 days AND >=1 in 7";
   the numeric knobs are Normalize-repaired to defaults when <= 0,
-  both profileDirs are passed through verbatim). Lives under
+  both profileDirs are passed through verbatim), preview {enabled,
+  windowWidth 1600, windowHeight 800, textMaxKB 256, imageMaxEdge 800,
+  dirMaxEntries 200, kagi {apiKey, maxResults 8}, openai {apiKey,
+  model "gpt-5-mini", maxOutputTokens 1024}} -- the opt-in preview
+  pane (zero value = off); numerics and an empty model are
+  Normalize-repaired, the API keys pass through verbatim and are never
+  logged. Lives under
   os.UserConfigDir(); the `COMPETENT_SEARCH_CONFIG_DIR` env var
   overrides the directory (tests rely on this); `Dir()` exposes that
   directory (the plugins/ and themes/ dirs and history.json live
@@ -572,6 +578,48 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Exhaustively
   unit-tested, table-driven, plus an end-to-end manifest ->
   registry -> /bin/sh transport dispatch test.
+- `internal/preview` -- the preview-pane engine, pure (no Wails
+  imports) and headless-tested. preview.go holds the wire contract:
+  Target {kind "file"|"plugin"|"none", path, isDir, title, subtitle,
+  pluginName} and Payload {gen, kind
+  "meta"|"text"|"image"|"dir"|"web"|"ai"|"error", title, path, meta,
+  text, image, dir, web, ai, err, durMs} -- web/ai are contract-only
+  until phase 3. dispatch.go: `New(parentCtx, Options{TextMaxKB,
+  ImageMaxEdge, DirMaxEntries, Emit})` -> Dispatcher;
+  `Preview(target, gen)` is synchronous bookkeeping only (mutex'd
+  cancel of the previous request + gen store; kind none/"" =
+  cancel-only) and spawns ONE goroutine per request; file targets
+  emit a FAST meta card first, then the rich payload (dir listing /
+  capped text / thumbnail / a final meta card with a "binary" note)
+  under per-request hard timeouts (2s meta/dir/text, 4s image, via
+  runUnder racing the provider against the ctx); symlinks are
+  described (readlink) and never followed; every emit is suppressed
+  once the request ctx is cancelled; provider funcs are Dispatcher
+  seam fields for tests. cache.go: bytes-bounded LRU of rich payloads
+  (16 MiB / 64 entries; key = path + mtime + size + provider kind);
+  hits skip the meta emission. text.go: IsBinary (NUL or >30% bad
+  bytes), ReadCapped (maxKB, ToValidUTF8-sanitized), LangHint (~35
+  extensions + Dockerfile/Makefile name matches -> highlight.js
+  names). image.go: Thumbnail -- extension gate
+  (png/jpg/jpeg/gif/webp/bmp), 32 MiB source + 40-megapixel
+  DecodeConfig gates, decode raced against ctx, x/image/draw
+  ApproxBiLinear downscale to maxEdge, JPEG q80 for JPEG sources else
+  PNG, base64 data URI. dir.go: ListCapped (dirs first,
+  case-insensitive, capped, entry.Info sizes, never recurses).
+  meta.go: MetaFor (humanized size, mtime, mode, kind guess, path +
+  extra rows). Wired by internal/app's preview.go: Options.Preview
+  (config section) gates startPreview; bound methods
+  QueryPreview(target, gen) / GetPreviewConfig() (enabled +
+  kagi/openai configured via config key or KAGI_API_KEY /
+  OPENAI_API_KEY env, keys never exposed) / FetchWebPreview /
+  FetchAIPreview (phase-3 stubs answering kind "error"); emissions
+  ride the "preview:result" event behind the previewGen atomic gate
+  (the QueryPlugins pattern); Shutdown cancels the dispatcher's
+  parent ctx. previewsize.go `PreviewWindowSize()` (translucent.go
+  pattern: fresh config.Load, any error = disabled) tells main.go the
+  window size BEFORE wails.Run; flag off = exactly 680x460, flag on =
+  preview.windowWidth/Height, threaded into Options.WindowW/WindowH
+  for the positioning math (app.winW/winH).
 - `internal/appctx` -- app-context collection for the plugin system,
   pure and headless-tested: the data types (AppInfo / InstalledApp /
   WindowInfo (ID uint32/Title/App/PID) /
