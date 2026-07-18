@@ -72,7 +72,7 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 				TierJumpCount:  5,
 			},
 		},
-		Theme:                 "light",
+		Theme: "light",
 		Plugins: PluginsConfig{
 			Disabled: false,
 			Entries: map[string]PluginEntry{

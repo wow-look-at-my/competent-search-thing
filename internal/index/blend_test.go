@@ -45,7 +45,7 @@ func TestBlendInactiveIsNoOp(t *testing.T) {
 		"zqxr",              // fuzzy-selective (subsequence-only hits)
 		"data report",       // multi-term
 		"bench/data",        // path mode
-		"caf\u00e9",       // non-ASCII rune regime
+		"caf\u00e9",         // non-ASCII rune regime
 		"zzqx_marker_0.bin", // exact
 	}
 	zeroSig := &Blend{
