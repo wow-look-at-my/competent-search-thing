@@ -30,7 +30,16 @@ import (
 // false means "render a dash", covering missing sources (non-Linux,
 // no GPU), failed reads, and rates that have not accumulated a
 // counter delta yet.
+//
+// Enabled is NOT the sampler's field to set: the sampler always leaves
+// it false, and the app layer sets it true on every snapshot that
+// crosses to the frontend from a live sampler (GetStats, the
+// "stats:update" relay). Enabled=false therefore means "the feature is
+// off" (stats.disabled, no sampler) and the frontend hides the row
+// entirely, while Enabled=true with per-metric OK=false renders
+// dashes.
 type Snapshot struct {
+	Enabled   bool    `json:"enabled"`
 	CPUPct    float64 `json:"cpuPct"`
 	CPUOK     bool    `json:"cpuOk"`
 	GPUPct    float64 `json:"gpuPct"`

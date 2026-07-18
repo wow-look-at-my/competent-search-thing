@@ -65,7 +65,9 @@ func TestGetStatsReadsSampler(t *testing.T) {
 	require.Equal(t, 1, starts, "Start runs once")
 	require.NotNil(t, ctx)
 	require.NoError(t, ctx.Err(), "the stats context is live after Startup")
-	require.Equal(t, fake.snap, a.GetStats())
+	want := fake.snap
+	want.Enabled = true // stamped by GetStats, never by the sampler
+	require.Equal(t, want, a.GetStats())
 
 	// A second Startup (context refresh) must not start a second
 	// sampler.
@@ -151,7 +153,9 @@ func TestEmitStats(t *testing.T) {
 	a.emitStats(snap)
 	evs := r.emitted(eventStatsUpdate)
 	require.Len(t, evs, 1)
-	require.Equal(t, []interface{}{snap}, evs[0].payload, "the event payload is the snapshot")
+	want := snap
+	want.Enabled = true // stamped by the relay: the event only fires from a live sampler
+	require.Equal(t, []interface{}{want}, evs[0].payload, "the event payload is the snapshot")
 }
 
 func TestShutdownCancelsStats(t *testing.T) {

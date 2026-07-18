@@ -205,9 +205,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   empty slice and AddHistory no-ops, so newTestApp needs no extra
   wiring. The frontend commits a query only after its activation
   actually ran. `GetStats() sysstats.Snapshot` (stats.go) returns the
-  sampler's cached snapshot -- instant, never IO on this path; nil
-  sampler (disabled, pre-Startup, post-Shutdown) = zero Snapshot,
-  every OK flag false = the frontend's placeholder state. Bar
+  sampler's cached snapshot -- instant, never IO on this path -- with
+  Enabled stamped true (the sampler itself never sets that field;
+  emitStats stamps the event payloads the same way); nil sampler
+  (disabled, pre-Startup, post-Shutdown) = zero Snapshot, Enabled
+  false = the frontend hides the #stats row entirely, while Enabled
+  true with per-metric OK=false renders dashes. Bar
   visibility drives the sampler through nil-safe statsVisible:
   showOnCursorDisplay -- the ONE shared show helper every summon path
   funnels through (hotkey toggle, IPC showIfHidden's hidden branch,
@@ -233,8 +236,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   payload; frontend refetches GetTheme/GetCustomCSS),
   "plugin:results" (payload plugin.Emission
   {plugin,name,gen,results}), "stats:update" (payload
-  sysstats.Snapshot {cpuPct,cpuOk,gpuPct,gpuOk,memUsed,memTotal,
-  memOk,swapUsed,swapTotal,swapOk,netRxBps,netTxBps,netOk}). ALL Wails
+  sysstats.Snapshot {enabled,cpuPct,cpuOk,gpuPct,gpuOk,memUsed,
+  memTotal,memOk,swapUsed,swapTotal,swapOk,netRxBps,netTxBps,netOk};
+  enabled always true on the event -- it only ever fires from a live
+  sampler). ALL Wails
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
   incl. run/activateWindow/appSource plus getenv/executable/args0/detectSession/
@@ -475,10 +480,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/sysstats` -- the system-stats sampler behind the
   frontend's stats row, pure and headless-tested (fixture proc/sys
   trees, injectable clock + gpuExec seams). `Snapshot` is the wire
-  contract (json tags cpuPct/cpuOk/gpuPct/gpuOk/memUsed/memTotal/
-  memOk/swapUsed/swapTotal/swapOk/netRxBps/netTxBps/netOk; bytes for
-  mem/swap, bytes/sec for net, 0..100 pcts; *Ok=false = "render a
-  dash"). `New(Options{ProcRoot "/proc", SysRoot "/sys", GOOS
+  contract (json tags enabled/cpuPct/cpuOk/gpuPct/gpuOk/memUsed/
+  memTotal/memOk/swapUsed/swapTotal/swapOk/netRxBps/netTxBps/netOk;
+  bytes for mem/swap, bytes/sec for net, 0..100 pcts; *Ok=false =
+  "render a dash"; Enabled is the APP layer's field -- the sampler
+  always leaves it false, internal/app stamps it true on every
+  GetStats return and emitStats payload, so Enabled false = feature
+  off = the frontend hides the row). `New(Options{ProcRoot "/proc",
+  SysRoot "/sys", GOOS
   runtime.GOOS, Interval 1500ms, GPUInterval 5s, GPUTimeout 1s,
   LookPath exec.LookPath, OnUpdate, Logf; unexported test seams
   gpuExec + now})` probes sources ONCE, cheaply (no subprocess
@@ -1024,7 +1033,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `frontend/` -- vanilla TypeScript + Vite. No framework. `index.html`
   (query row with inline SVG magnifier + hidden bang chip; #results
   split into #file-results / static #empty ("No matches") /
-  #plugin-results zones; status bar + degraded chip; <template>s for
+  #plugin-results zones; status bar + degraded chip; the #stats row
+  BELOW the status bar -- the bottom-most chrome, five STATIC
+  label/value span pairs (CPU GPU RAM SWP NET, value ids
+  stat-cpu/-gpu/-ram/-swap/-net), starts hidden, JS only ever writes
+  the value text; <template>s for
   folder/file icons AND plugin section/row skeletons) + `src/main.ts`
   (search as-you-type: 15ms debounce + sequence-number stale-response
   drop; every generation also fire-and-forgets QueryPlugins(query,
@@ -1071,8 +1084,26 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Esc + window blur -> Hide; runtime events: "app:shown" -> CLEAR
   the input (the bar always summons empty; the pre-hide text is
   deliberately dropped) + reset histCursor + focus + refresh (renders
-  the cheat sheet; plugins re-query through the same path),
-  "index:progress" -> status text, "watch:degraded" -> warning chip)
+  the cheat sheet; plugins re-query through the same path) + a
+  refreshStats re-render (GetStats is the instant cached snapshot;
+  the summon's fresh samples follow as events),
+  "index:progress" -> status text, "watch:degraded" -> warning chip,
+  "stats:update" -> applyStats. STATS ROW wiring (all in main.ts):
+  applyStats hides the whole #stats row when snapshot.enabled is
+  false (stats.disabled) and otherwise unhides + delegates to
+  stats.ts renderStats; wire() calls refreshStats once at startup
+  (same missed-app:shown reasoning as the cheat-sheet prefetch --
+  pre-first-summon the enabled snapshot renders all dashes) and
+  events keep it live while visible)
+  + `src/stats.ts` (the stats row formatters + renderStats(snap,
+  nodes): formatPct "12%" (rounded); formatBytesPair "6.2/15.9G" --
+  BOTH values in the unit the TOTAL picks, GiB else MiB below 1 GiB,
+  shared decimal rule one-decimal-below-10-else-none; formatRate
+  humanizes bytes/sec B/K/M/G (binary) with the same rule, net
+  renders as "<down>rx <up>tx" arrow pairs; any *Ok=false -> em-dash
+  placeholder, and swapOk=true with swapTotal 0 (no swap configured)
+  is a dash too; glyphs (em dash, arrows) are \uXXXX escapes --
+  ASCII-only source)
   + `src/render.ts` (pure text-node DOM builders, no innerHTML
   anywhere: file rows with highlighted match + dim parent dir (a
   non-empty result hint replaces the parent-dir text -- the
@@ -1091,17 +1122,25 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   before the name; thin scrollbar; ALL colors/sizes/effects flow
   through var(--sb-*) -- the :root block holds the dark fallbacks and
   MUST stay identical to internal/theme/builtin/dark.json, enforced
-  by internal/theme/sync_test.go; appended namespaced plugin block
+  by internal/theme/sync_test.go; the #stats row block (flex 0 0
+  auto single nowrap line so it can never squeeze the results area,
+  ~0.85x small font, fg-dim on a --sb-border top border, tokens only
+  -- and an explicit #stats[hidden]{display:none} because the
+  author-level display:flex would defeat the UA sheet's [hidden]
+  rule); appended namespaced plugin block
   (.plugin-*, .bang-chip, .status-flash) where every accent rule
   consumes var(--plugin-accent, var(--accent, #89b4fa)) and a :root
   bridge defines --accent: var(--sb-accent, #89b4fa), so the theming
   design tokens apply when present and the standalone default
   otherwise, merge order irrelevant) + `src/wails.d.ts` (ambient
   types for the Wails-injected `window.go` / `window.runtime` incl.
-  EventsOn, the event payload shapes, and the plugin wire contract
-  TargetInfo/PluginAction (incl. activate_window + its window
-  field)/PluginResult/PluginEmission -- keep in sync
-  with internal/app + internal/plugin payload structs).
+  EventsOn, the event payload shapes (incl. StatsSnapshot -- the
+  GetStats return AND "stats:update" payload, field names lockstep
+  with internal/sysstats.Snapshot json tags), and the plugin wire
+  contract TargetInfo/PluginAction (incl. activate_window + its
+  window field)/PluginResult/PluginEmission -- keep in sync
+  with internal/app + internal/plugin + internal/sysstats payload
+  structs).
 - `examples/plugins/` -- three shipped example plugins, INERT until a
   user copies one into `<configDir>/plugins/` (each has a README with
   install/usage): `calc` (python3 command plugin: trigger prefix "=",

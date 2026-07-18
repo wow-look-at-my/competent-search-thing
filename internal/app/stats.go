@@ -9,8 +9,10 @@ import (
 )
 
 // eventStatsUpdate carries one published system-stats sample; payload
-// sysstats.Snapshot (json tags cpuPct/cpuOk/gpuPct/gpuOk/memUsed/
-// memTotal/memOk/swapUsed/swapTotal/swapOk/netRxBps/netTxBps/netOk).
+// sysstats.Snapshot (json tags enabled/cpuPct/cpuOk/gpuPct/gpuOk/
+// memUsed/memTotal/memOk/swapUsed/swapTotal/swapOk/netRxBps/netTxBps/
+// netOk). The app layer stamps Enabled=true on every relayed sample --
+// the event only ever fires from a live sampler.
 const eventStatsUpdate = "stats:update"
 
 // statsSource is the slice of *sysstats.Sampler the App consumes,
@@ -66,8 +68,11 @@ func (a *App) buildStats() statsSource {
 
 // emitStats relays one published stats sample to the frontend. It runs
 // on the sampler goroutine and is guarded like every other emit, so a
-// pre-Startup call no-ops.
+// pre-Startup call no-ops. The sample necessarily comes from a live
+// sampler, so the payload carries Enabled=true (the sampler itself
+// never sets the flag).
 func (a *App) emitStats(snap sysstats.Snapshot) {
+	snap.Enabled = true
 	a.emitEvent(eventStatsUpdate, snap)
 }
 
@@ -86,8 +91,11 @@ func (a *App) statsVisible(v bool) {
 
 // GetStats returns the sampler's cached snapshot for the frontend:
 // instant, a mutex-guarded copy, never any IO on this path. With the
-// sampler disabled or not started it is the zero Snapshot -- every OK
-// flag false, which the frontend renders as placeholders.
+// sampler disabled or not started it is the zero Snapshot -- Enabled
+// false, which the frontend takes as "hide the row entirely". A live
+// sampler's snapshot is stamped Enabled=true here (the sampler never
+// sets the flag itself); its per-metric OK=false values then render as
+// dashes.
 func (a *App) GetStats() sysstats.Snapshot {
 	a.mu.Lock()
 	st := a.stats
@@ -95,5 +103,7 @@ func (a *App) GetStats() sysstats.Snapshot {
 	if st == nil {
 		return sysstats.Snapshot{}
 	}
-	return st.Snapshot()
+	snap := st.Snapshot()
+	snap.Enabled = true
+	return snap
 }

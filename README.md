@@ -469,9 +469,10 @@ Field reference:
   `history.json`, while in-session Up/Down recall keeps working.
   Delete `history.json` to forget previously saved entries.
 - `stats` -- the [system stats row](#system-stats-row). `disabled`
-  (default `false`) turns its sampler off; the row then shows
-  placeholders only. Leaving it on costs nothing while the bar is
-  hidden: sampling only ever happens while the bar is on screen.
+  (default `false`) turns the feature off entirely: no sampler runs
+  and the row disappears from the bar. Leaving it on costs nothing
+  while the bar is hidden: sampling only ever happens while the bar
+  is on screen.
 - `window` -- the native window layer. `translucent` (default `false`)
   requests a per-pixel-alpha (RGBA) window so the area outside the
   bar's rounded corners is truly see-through instead of a squared-off
@@ -1369,10 +1370,14 @@ could consume opt-in; nothing like that ships today.
 
 ## System stats row
 
-The bar carries a compact system-stats row: CPU busy %, GPU busy %,
-memory used/total, swap used/total, and network throughput (received
-and sent bytes/second summed over the real interfaces -- loopback,
-container veths, bridges, tunnels, and VPN interfaces are excluded).
+The bar's bottom edge -- below the status bar -- carries a compact
+system-stats row with five tiny readouts: CPU busy % (`CPU 12%`), GPU
+busy % (`GPU 4%`), memory used/total (`RAM 6.2/15.9G`), swap
+used/total (`SWP 0.5/8.0G`), and network throughput received/sent
+(`NET` with down/up arrows, e.g. `1.2M 5.6K` bytes/second, summed
+over the real interfaces -- loopback, container veths, bridges,
+tunnels, and VPN interfaces are excluded). Sizes use binary units
+(`G`/`M`) with one decimal below 10.
 
 The design guarantee is that the stats can never slow the search
 experience down:
@@ -1405,7 +1410,9 @@ a stale or fake number, and the failure is logged once, not per
 sample. On Windows and macOS there are no sources wired up yet, so
 the whole row shows dashes there for now.
 
-`stats.disabled` in `config.json` turns the sampler off entirely.
+`stats.disabled` in `config.json` turns the feature off entirely: no
+sampler is built and the row is removed from the bar (not dashes --
+gone), taking effect on the next launch.
 
 ## Tray icon
 
