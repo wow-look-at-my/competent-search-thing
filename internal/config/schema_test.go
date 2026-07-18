@@ -60,8 +60,19 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 		Hotkey:                "ctrl+shift+k",
 		RescanIntervalMinutes: 30,
 		MaxResults:            100,
-		Search:                SearchConfig{FuzzyDisabled: true},
-		Theme:                 "light",
+		Search: SearchConfig{
+			FuzzyDisabled: true,
+			Frecency: FrecencyConfig{
+				Disabled:       true,
+				HalfLifeDays:   7,
+				WeightFrecency: 2.5,
+				WeightRecency:  -1, // negative = the documented per-signal off switch
+				WeightCwd:      0.5,
+				WeightNoise:    1,
+				TierJumpCount:  5,
+			},
+		},
+		Theme: "light",
 		Plugins: PluginsConfig{
 			Disabled: false,
 			Entries: map[string]PluginEntry{
@@ -125,6 +136,16 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"zero maxResults":                  `{"maxResults":0}`,
 		"search fuzzy typo":                `{"search":{"fuzzyDisabld":true}}`,
 		"non-bool search fuzzyDisabled":    `{"search":{"fuzzyDisabled":"yes"}}`,
+		"frecency key typo":                `{"search":{"frecency":{"halfLifeDay":7}}}`,
+		"non-bool frecency disabled":       `{"search":{"frecency":{"disabled":"yes"}}}`,
+		"zero frecency half-life":          `{"search":{"frecency":{"halfLifeDays":0}}}`,
+		"negative frecency half-life":      `{"search":{"frecency":{"halfLifeDays":-1}}}`,
+		"zero frecency weight":             `{"search":{"frecency":{"weightFrecency":0}}}`,
+		"zero recency weight":              `{"search":{"frecency":{"weightRecency":0}}}`,
+		"zero cwd weight":                  `{"search":{"frecency":{"weightCwd":0}}}`,
+		"zero noise weight":                `{"search":{"frecency":{"weightNoise":0}}}`,
+		"zero tier jump":                   `{"search":{"frecency":{"tierJumpCount":0}}}`,
+		"non-number frecency weight":       `{"search":{"frecency":{"weightNoise":"1"}}}`,
 		"bad theme name":                   `{"theme":"../evil"}`,
 		"bad plugin entry id":              `{"plugins":{"entries":{"Bad ID":{}}}}`,
 		"non-object settings":              `{"plugins":{"entries":{"calc":{"settings":"loud"}}}}`,
@@ -229,6 +250,8 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json top level out of sync with Config")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(SearchConfig{})), configSchemaProperties(t, "searchConfig"),
 		"config.schema.json $defs/searchConfig out of sync with SearchConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(FrecencyConfig{})), configSchemaProperties(t, "frecencyConfig"),
+		"config.schema.json $defs/frecencyConfig out of sync with FrecencyConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PluginsConfig{})), configSchemaProperties(t, "pluginsConfig"),
 		"config.schema.json $defs/pluginsConfig out of sync with PluginsConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PluginEntry{})), configSchemaProperties(t, "pluginEntry"),

@@ -212,6 +212,9 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// No Firefox profile discovery against the real home; tests that
 	// exercise the frequent-sites wiring point this at fixtures.
 	a.plat.firefoxBases = func() []string { return nil }
+	// No real /proc walks: the frecency cwd derivation stays inert
+	// unless a test injects a fake process tree.
+	a.plat.procTree = nil
 	// No config.json or plugins-dir IO in unit tests; tests that
 	// exercise the real builder restore a.buildRegistry explicitly.
 	a.newRegistry = func() dispatcher { return nil }
