@@ -18,7 +18,12 @@ import (
 func startLive(t *testing.T, root string, excludes []string) (*index.Manager, *Watcher) {
 	t.Helper()
 	m := buildManager(t, root, excludes)
-	w := newTestWatcher(t, m, nil) // nil notifier keeps real fsnotify
+	w := newTestWatcher(t, m, nil)
+	// These tests exercise the REAL fsnotify backend specifically, so
+	// pin it: the production default is backend auto-detection, which
+	// would try fanotify first on capable machines and change the
+	// per-directory watch counts asserted below.
+	w.newNotifier = newFSNotifier
 	startWatcher(t, w)
 	waitFor(t, func() bool { return w.Stats().WatchedDirs >= 1 }, "root watch registered")
 	return m, w

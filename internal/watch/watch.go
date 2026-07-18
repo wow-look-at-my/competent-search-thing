@@ -96,10 +96,11 @@ type Options struct {
 
 // Stats is a snapshot of the watcher's health for logs and the UI.
 type Stats struct {
-	// Backend names the notification backend feeding the watcher. The
-	// constructor sets "inotify" (fsnotify's Linux backend and the
-	// uniform one-watch-per-directory model everywhere); a future
-	// backend sets its own name.
+	// Backend names the notification backend feeding the watcher:
+	// "inotify" for the per-directory fsnotify model (the uniform
+	// default everywhere), "fanotify" when Start detected the
+	// whole-filesystem backend (linux with CAP_SYS_ADMIN and
+	// markable filesystems; see backendInfo).
 	Backend string
 	// Budget is the resolved MaxWatches cap (math.MaxInt when
 	// unlimited); 0 until Start resolved it.
@@ -159,9 +160,14 @@ type Watcher struct {
 	// failed).
 	initialDone chan struct{}
 
-	mu            sync.Mutex
-	n             notifier
-	budget        int
+	mu     sync.Mutex
+	n      notifier
+	budget int
+	// wide is true when the notifier reported wideCoverage (fanotify
+	// whole-filesystem marks): the hot set is not filled, watch
+	// bookkeeping stays empty, and every per-directory watch call is
+	// a cheap no-op. Set once in Start, before the event loop runs.
+	wide          bool
 	watched       map[string]*list.Element // dir -> LRU element; nil element = pinned root
 	lru           *list.List               // evictable watched dirs; front = hottest
 	stats         Stats
@@ -193,7 +199,6 @@ func New(m *index.Manager, roots []string, ex *index.Excluder, opt Options) *Wat
 		ex:             ex,
 		opt:            opt,
 		pinned:         make(map[string]struct{}),
-		newNotifier:    newFSNotifier,
 		readDir:        os.ReadDir,
 		readMaxWatches: readInotifyMaxWatches,
 		homeDir:        os.UserHomeDir,
@@ -214,6 +219,11 @@ func New(m *index.Manager, roots []string, ex *index.Excluder, opt Options) *Wat
 		w.pinned[r] = struct{}{}
 		w.rootList = append(w.rootList, r)
 	}
+	// The production constructor auto-detects the backend for these
+	// normalized roots (fanotify whole-filesystem marks with a clean
+	// fallback to per-directory fsnotify); it needs the roots, so it
+	// is bound after the loop above. Unit tests swap the seam.
+	w.newNotifier = newAutoNotifier(w.rootList)
 	return w
 }
 
@@ -281,6 +291,11 @@ func (w *Watcher) Start() error {
 	}
 	w.mu.Lock()
 	w.n = n
+	if bi, ok := n.(backendInfo); ok {
+		name, wide := bi.kind()
+		w.stats.Backend = name
+		w.wide = wide
+	}
 	w.budget = resolveBudget(w.opt.MaxWatches, w.readMaxWatches)
 	w.stats.Budget = w.budget
 	w.mu.Unlock()
@@ -351,6 +366,35 @@ func (w *Watcher) budgetVal() int {
 	return w.budget
 }
 
+// isWide reports whether the notifier covers whole filesystems
+// (fanotify), making per-directory watch bookkeeping moot.
+func (w *Watcher) isWide() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.wide
+}
+
+// markMount forwards a newly-appeared mountpoint to a notifier that
+// can extend whole-filesystem coverage (fanotify's MarkMount); the
+// sweeper's mount-diff calls it before force-reconciling the
+// mountpoint, so events flow from the new filesystem by the time its
+// content is indexed. Per-directory backends have no such method and
+// need nothing: their watches attach as reconcile descends. A failed
+// mark costs latency, never coverage (the reconcile still runs and
+// sweeps keep converging the subtree), so it is logged and tolerated.
+func (w *Watcher) markMount(path string) {
+	w.mu.Lock()
+	n := w.n
+	w.mu.Unlock()
+	mm, ok := n.(interface{ MarkMount(string) error })
+	if !ok {
+		return
+	}
+	if err := mm.MarkMount(path); err != nil {
+		log.Printf("watch: fanotify cannot cover %s (%v); sweeps cover it", path, err)
+	}
+}
+
 // watchedCount returns the current watched-set size.
 func (w *Watcher) watchedCount() int {
 	w.mu.Lock()
@@ -396,7 +440,11 @@ func (w *Watcher) watch(dir string, refresh bool) {
 	}()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.n == nil || w.lc.stopping() {
+	if w.n == nil || w.lc.stopping() || w.wide {
+		// Under wideCoverage the whole filesystem is already marked:
+		// per-directory watches (and their bookkeeping) do not exist,
+		// so reconcileDir's refreshWatch on every dirty directory is
+		// this cheap early return.
 		return
 	}
 	el, have := w.watched[dir]
@@ -461,7 +509,7 @@ func (w *Watcher) addWatchCold(dir string) bool {
 	}()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.n == nil || w.lc.stopping() {
+	if w.n == nil || w.lc.stopping() || w.wide {
 		return false
 	}
 	if len(w.watched) >= w.budget {
@@ -606,7 +654,9 @@ func (w *Watcher) dropWatchesUnder(path string) {
 // sweep or rescan reconciles whatever was left undone.
 func (w *Watcher) syncWatches(ctx context.Context) {
 	w.mu.Lock()
-	ready := w.n != nil && !w.lc.stopping()
+	// Under wideCoverage there is no watch set to reconcile: the
+	// bookkeeping is empty by design and stays that way.
+	ready := w.n != nil && !w.lc.stopping() && !w.wide
 	w.mu.Unlock()
 	if !ready || ctx.Err() != nil {
 		return

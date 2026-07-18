@@ -70,6 +70,14 @@ func (w *Watcher) run(ctx context.Context) {
 // either way it closes initialDone so waiters unblock.
 func (w *Watcher) addInitialWatches(ctx context.Context) {
 	defer close(w.initialDone)
+	if w.isWide() {
+		// Whole-filesystem marks already cover every directory: no
+		// fill, no enumeration, no bookkeeping. Stats keep zero
+		// watched/indexed counts -- there is no watch set to count.
+		log.Printf("watch: backend %s: whole-filesystem marks active; per-directory watches not needed",
+			w.Stats().Backend)
+		return
+	}
 	home, rest, total := w.desiredSplit(ctx, w.budgetVal())
 	w.fill(ctx, home, rest)
 	w.mu.Lock()

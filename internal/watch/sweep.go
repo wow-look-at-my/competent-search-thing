@@ -297,6 +297,13 @@ func (s *Sweeper) pass(ctx context.Context) (swept, relisted int, complete bool)
 		if ex.Match(filepath.Base(mp), mp) {
 			continue // excluded paths never touch the index
 		}
+		if _, added := cur[mp]; added {
+			// A mountpoint that APPEARED gets notifier coverage first
+			// (fanotify marks the new filesystem when the backend
+			// supports it), so events flow before the forced
+			// reconcile below indexes its content.
+			s.w.markMount(mp)
+		}
 		s.reconcilePath(ctx, mp)
 		relisted++
 	}

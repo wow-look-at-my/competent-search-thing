@@ -20,3 +20,13 @@ Config: new "watcher" section {backend:"auto"(auto|fanotify|inotify|none), maxWa
 Tests: pure fanotify buffer-parser tests (synthetic DFID_NAME records, merged masks, overflow); capability-gated fanotify integration (probe-mark a scratch fs; /dev/shm on the dev box; skip in CI); cross-tier equivalence replay (same mutation storm -> identical final index under fanotify [gated] / hot-set with forced tiny budget + eviction / sweep-only); hot-set unit tests (budget/LRU/promotion); sweeper tests (mtime short-circuit, backdating documented-miss, deletion diff via children, mount force-dirty via seam); existing ordered-batch test pins consciously renegotiated to convergence pins (each listed in the PR body).
 
 Measurements: env-gated harness (committed before the redesign) captures BEFORE on the same yardstick as AFTER: registration wall/CPU, watch count (fdinfo ground truth), est kernel bytes (1284 B/watch), storm CPU + convergence, idle CPU, teardown; fanotify tier measured on /dev/shm; real-machine (18.6M entries) extrapolation table in the PR body.
+
+## Stage 3 reality notes (backend auto-detection as built)
+
+Where the implementation deliberately diverges from the tier-1 sketch above:
+
+- Backend selection is `newAutoNotifier(roots)`: try the fanotify notifier, and on ANY constructor error log one line and fall back to per-directory fsnotify. The config knob (watcher.backend auto|fanotify|inotify|none) is Stage 4; Stage 3 hardwires "auto".
+- Mark granularity is all-or-nothing for the ROOTS' filesystems: a root-fs mark failure (EPERM/ENODEV/EXDEV) fails the whole fanotify backend so the per-directory tier takes over cleanly, instead of the sketched per-superblock fall-to-tier-2 split (no mixed-backend watcher in v1). Additional real mountpoints under the roots (index.RealMountpoints) are best-effort: a per-mount mark failure logs once and leaves that filesystem to sweeps -- coverage holds, only latency differs.
+- NO cross-batch handle->path cache in v1: handles resolve once per (fsid, handle) within a read batch only. A persistent LRU needs rename/delete invalidation to stay truthful; correctness first, cache as a follow-up.
+- Mounts appearing under the roots are marked live via the sweeper's mount-diff (MarkMount before the forced reconcile); unmarking on unmount is NOT implemented -- the stale mark pins a little kernel memory until the group closes, which the app's lifetime bounds.
+- Events resolve against whole superblocks, so the notifier filters resolved paths to the configured roots before emitting; nothing outside the roots can reach reconcile (Manager.Add does not scope-check).

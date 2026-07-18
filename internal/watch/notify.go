@@ -25,6 +25,18 @@ type notifier interface {
 	Close() error
 }
 
+// backendInfo is an optional notifier extension: a backend that is
+// not the default per-directory model reports its name (surfaced as
+// Stats.Backend) and whether it covers whole filesystems without
+// per-directory watches. wideCoverage makes the Watcher skip the
+// hot-set fill and all watch bookkeeping -- there is nothing to add,
+// evict, or budget when the kernel already reports every directory.
+// Notifiers without the method default to "inotify" + per-directory
+// semantics.
+type backendInfo interface {
+	kind() (name string, wideCoverage bool)
+}
+
 // fsnotifier adapts *fsnotify.Watcher to the notifier seam.
 type fsnotifier struct {
 	w *fsnotify.Watcher
