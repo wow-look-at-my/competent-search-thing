@@ -101,13 +101,11 @@ func TestVersionAndPingWorkBeforeHandlers(t *testing.T) {
 	rep, err := Send(path, CmdPing, time.Second)
 	require.NoError(t, err)
 	require.True(t, rep.OK)
-	require.False(t, rep.Legacy, "Send speaks JSON natively against the new server")
 
 	rep, err = Send(path, CmdVersion, time.Second)
 	require.NoError(t, err)
 	require.True(t, rep.OK)
 	require.Equal(t, "1.2.3-test", rep.Version)
-	require.False(t, rep.Legacy)
 }
 
 func TestCommandsBeforeSetHandlersAreNotReady(t *testing.T) {
@@ -155,8 +153,6 @@ func TestNilHandlerMemberIsNotReady(t *testing.T) {
 }
 
 func TestReplyArrivesBeforeHandlerFinishes(t *testing.T) {
-	// Send speaks JSON, so this proves ack-before-execute in JSON mode
-	// (the legacy mode shares the exact same handle/plan ordering).
 	s, path := listen(t, "v")
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -222,26 +218,42 @@ func TestUnknownAndEmptyCommands(t *testing.T) {
 	}
 }
 
-// TestLegacyWireIsByteIdentical pins the v1 compatibility contract: a
-// bare-word request takes the legacy path and every reply is the exact
-// pre-JSON byte sequence (string literals on purpose -- constant drift
-// must fail here), so an OLD client keeps working against a NEW
-// daemon untouched.
-func TestLegacyWireIsByteIdentical(t *testing.T) {
-	s, path := listen(t, "9.8.7-legacy")
-
-	require.Equal(t, "ok", rawExchange(t, path, "ping"))
-	require.Equal(t, "9.8.7-legacy", rawExchange(t, path, "version"))
-	require.Equal(t, "err not ready", rawExchange(t, path, "toggle"))
-	require.Equal(t, "err unknown command", rawExchange(t, path, "bogus"))
-
+// TestNonJSONRequestsAreRejected pins the deletion of the legacy v1
+// line protocol: every request line must parse as JSON, so bare
+// command words -- what an old, pre-JSON CLI sends -- and arbitrary
+// garbage bytes all earn the terse JSON invalid-request error, never
+// a raw legacy reply line, and never a handler invocation.
+func TestNonJSONRequestsAreRejected(t *testing.T) {
+	s, path := listen(t, "9.8.7-test")
 	ran := make(chan string, 1)
 	s.SetHandlers(Handlers{Toggle: func() { ran <- CmdToggle }})
-	require.Equal(t, "ok", rawExchange(t, path, "toggle"))
-	awaitSignal(t, ran, CmdToggle)
+
+	for _, line := range []string{
+		"ping",                // the old line protocol's health check
+		"version",             // its version request
+		"toggle",              // its summon -- wired handler or not, it must not run
+		"err unknown command", // a legacy REPLY line bounced back
+		"\x01\x02garbage",     // arbitrary junk bytes
+		"",                    // a blank line
+		`"toggle"`,            // valid JSON, but not an object
+		"123",                 // valid JSON, but not an object
+	} {
+		require.JSONEq(t, `{"ok":false,"error":"invalid request"}`, rawExchange(t, path, line),
+			"request %q", line)
+	}
+	// JSON null unmarshals into the request as a no-op: it IS valid
+	// JSON, so it takes the normal path and fails as an unknown (empty)
+	// command rather than an invalid request.
+	require.JSONEq(t, `{"ok":false,"error":"unknown command"}`, rawExchange(t, path, "null"))
+
+	select {
+	case cmd := <-ran:
+		t.Fatalf("a rejected request ran the %s handler", cmd)
+	default:
+	}
 }
 
-// TestJSONWireShapes pins the v2 responses at the wire level: one JSON
+// TestJSONWireShapes pins the responses at the wire level: one JSON
 // object per line, in exactly the documented shapes.
 func TestJSONWireShapes(t *testing.T) {
 	s, path := listen(t, "1.2.3-test")
@@ -251,7 +263,7 @@ func TestJSONWireShapes(t *testing.T) {
 	require.JSONEq(t, `{"ok":false,"error":"not ready"}`, rawExchange(t, path, `{"cmd":"toggle"}`))
 	require.JSONEq(t, `{"ok":false,"error":"unknown command"}`, rawExchange(t, path, `{"cmd":"bogus"}`))
 	require.JSONEq(t, `{"ok":false,"error":"invalid request"}`, rawExchange(t, path, `{not json`),
-		"a '{' line that is not valid JSON is answered in JSON, not legacy")
+		"a '{' line that is not valid JSON is an invalid request")
 
 	ran := make(chan string, 1)
 	s.SetHandlers(Handlers{Show: func() { ran <- CmdShow }})
@@ -272,169 +284,142 @@ func TestJSONRequestUnknownFieldsIgnored(t *testing.T) {
 	awaitSignal(t, ran, CmdToggle)
 }
 
-// legacyOnlyServer fakes an OLD, pre-JSON daemon verbatim: bare
-// command words in, raw "ok"/"err not ready"/"err unknown command"/
-// bare-version lines out -- a JSON request line matches no command and
-// is answered "err unknown command", exactly what the old server code
-// did. toggles receives each accepted toggle/show/hide command word.
-func legacyOnlyServer(t *testing.T, version string, ready bool) (path string, cmds <-chan string) {
-	t.Helper()
-	path = testSocket(t)
+// TestSendReturnsOldDaemonReplyInBand pins the deliberate version-skew
+// behavior after the legacy protocol's deletion: a still-running
+// pre-JSON daemon answers the JSON request with its raw
+// "err unknown command" line, which Send now returns IN-BAND (Raw set,
+// OK false, empty Err) instead of retrying with a legacy line -- the
+// caller reports it as an unexpected reply and the user restarts the
+// old instance once.
+func TestSendReturnsOldDaemonReplyInBand(t *testing.T) {
+	path := testSocket(t)
 	ln, err := net.Listen("unix", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
-	ch := make(chan string, 8)
+	dials := make(chan struct{}, 8)
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			go func(conn net.Conn) {
-				defer conn.Close()
-				line, err := bufio.NewReader(conn).ReadString('\n')
-				if err != nil && line == "" {
-					return
-				}
-				switch cmd := strings.TrimSpace(line); cmd {
-				case "ping":
-					_, _ = conn.Write([]byte("ok\n"))
-				case "version":
-					_, _ = conn.Write([]byte(version + "\n"))
-				case "toggle", "show", "hide":
-					if !ready {
-						_, _ = conn.Write([]byte("err not ready\n"))
-						return
-					}
-					ch <- cmd
-					_, _ = conn.Write([]byte("ok\n"))
-				default:
-					_, _ = conn.Write([]byte("err unknown command\n"))
-				}
-			}(conn)
+			dials <- struct{}{}
+			// An old daemon matches no bare command word against the
+			// JSON line and answers its raw legacy reply.
+			_, _ = bufio.NewReader(conn).ReadString('\n')
+			_, _ = conn.Write([]byte("err unknown command\n"))
+			_ = conn.Close()
 		}
 	}()
-	return path, ch
-}
-
-// TestSendFallsBackToLegacyAgainstOldDaemon proves the new-client /
-// old-daemon skew cell: the JSON request earns "err unknown command",
-// Send redials and retries with the legacy line, and the command
-// lands.
-func TestSendFallsBackToLegacyAgainstOldDaemon(t *testing.T) {
-	path, cmds := legacyOnlyServer(t, "0.9-old", true)
 
 	rep, err := Send(path, CmdToggle, 5*time.Second)
-	require.NoError(t, err)
-	require.True(t, rep.OK, "the legacy retry lands the toggle")
-	require.True(t, rep.Legacy, "the reply came over the legacy protocol")
-	awaitSignal(t, cmds, CmdToggle)
+	require.NoError(t, err, "a non-JSON reply is in-band, not a transport error")
+	require.False(t, rep.OK)
+	require.Empty(t, rep.Err, "no wire error text: the line did not parse")
+	require.Equal(t, "err unknown command", rep.Raw, "the raw line is the caller's evidence")
+	require.False(t, rep.NotReady())
 
-	rep, err = Send(path, CmdVersion, 5*time.Second)
-	require.NoError(t, err)
-	require.True(t, rep.OK)
-	require.Equal(t, "0.9-old", rep.Version, "the legacy bare-version reply maps into Version")
-	require.True(t, rep.Legacy)
-
-	rep, err = Send(path, CmdPing, 5*time.Second)
-	require.NoError(t, err)
-	require.True(t, rep.OK)
-	require.True(t, rep.Legacy)
+	// Exactly one connection: the legacy retry is gone.
+	<-dials
+	select {
+	case <-dials:
+		t.Fatal("Send dialed a second time -- the deleted legacy retry is back")
+	default:
+	}
 }
 
-func TestSendMapsLegacyNotReadyOnRetry(t *testing.T) {
-	path, _ := legacyOnlyServer(t, "0.9-old", false)
-
-	rep, err := Send(path, CmdShow, 5*time.Second)
-	require.NoError(t, err)
-	require.True(t, rep.NotReady(), "the old daemon's 'err not ready' maps to NotReady")
-	require.True(t, rep.Legacy)
-}
-
-// TestParseReplyMappings unit-tests the client-side reply parser: the
-// stray legacy lines a middle-state server might emit, response-side
-// unknown-field tolerance, and the in-band garbage path.
+// TestParseReplyMappings unit-tests the client-side reply parser:
+// response-side unknown-field tolerance and the in-band garbage path
+// (which now covers every pre-JSON reply line).
 func TestParseReplyMappings(t *testing.T) {
 	tests := []struct {
 		name string
-		cmd  string
 		line string
 		want Reply
 	}{
 		{
-			name: "legacy ok",
-			cmd:  CmdToggle, line: "ok",
-			want: Reply{OK: true, Raw: "ok", Legacy: true},
+			name: "accepted command",
+			line: `{"ok":true,"accepted":"toggle"}`,
+			want: Reply{OK: true, Accepted: "toggle", Raw: `{"ok":true,"accepted":"toggle"}`},
 		},
 		{
-			name: "legacy not ready",
-			cmd:  CmdToggle, line: "err not ready",
-			want: Reply{Err: "not ready", Raw: "err not ready", Legacy: true},
-		},
-		{
-			name: "legacy bare version",
-			cmd:  CmdVersion, line: "1.2.3",
-			want: Reply{OK: true, Version: "1.2.3", Raw: "1.2.3", Legacy: true},
-		},
-		{
-			name: "garbage line stays in-band",
-			cmd:  CmdToggle, line: "wat",
-			want: Reply{Raw: "wat", Legacy: true},
-		},
-		{
-			name: "empty line stays in-band",
-			cmd:  CmdVersion, line: "",
-			want: Reply{Raw: "", Legacy: true},
+			name: "version answer",
+			line: `{"ok":true,"version":"1.2.3"}`,
+			want: Reply{OK: true, Version: "1.2.3", Raw: `{"ok":true,"version":"1.2.3"}`},
 		},
 		{
 			name: "json with unknown fields is tolerated",
-			cmd:  CmdToggle, line: `{"ok":true,"accepted":"toggle","future":1}`,
+			line: `{"ok":true,"accepted":"toggle","future":1}`,
 			want: Reply{OK: true, Accepted: "toggle", Raw: `{"ok":true,"accepted":"toggle","future":1}`},
 		},
 		{
 			name: "json error shape",
-			cmd:  CmdToggle, line: `{"ok":false,"error":"not ready"}`,
+			line: `{"ok":false,"error":"not ready"}`,
 			want: Reply{Err: "not ready", Raw: `{"ok":false,"error":"not ready"}`},
 		},
 		{
+			name: "legacy ok line is garbage now",
+			line: "ok",
+			want: Reply{Raw: "ok"},
+		},
+		{
+			name: "legacy err line is garbage now",
+			line: "err not ready",
+			want: Reply{Raw: "err not ready"},
+		},
+		{
+			name: "garbage line stays in-band",
+			line: "wat",
+			want: Reply{Raw: "wat"},
+		},
+		{
+			name: "empty line stays in-band",
+			line: "",
+			want: Reply{Raw: ""},
+		},
+		{
 			name: "broken json-looking line stays in-band",
-			cmd:  CmdToggle, line: "{broken",
+			line: "{broken",
 			want: Reply{Raw: "{broken"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, parseReply(tt.cmd, tt.line))
+			require.Equal(t, tt.want, parseReply(tt.line))
 		})
 	}
-	require.True(t, parseReply(CmdToggle, "err not ready").NotReady())
-	require.False(t, parseReply(CmdToggle, "wat").NotReady(), "garbage is not the not-ready answer")
+	require.True(t, parseReply(`{"ok":false,"error":"not ready"}`).NotReady())
+	require.False(t, parseReply("err not ready").NotReady(),
+		"the old daemon's raw not-ready line no longer maps to NotReady")
+	require.False(t, parseReply("wat").NotReady(), "garbage is not the not-ready answer")
 }
 
 func TestRawConnectionCRLFAndEOFTermination(t *testing.T) {
 	_, path := listen(t, "v")
+	pingReq := `{"cmd":"ping"}`
+	pingOK := `{"ok":true}` + "\n"
 
-	// CRLF-terminated legacy request still parses (TrimSpace).
+	// A CRLF-terminated request still parses (TrimSpace).
 	conn, err := net.Dial("unix", path)
 	require.NoError(t, err)
-	_, err = conn.Write([]byte(CmdPing + "\r\n"))
+	_, err = conn.Write([]byte(pingReq + "\r\n"))
 	require.NoError(t, err)
 	buf := make([]byte, 64)
 	n, err := conn.Read(buf)
 	require.NoError(t, err)
-	require.Equal(t, ReplyOK+"\n", string(buf[:n]))
+	require.Equal(t, pingOK, string(buf[:n]))
 	require.NoError(t, conn.Close())
 
 	// A request terminated by closing the write side (no newline)
 	// also parses.
 	uc, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: path, Net: "unix"})
 	require.NoError(t, err)
-	_, err = uc.Write([]byte(CmdPing))
+	_, err = uc.Write([]byte(pingReq))
 	require.NoError(t, err)
 	require.NoError(t, uc.CloseWrite())
 	n, err = uc.Read(buf)
 	require.NoError(t, err)
-	require.Equal(t, ReplyOK+"\n", string(buf[:n]))
+	require.Equal(t, pingOK, string(buf[:n]))
 	require.NoError(t, uc.Close())
 }
 
