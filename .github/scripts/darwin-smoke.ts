@@ -546,6 +546,23 @@ async function scenarioA(): Promise<void> {
     return `${d}; ${await expectWindow(app, false, WINDOW_DEADLINE_MS)}`;
   });
 
+  // The config command is acked like every other cmd (ack-first: the
+  // summon-into-editor runs after the reply; the frontend editor lands in
+  // Phase C, so this is an IPC-ack check, not a UI check). Sent while
+  // hidden, after -- and clear of -- the toggle pair; the explicit hide
+  // restores the hidden state a7 left, so teardown sees no change.
+  await check("a9-config-ipc", async () => {
+    const r = jsonSend(app.sock, "config", RAW_RTT_MS);
+    if (!r.obj || r.obj.ok !== true || r.obj.accepted !== "config") {
+      throw new Error(`{"cmd":"config"} not acked: ${r.raw.detail}`);
+    }
+    const h = jsonSend(app.sock, "hide", RAW_RTT_MS);
+    if (!h.obj || h.obj.ok !== true) {
+      throw new Error(`restoring hide not acked: ${h.raw.detail}`);
+    }
+    return `${r.raw.detail}; restored hidden`;
+  });
+
   await stopApp(app);
 }
 

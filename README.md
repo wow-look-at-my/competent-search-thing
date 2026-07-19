@@ -633,16 +633,41 @@ reachable as an escape hatch for hand edits (unknown keys a hand edit
 added are surfaced in the editor and would be dropped by a GUI save;
 use the file for those).
 
-Settings apply LIVE where the wiring exists today, no restart:
+EVERY setting applies LIVE -- no restarts, no "restart required"
+badges:
 
-- `theme` (as before), `maxResults`, `search.fuzzyDisabled`
-- everything the plugin registry serves: `plugins`, `bangs`,
-  `rewrites`, `firefox`
+- `theme`, `maxResults`, `search.fuzzyDisabled`, and everything the
+  plugin registry serves (`plugins`, `bangs`, `rewrites`, `firefox`)
+  as before;
+- `roots` / `excludes` / `watcher.*` / `rescanIntervalMinutes`: the
+  watch layer is rebuilt with the new knobs and a background rescan
+  converges the index to the new scope while queries keep answering
+  from the previous one (fixing a broken exclude pattern even revives
+  a failed startup index build);
+- `hotkey`: the old registration is released and the new combination
+  registered through the same backend chain (X11 grab, portal,
+  GNOME keybinding). On the GNOME-keybinding backend a config change
+  rewrites the installed accelerator -- the one case that overrides
+  the usual stickiness, because the setting you just changed must
+  win; a GNOME-Settings edit still survives restarts as before. The
+  portal backend may show its approval dialog again;
+- `search.frecency`: the ranking blend is rebuilt with the new
+  weights (the learned open counts in `frecency.json` are kept);
+- `stats.disabled` / `tray.disabled`: the sampler/icon stops or
+  starts on the spot;
+- `history.persistDisabled`: the store flips persistence without
+  losing in-session recall;
+- `preview.*`: the pane's engine is rebuilt (keys, base URLs, caps)
+  and the window follows `preview.enabled`'s size;
+- `window.width` / `window.height`: the bar window resizes live (on
+  Linux via a native GTK path that also moves the fixed-size floor,
+  so shrinking below the boot size works).
 
-The remaining sections (roots/excludes, watcher, hotkey, window,
-preview, stats, tray, history, frecency, rescan interval) currently
-take effect on the next launch; their live-apply engines are in
-progress on this same branch -- the goal is every knob applying live.
+ONE deliberate exception: `window.translucent` takes effect at the
+next launch -- the per-pixel-alpha window visual can only be chosen
+when the window is created -- and the save/apply report says exactly
+that, by name (a `nextLaunch` list carrying `window.translucent`),
+rather than pretending a live path exists.
 
 Hand edits to `config.json` hot-apply through the same engine: the
 app watches the file (the theme hot-reload watcher) and re-applies

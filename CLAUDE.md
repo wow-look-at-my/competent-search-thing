@@ -343,18 +343,55 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (configapply.go): `applyConfig(next, origin)` diffs old->new per
   section over the `sectionAppliers` table (cfgCurrent baseline,
   seeded by Startup's startConfigState fresh Load, swapped per pass;
-  nil baseline = apply-all, appliers are idempotent), runs each
-  changed row's apply plus each named GROUP once per pass
-  (groupRegistry = one reloadRegistry covering plugins/bangs/
-  rewrites/firefox/search.fuzzyDisabled's plugin half), returns
-  ApplyResult{Applied, Pending, Errors} -- rows with nil apply land
-  in Pending (roots, excludes, hotkey, rescanIntervalMinutes,
-  search.frecency, watcher, tray, history, stats, window, preview --
-  the Phase-B slots; the table is meant to become total). Live now:
+  nil baseline = apply-all, appliers are idempotent; whole passes
+  serialized by applyMu and skipped once shuttingDown), runs each
+  changed row's apply plus each named GROUP once per pass, and
+  returns ApplyResult{Applied, Pending, Errors, NextLaunch}. The
+  table is TOTAL -- Pending stays empty; every section applies live:
   maxResults (Manager.SetMaxResults), search.fuzzyDisabled
   (Manager.SetFuzzyDisabled + registry), theme (existing
   GetTheme/watcher machinery), plugins/bangs/rewrites/firefox (the
-  registry group). External config.json edits hot-apply through the
+  groupRegistry reloadRegistry), roots/excludes/watcher/
+  rescanIntervalMinutes (groupIndexLayer = restartIndexLayer in
+  watch.go: Manager.SetRoots/SetExcludes + swap the live watchConfig
+  (seeded from Options in New, consumed by startWatch) + stop the
+  trio in Shutdown's order + startWatch + one background
+  Rescanner.Request so the index converges while queries keep
+  serving; an in-flight initial build just stores the values and
+  arms rescanOnWatchUp (startWatch requests the rescan at watch-up),
+  a FAILED initial build (buildFinished + trio down) is revived with
+  a fresh buildIndex), hotkey (applyHotkey in hotkey.go:
+  teardownHotkey -- shared with Shutdown, bumps the hkGen generation
+  so a stale async chain discards instead of storing over the
+  replacement -- then startHotkeyBackends(spec, force=true); force
+  reaches the gsettings backend as
+  gsettings.EnsureBindingWith(BindingOptions{ForceBinding}), the ONE
+  path allowed to rewrite the sticky GNOME accelerator (Applied
+  gains Rebound/PreviousBinding/RebindSkipped; all-taken keeps the
+  working binding with an honest notice, never an error); empty spec
+  = release only), search.frecency (applyFrecencyConfig: rebuild
+  store+blend over the SAME frecency.json, disabled = SetBlend(nil)),
+  tray/stats (teardown + rebuild through startTrayIcon/startStats;
+  disabling stats emits one Enabled-false snapshot so the row
+  hides), history (fresh store at the new persist flag: disk seed +
+  in-memory replay preserves recall), preview (applyPreview: live
+  previewCfg swap under previewMu + dispatcher rebuild;
+  GetPreviewConfig answers from live state), window.width/height
+  (groupWindowSize = applyWindowSize, fed by the window AND preview
+  rows: stores the live winW/winH/resultsW the positioning math and
+  GetPreviewConfig read, then resizes via plat.setWindowSize --
+  production native.SetWindowSize, linux-only GTK-thread
+  gtk_window_set_default_size + gtk_window_resize, because for a
+  DisableResize window GTK3 pins min=max to MAX(default size,
+  request) (gtk-3-24 gtk_window_update_fixed_size) so the Wails
+  runtime's bare gtk_window_resize can never shrink below the boot
+  size -- falling back to the rt.setSize runtime call, sufficient on
+  darwin/windows). The ONE ruled next-launch knob:
+  window.translucent (construction-time RGBA visual) is reported by
+  name in NextLaunch (ApplyResult/SaveResult/config:changed) with
+  one honest log line -- never a generic restart mechanism, and no
+  other knob may join it without an explicit ruling. External
+  config.json edits hot-apply through the
   THEME watcher (theme.go: a debounce batch touching cfgPath also
   runs handleConfigFileChange -- skip when the file's sha256 equals
   lastSavedSum (our own save), else fresh Load -> applyConfig
@@ -366,8 +403,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (once, from startWatch; see above), "app:shown", "theme:changed" (no
   payload; frontend refetches GetTheme/GetCustomCSS), "config:open"
   (no payload; enter config-editor mode), "config:changed" (payload
-  {applied,pending,error} -- an external edit hot-applied or failed
-  to load),
+  {applied,pending,nextLaunch,error} -- an external edit hot-applied
+  or failed to load; nextLaunch lists only the ruled
+  window.translucent),
   "plugin:results" (payload plugin.Emission
   {plugin,name,gen,results}), "stats:update" (payload
   sysstats.Snapshot {enabled,cpuPct,cpuOk,gpuPct,gpuOk,memUsed,
@@ -671,7 +709,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   = base name, pattern with separator = full path), symlinks indexed
   but never descended, permission errors counted not fatal, throttled
   progress callbacks. `Manager`: owns the RWMutex contract (queries
-  RLock, mutations Lock); `BuildFromDisk` walks into a fresh store and
+  RLock, mutations Lock); roots/excludes are LIVE-mutable now
+  (`SetRoots`/`SetExcludes`, the config editor's index-scope apply;
+  Roots/Excludes read under the lock and `BuildFromDisk` latches one
+  consistent copy at entry -- the live store is untouched until the
+  next rebuild); `BuildFromDisk` walks into a fresh store and
   swaps it in, so queries keep working during rebuilds -- and first
   recomputes the mount skip list (mounts.go: `SystemMountSkips` reads
   /proc/self/mounts, linux-only, nil on any failure; pure
@@ -1647,12 +1689,21 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   lowercase letters/digits, F1, Return, Escape, Tab, Up/Down/...);
   accelerator normalization treats <Primary>/<Ctrl>/<Ctl> as control,
   ignores modifier order and case (conflict detection).
-  `EnsureBinding(ctx, run, hk, command)` -> `Applied{Binding,
-  Requested, FellBack, Changed, Existing, InList, DiskBinding,
+  `EnsureBinding(ctx, run, hk, command)` (=
+  `EnsureBindingWith(..., BindingOptions{})`; the options variant's
+  ForceBinding -- wired ONLY from the app's config live-apply path --
+  rewrites an existing entry's accelerator to the requested hotkey
+  through the same conflict-checked candidate ladder, filling
+  Rebound/PreviousBinding on success, or RebindSkipped (a notice,
+  never an error -- the working binding is kept) when every candidate
+  is taken) -> `Applied{Binding,
+  Requested, FellBack, Changed, Existing, Rebound, PreviousBinding,
+  RebindSkipped, InList, DiskBinding,
   DiskCommand, Verified, VerifyNote}`: reads the media-keys
   custom-keybindings list; if the app's entry (fixed path ...
   /custom-keybindings/competent-search-thing/) exists it is STICKY --
-  the binding is never rewritten (user edits in GNOME Settings
+  the binding is never rewritten without ForceBinding (user edits in
+  GNOME Settings
   survive; Existing=true) and the stored command SELF-HEALS: it is
   rewritten (command key only; Repaired=true + PreviousCommand for
   the app's loud old->new repair log) when it can no longer launch
@@ -1810,7 +1861,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   geometry, unaffected); launchmint_linux.{go,h,c} = the GTK-thread
   credential mint: runOnGTKThread (g_main_context_is_owner inline
   check, else g_idle_add + cgo.Handle trampoline csRunOnGtk, bounded
-  wait, abandoned callbacks self-clean) and cs_mint(desktop_id) --
+  wait, abandoned callbacks self-clean) -- also reused by
+  windowsize_linux.go's `SetWindowSize(w,h)` (windowsize_other.go =
+  always false off linux), the config editor's live window resize:
+  cs_set_window_size (launchmint_linux.c, cs_find_toplevel) runs
+  gtk_window_set_default_size THEN gtk_window_resize on the GTK
+  thread, because GTK3 pins a non-resizable window's hints to
+  min=max=MAX(default size, request) on every move-resize
+  (gtk-3-24 gtk_window_update_fixed_size), making the construction
+  default a permanent shrink floor for the Wails runtime's bare
+  gtk_window_resize; moving the default moves the floor (verified
+  end-to-end under Xvfb: 780x550 -> 900x600 -> 640x480) -- and
+  cs_mint(desktop_id) --
   the mint DESCRIBES the launch with a real GAppInfo (the resolved
   handler's desktop entry, else a synthesized commandline appinfo
   flagged SUPPORTS_STARTUP_NOTIFICATION): GLib >= 2.76 asserts
@@ -2186,7 +2248,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   session and asserts boot + JSON-shaped IPC round-trips within hard
   deadlines + the legacy-rejection check (a8-legacy-rejected: a bare
   v1 line must earn the JSON invalid-request error or a silent
-  close, never the old raw "ok") + a real on-screen window via a compiled
+  close, never the old raw "ok") + the config-command ack
+  (a9-config-ipc: {"cmd":"config"} must earn
+  {"ok":true,"accepted":"config"}, sent hidden after a7 and clear of
+  the toggle pair, then an explicit hide restores the hidden state
+  -- an IPC-ack check, not a UI check) + a real on-screen window via a compiled
   CGWindowList Swift probe, including while a big index build is
   PROVABLY in flight (the hard B-midindex-window check: progress
   line present, completion line absent, before b1 runs) -- the step
