@@ -2136,7 +2136,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run build`
   in `frontend/` -> `wow-look-at-my/go-toolchain@v1`
   with `targets: linux/amd64,windows/amd64`, `cgo: 'true'`,
-  `timeout: '20'`, and env
+  `timeout: '20'`, `autorelease: 'false'`, and env
   `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> two
   `wow-look-at-my/actions@cache-upload#latest` hand-offs
   (`app-linux-amd64`, `app-windows-amd64` -- job hand-offs ride the
@@ -2192,7 +2192,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   URL only ever follows the default branch (master) -- a buildhost
   guarantee, do not re-verify it per project. This replaced
   go-toolchain's `autorelease` (removed in the 2026-07-17 cleanup #25;
-  restored as the explicit job the same day). The old autorelease also
+  restored as the explicit job the same day), and BOTH build jobs pin
+  `autorelease: 'false'` on their go-toolchain steps -- the action
+  DEFAULTS it to 'true', so #25's input-line removal had silently
+  re-enabled in-job publishing (extra app + server releases per push,
+  fixed 2026-07-19). The old autorelease also
   pushed the color-http example server binary to project
   `competent-search-thing/server`; that is deliberately NOT restored
   (dev sample, not a user-facing deliverable). Deb publishing (previous

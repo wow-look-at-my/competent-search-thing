@@ -30,6 +30,11 @@ jobs:
           targets: linux/amd64,windows/amd64
           cgo: 'true'
           timeout: '20'
+          # The dedicated publish job is the SINGLE publish path. The
+          # action DEFAULTS autorelease to 'true', so it must be pinned
+          # off explicitly or this job publishes all of build/ (incl.
+          # the example color-http server binary) to buildhost itself.
+          autorelease: 'false'
 
       - name: Hand off the linux binary to the publish job
         # Org-standard cache-backed hand-off (the wow-look-at-my/actions
@@ -142,6 +147,9 @@ jobs:
           targets: darwin/arm64
           cgo: 'true'
           timeout: '30'
+          # Same pinning as the linux job: the publish job is the single
+          # publish path, and the action defaults autorelease to 'true'.
+          autorelease: 'false'
 
       - name: GUI smoke (window + IPC round-trip)
         # HARD GATE: a smoke failure fails the darwin job (and with it
