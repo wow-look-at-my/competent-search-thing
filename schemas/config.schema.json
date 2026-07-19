@@ -23,8 +23,8 @@
     "rootsVersion": {
       "type": "integer",
       "minimum": 0,
-      "default": 3,
-      "description": "Roots-defaults version stamp, written by the app. 0 (or absent) marks a config from before whole-filesystem indexing: on load the app upgrades roots still set to the old default (the home directory) to the whole-filesystem default and appends the missing system excludes. Configs stamped below 3 additionally get the high-churn noise exclude patterns (.hg, .svn, __pycache__, ...) appended -- but only when the exclude list still carries all three base patterns (.git, node_modules, .cache); curated or emptied lists are stamped only. Every change is logged loudly, the stamp advances to 3, and the file is rewritten once. Customized roots are never touched by the migration. Do not edit by hand unless you want the migration to run again."
+      "default": 4,
+      "description": "Roots-defaults version stamp, written by the app. 0 (or absent) marks a config from before whole-filesystem indexing: on load the app upgrades roots still set to the old default (the home directory) to the whole-filesystem default and appends the missing system excludes. Configs stamped below 3 additionally get the high-churn noise exclude patterns (.hg, .svn, __pycache__, ...) appended, and on macOS configs stamped below 4 get the firmlink-dedup exclude /System/Volumes/Data (the same files macOS also shows at /Users, /Applications, ...) -- each addition only when the exclude list still carries all three base patterns (.git, node_modules, .cache); curated or emptied lists are stamped only. Every change is logged loudly, the stamp advances to 4, and the file is rewritten once. Customized roots are never touched by the migration. Do not edit by hand unless you want the migration to run again."
     },
     "excludes": {
       "type": "array",
@@ -554,7 +554,7 @@
       "roots": [
         "/"
       ],
-      "rootsVersion": 3,
+      "rootsVersion": 4,
       "excludes": [
         ".git",
         "node_modules",

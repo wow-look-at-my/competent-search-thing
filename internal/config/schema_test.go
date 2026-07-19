@@ -55,7 +55,7 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 	// too (built from the Go structs so renames are caught here).
 	full := Config{
 		Roots:                 []string{"/home/me"},
-		RootsVersion:          3,
+		RootsVersion:          4,
 		Excludes:              []string{".git", "*.tmp", "/home/*/secret"},
 		Hotkey:                "ctrl+shift+k",
 		RescanIntervalMinutes: 30,
