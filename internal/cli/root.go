@@ -35,6 +35,10 @@ type RunOptions struct {
 	// frontend is ready (set when a toggle/show subcommand had to
 	// start the app itself).
 	ShowOnStartup bool
+	// OpenConfig asks the app to open the bar straight into its
+	// config editor once the frontend is ready (set when the config
+	// subcommand had to start the app itself).
+	OpenConfig bool
 }
 
 // env is the state every command builder closes over: the app version,
