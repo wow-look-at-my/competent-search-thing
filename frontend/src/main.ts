@@ -13,6 +13,7 @@
 // theme.ts; the opt-in preview pane lives in preview.ts (wired below
 // through GetPreviewConfig + the selection/query hooks).
 
+import { configModeActive, initConfig } from "./config";
 import {
   initPreview,
   previewOnQueryChange,
@@ -375,16 +376,21 @@ function activatePlugin(
     setQueryLocal(app, action.value ?? "");
     return;
   }
-  const staysOpen =
+  const copyFlash =
     action.type === "copy_text" ||
     (action.type === "run_builtin" && action.value === "version");
+  // run_builtin "config" summons the in-app config editor: the Go
+  // side keeps the bar up (showConfig), so the visible flag must not
+  // be dropped -- but it earns no "Copied" flash either.
+  const staysOpen =
+    copyFlash || (action.type === "run_builtin" && action.value === "config");
   if (!staysOpen) {
     state.visible = false; // the Go side hides the bar on success
   }
   app
     .RunPluginAction(pluginId, action)
     .then(() => {
-      if (staysOpen) {
+      if (copyFlash) {
         flashStatus("Copied", FLASH_COPIED_MS);
       }
       commitHistory(app); // the action actually ran
@@ -520,6 +526,12 @@ function hideBar(app: WailsAppBindings): void {
 }
 
 function onKeydown(app: WailsAppBindings, ev: KeyboardEvent): void {
+  if (configModeActive()) {
+    // config.ts owns the keys in editor mode (its own window handler
+    // covers Esc and Ctrl+S; everything else keeps its default so
+    // form controls behave like form controls).
+    return;
+  }
   switch (ev.key) {
     case "ArrowDown":
       ev.preventDefault();
@@ -664,6 +676,9 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
     .catch((err: unknown) => {
       console.warn("preview config fetch failed: " + String(err));
     });
+  // The config editor mode (config.ts): wiring only -- the schema and
+  // config document load lazily on the first "config:open".
+  initConfig(app, rt);
   inputEl.addEventListener("input", () => {
     state.histCursor = -1; // typing exits history browse mode
     scheduleSearch(app);
@@ -694,7 +709,10 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
     { passive: false },
   );
   window.addEventListener("blur", () => {
-    if (state.visible) {
+    // The blur auto-hide is suppressed in config mode: users alt-tab
+    // away to check things mid-edit, and losing the editor (plus its
+    // unsaved changes' visibility) on focus loss would be hostile.
+    if (state.visible && !configModeActive()) {
       hideBar(app);
     }
   });

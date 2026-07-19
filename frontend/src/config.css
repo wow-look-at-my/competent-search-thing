@@ -1,0 +1,378 @@
+/* Config editor mode (imported by config.ts, the highlight.ts /
+   hljs-theme.css pattern). Scoped to #config-pane, .config-*, and
+   body.with-config; every color/size flows through the existing
+   --sb-* tokens with literal dark fallbacks -- NO new --sb-* token
+   anywhere (the style.css :root block is a sync_test.go contract).
+   Without the with-config body class every rule here is inert, so the
+   default bar layout is byte-identical to the pre-editor one (the CI
+   screenshots depend on that). */
+
+#config-pane {
+  display: none;
+}
+
+/* Mode switch: config mode hides every normal bar region and the
+   editor fills the whole bar. The `#bar #x` selectors carry two ids,
+   so they out-rank the body.with-preview rules (one id) regardless of
+   bundle order -- config mode wins while both body classes are
+   present (the preview pane stays out of config mode). */
+body.with-config #bar #query-row,
+body.with-config #bar #results,
+body.with-config #bar #status,
+body.with-config #bar #stats,
+body.with-config #bar #preview-pane {
+  display: none;
+}
+
+/* Works as a flex child of the default #bar column AND as a grid item
+   of the with-preview grid (the grid-* placements are ignored in the
+   flex case), so the editor fills the bar either way. */
+body.with-config #bar #config-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+}
+
+/* Form controls hold editable text; the global user-select: none
+   would block caret selection inside them on WebKitGTK. */
+#config-pane input,
+#config-pane textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* --- header (title + the settings filter) -------------------------- */
+
+#config-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sb-gap, 10px);
+  padding: 10px var(--sb-padding, 16px);
+  border-bottom: 1px solid var(--sb-bg-elevated, #2c2c33);
+}
+
+#config-title {
+  flex: 0 0 auto;
+  font-size: calc(var(--sb-font-size, 14px) + 2px);
+  font-weight: 600;
+  color: var(--sb-fg, #f2f2f5);
+}
+
+#config-filter {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: var(--sb-font-size-small, 12px);
+  color: var(--sb-fg, #f2f2f5);
+  caret-color: var(--sb-accent, #8db8ff);
+  background: color-mix(in srgb, var(--sb-bg, #18181c) 55%, transparent);
+  border: 1px solid var(--sb-border, #3a3a42);
+  border-radius: calc(var(--sb-radius, 10px) * 0.5);
+  outline: none;
+}
+
+#config-filter::placeholder {
+  color: var(--sb-fg-dim, #8a8a94);
+}
+
+#config-filter:focus {
+  border-color: var(--sb-accent, #8db8ff);
+}
+
+/* --- notices (unknown keys, save summary, external changes) -------- */
+
+#config-notices {
+  flex: 0 0 auto;
+  max-height: 32%;
+  overflow-y: auto;
+}
+
+.config-notice {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px var(--sb-padding, 16px);
+  font-size: calc(var(--sb-font-size-small, 12px) - 1px);
+  line-height: 1.4;
+  color: var(--sb-fg-dim, #8a8a94);
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--sb-border, #3a3a42) 45%, transparent);
+}
+
+.config-notice-warn {
+  color: var(--sb-warning, #d9a13d);
+}
+
+.config-notice-error {
+  color: var(--sb-warning, #d9a13d);
+  font-weight: 600;
+}
+
+/* --- scrollable settings body -------------------------------------- */
+
+#config-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px var(--sb-padding, 16px) 14px;
+  color: var(--sb-fg, #f2f2f5);
+  font-size: var(--sb-font-size, 14px);
+}
+
+#config-body::-webkit-scrollbar,
+#config-notices::-webkit-scrollbar {
+  width: 8px;
+}
+
+#config-body::-webkit-scrollbar-thumb,
+#config-notices::-webkit-scrollbar-thumb {
+  background: var(--sb-scrollbar, rgba(255, 255, 255, 0.14));
+  border-radius: calc(var(--sb-radius, 10px) * 0.4);
+}
+
+#config-body::-webkit-scrollbar-track,
+#config-notices::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* --- sections (one per schema object node, nested for sub-objects) - */
+
+.config-section {
+  margin-top: 14px;
+}
+
+.config-section .config-section {
+  margin-left: 12px;
+}
+
+.config-section-header {
+  padding: 4px 0 3px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sb-fg-dim, #8a8a94);
+  border-bottom: 1px solid var(--sb-border, #3a3a42);
+}
+
+.config-section-title {
+  margin-left: 8px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  opacity: 0.8;
+}
+
+.config-section-note {
+  margin: 5px 0 2px;
+  font-size: calc(var(--sb-font-size-small, 12px) - 1px);
+  line-height: 1.45;
+  color: var(--sb-fg-dim, #8a8a94);
+}
+
+/* --- one setting row: label + control over the help text ----------- */
+
+.config-row {
+  padding: 8px 0 7px;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--sb-border, #3a3a42) 45%, transparent);
+}
+
+.config-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sb-gap, 10px);
+}
+
+.config-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--sb-font-size, 14px);
+  color: var(--sb-fg, #f2f2f5);
+}
+
+.config-help {
+  margin-top: 3px;
+  font-size: calc(var(--sb-font-size-small, 12px) - 1px);
+  line-height: 1.45;
+  color: var(--sb-fg-dim, #8a8a94);
+}
+
+/* --- controls ------------------------------------------------------ */
+
+.config-input,
+.config-select,
+.config-textarea {
+  font-family: inherit;
+  font-size: var(--sb-font-size-small, 12px);
+  color: var(--sb-fg, #f2f2f5);
+  caret-color: var(--sb-accent, #8db8ff);
+  background: color-mix(in srgb, var(--sb-bg, #18181c) 55%, transparent);
+  border: 1px solid var(--sb-border, #3a3a42);
+  border-radius: calc(var(--sb-radius, 10px) * 0.5);
+  padding: 4px 8px;
+  outline: none;
+}
+
+.config-input:focus,
+.config-select:focus,
+.config-textarea:focus {
+  border-color: var(--sb-accent, #8db8ff);
+}
+
+/* Invalid (unparseable) values: declared AFTER the :focus rule so the
+   warning border wins at equal specificity even while focused. */
+.config-input.config-invalid,
+.config-textarea.config-invalid {
+  border-color: var(--sb-warning, #d9a13d);
+}
+
+.config-row-top .config-input {
+  flex: 0 1 auto;
+  width: 240px;
+  max-width: 55%;
+}
+
+.config-row-top .config-input.config-number {
+  width: 110px;
+}
+
+.config-select option {
+  background: var(--sb-bg-elevated, #2c2c33);
+  color: var(--sb-fg, #f2f2f5);
+}
+
+.config-toggle {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--sb-accent, #8db8ff);
+}
+
+/* Secret fields: password input + the show/hide toggle. */
+.config-secret {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 60%;
+}
+
+.config-secret .config-input {
+  flex: 1 1 auto;
+  min-width: 120px;
+  width: 190px;
+}
+
+/* Wide controls (string lists, key/value maps, raw JSON) sit under
+   the label at full width. Monospace: lists hold paths/patterns and
+   the JSON sub-editors hold JSON. */
+.config-textarea {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.45;
+  white-space: pre;
+  overflow-x: auto;
+  resize: vertical;
+}
+
+/* Key/value map editor (bangs.aliases). */
+.config-kv {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.config-kv-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.config-kv-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.config-kv-row .config-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+
+/* --- bottom strip: flash, dirty note, and the action buttons ------- */
+
+#config-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sb-gap, 10px);
+  padding: 8px var(--sb-padding, 16px);
+  border-top: 1px solid var(--sb-border, #3a3a42);
+}
+
+.config-flash {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--sb-font-size-small, 12px);
+  color: var(--sb-fg, #f2f2f5);
+}
+
+#config-dirty-note {
+  flex: 0 0 auto;
+  font-size: calc(var(--sb-font-size-small, 12px) - 1px);
+  color: var(--sb-warning, #d9a13d);
+  white-space: nowrap;
+}
+
+.config-btn {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: var(--sb-font-size-small, 12px);
+  color: var(--sb-fg, #f2f2f5);
+  background: transparent;
+  border: 1px solid var(--sb-border, #3a3a42);
+  border-radius: calc(var(--sb-radius, 10px) * 0.6);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.config-btn:hover:not(:disabled) {
+  color: var(--sb-accent, #8db8ff);
+  border-color: var(--sb-accent, #8db8ff);
+}
+
+.config-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+#config-save-btn.config-btn-dirty {
+  color: var(--sb-accent, #8db8ff);
+  border-color: var(--sb-accent, #8db8ff);
+}
