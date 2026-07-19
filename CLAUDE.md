@@ -1939,7 +1939,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the value text; #preview-pane
   (spinner + #preview-body + command strip with the web/AI buttons
   and the pane flash) as one more #bar child, display:none unless
-  body.with-preview; <template>s for
+  body.with-preview; #config-pane (header with #config-title +
+  #config-filter, #config-notices, #config-body, #config-strip with
+  flash + dirty note + Open config.json / Close / Save buttons) as
+  the last #bar child, display:none unless body.with-config -- all
+  editor rows/controls are built dynamically by config.ts, so no
+  templates; <template>s for
   folder/file icons AND plugin section/row skeletons) + `src/main.ts`
   (search as-you-type: 15ms debounce + sequence-number stale-response
   drop; every generation also fire-and-forgets QueryPlugins(query,
@@ -1989,13 +1994,20 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   frontend-local (replace input, caret to end, re-run the pipeline),
   everything else goes to RunPluginAction -- Go owns bar-hide per
   action type; copy_text and run_builtin "version" stay open and flash
-  "Copied" ~1.2s in the status bar, action errors -- plugin actions
+  "Copied" ~1.2s in the status bar, run_builtin "config" stays open
+  WITHOUT the flash (Go summons the editor instead of hiding, so the
+  visible flag must survive), action errors -- plugin actions
   AND file-row open/reveal failures -- flash ~2s; #empty
   shows only when a non-blank query has neither files nor sections;
   Tab/Shift+Tab are preventDefaulted no-ops reserved for future use
   (the default focus traversal would leave the input -- the bar's
   only focusable element -- and the webview, tripping the blur-hide);
-  Esc + window blur -> Hide; runtime events: "app:shown" -> CLEAR
+  Esc + window blur -> Hide -- BOTH gated on !configModeActive()
+  (config.ts): in config mode the document keydown handler
+  early-returns entirely (arrows/Enter/Tab must behave like form
+  keys; config.ts's own window handler owns Esc + Ctrl/Cmd+S) and the
+  blur auto-hide is suppressed (users alt-tab away mid-edit) -- the
+  ONLY two main.ts config gates; runtime events: "app:shown" -> CLEAR
   the input (the bar always summons empty; the pre-hide text is
   deliberately dropped) + reset histCursor + focus + refresh (renders
   the cheat sheet; plugins re-query through the same path) + a
@@ -2072,13 +2084,22 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   preview-off and must stay that way, the 780x550 default-geometry
   window regex in
   screenshots.ts depends on it) + `src/preview.ts` (ALL pane logic;
-  initPreview is called from wire() with the GetPreviewConfig answer
-  and installs NOTHING when enabled is false -- no body class, no
-  listeners, hooks no-op; enabled: sets body.with-preview, subscribes
-  "preview:result" (drop unless payload.gen === its own previewGen
+  initPreview is called once from wire() with the GetPreviewConfig
+  answer and wires elements + listeners UNCONDITIONALLY -- each
+  handler gates on the live `enabled` flag -- then hands the answer
+  to the exported `applyPreviewConfig(cfg)`, which config.ts
+  re-invokes with a fresh GetPreviewConfig after every GUI save and
+  on every "config:changed" (the backend applies preview config
+  live, so the pane mounts/unmounts/resizes without a relaunch):
+  enabled toggles body.with-preview + renderIdle on mount, updates
+  --preview-results-col, and setTrigger reflects each provider's key
+  state on its strip button in BOTH directions; while disabled every
+  hook/handler no-ops. The subscription
+  "preview:result" (drop unless enabled AND payload.gen === its own
+  previewGen
   counter, cancel the 150ms-delayed spinner on the first accepted
   payload, REPLACE the pane content per emission -- a fast meta card
-  precedes the rich payload, cache hits skip it), and registers its
+  precedes the rich payload, cache hits skip it) and its
   OWN window keydown handler for Ctrl/Cmd+K (web) / Ctrl/Cmd+I (AI)
   -- main.ts's document handler is untouched, Tab and Ctrl+Enter
   stay reserved. previewOnSelectionChange (called from select(), the
@@ -2099,6 +2120,59 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Go validates, opens, hides the bar), ai (answer + model/cached
   badges + a Copy button through copy_text, <= 8 KiB Go-side, with a
   "Copied"/error flash in the pane strip), error card) +
+  `src/config.ts` + `src/config.css` (the CONFIG EDITOR MODE --
+  initConfig wires from wire(), everything else is lazy on the first
+  "config:open": fetch + cache GetConfigSchema (embedded, immutable)
+  and JSON.parse GetConfigForEdit's configJson into a WORKING COPY,
+  set body.with-config (config.css hides every normal bar region via
+  two-id selectors that out-rank the with-preview grid rules
+  regardless of bundle order; #config-pane fills the bar as flex
+  child OR spanning grid item), render the whole settings UI from
+  the schema's top-level properties IN SCHEMA ORDER and focus the
+  filter. The renderer is a generic schema walk (resolve() follows
+  "#/$defs/" refs; classify() picks the control): object-with-
+  properties = nested section (dotted-path header + title +
+  description note), boolean = checkbox, string enum = select,
+  integer/number = number input carrying schema min/max as UX ONLY
+  (Go owns validation; unparseable input marks the row invalid and
+  blocks save by name), string = text input -- except descriptions
+  starting "SECRET:" = password input + show/hide toggle, never
+  echoed elsewhere; array-of-string = one-per-line textarea
+  (trimmed, blanks dropped); object whose patternProperties values
+  are all strings = key/value row editor with add/remove
+  (bangs.aliases); EVERYTHING else (plugins.entries, rewrites, any
+  future shape) = raw-JSON textarea that must JSON.parse before save
+  ("invalid JSON" marks + blocks). rootsVersion and "$schema" are
+  hidden (app-managed / hint). The filter hides rows by dotted path
+  + description, then sections left empty. Controls write through
+  setVal -> setPath into the working copy (dirty note + accent Save
+  button); Save (button/Ctrl+S) = SaveConfig(JSON.stringify(doc)) ->
+  error strips verbatim on failure, else "Saved" flash + notices
+  (Applied live list, per-knob "<knob> takes effect at next launch"
+  for nextLaunch/pending -- NEVER "restart" wording -- applyErrors
+  as warnings), re-fetch (Normalize's repaired truth; fresh doc
+  clears the summary slate first) + re-render preserving scroll/
+  filter, and refreshPreviewConfig (GUI saves fire no config:changed
+  -- self-write suppression -- so the applyPreviewConfig refresh
+  runs here). GetConfigForEdit's unknownKeys render a persistent
+  warning strip (dropped-if-saved; points at Open config.json,
+  which calls OpenConfigFile and keeps the editor open).
+  "config:changed" (external edit): editor closed = preview refresh
+  only; open + clean = silent re-fetch/re-render + transient
+  "changed on disk -- reloaded" flash + the event's own summary;
+  open + dirty = keep the edits, show a "changed on disk" strip
+  with a Reload button; event error = error strip, doc kept. MODE
+  EXITS: Esc/Close clean = leave + focus #query (previous bar state
+  byte-identical); dirty = first press flashes "unsaved changes --
+  press Esc again to discard", second within 2s discards; every
+  "app:shown" drops the mode (hide from ANY path -> next summon is
+  a normal bar) while PRESERVING an unsaved working copy in memory
+  -- the next config:open this run restores it with the dirty note
+  + "restored unsaved edits" flash (a clean editor re-fetches
+  fresh). Own window keydown handler (Esc + Ctrl/Cmd+S, mode-gated);
+  configModeActive() is the export main.ts gates on. All DOM is
+  text-node-only; config.css consumes existing --sb-* tokens with
+  literal dark fallbacks -- NO new --sb-* token, no :root block) +
   `src/highlight.ts` (hljs lib/core + explicitly registered grammars
   covering every LangHint name in the hljs distribution plus
   shell/plaintext -- never import the full highlight.js bundle;
@@ -2121,10 +2195,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   window field and the internal desktop_id the frontend echoes back
   unchanged)/PluginResult/PluginEmission plus the preview contract
   Preview{Target,Payload,ConfigInfo,MetaRow,Text,Image,Dir,DirEntry,
-  Web,WebResult,AI} and the four preview bound methods -- keep in
+  Web,WebResult,AI} and the four preview bound methods, plus the
+  config-editor contract ConfigForEdit/ConfigSaveResult/
+  ConfigChangedEvent (Go nil slices arrive as null -- the applied/
+  pending fields are `string[] | null`) and the four config bound
+  methods GetConfigSchema/GetConfigForEdit/SaveConfig/OpenConfigFile
+  -- keep in
   sync with internal/app + internal/plugin + internal/preview +
   internal/sysstats payload
-  structs).
+  structs; field names lockstep with configui.go/configapply.go json
+  tags).
 - `examples/plugins/` -- three shipped example plugins, INERT until a
   user copies one into `<configDir>/plugins/` (each has a README with
   install/usage): `calc` (python3 command plugin: trigger prefix "=",

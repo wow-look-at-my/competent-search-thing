@@ -624,14 +624,49 @@ WebView2 runtime is required (preinstalled on Windows 11).
 
 The app carries a built-in config editor: run
 `competent-search-thing config`, type `!config` into the bar, or pick
-"Open config" from the tray icon, and the bar opens in editor mode
-(the editor UI itself is landing in a later phase on this branch; the
-whole backend surface -- the summon paths, the save/apply engine, and
-the IPC command -- is in place). The editor validates against the
-shipped JSON Schema, saves atomically, and keeps `config.json` itself
-reachable as an escape hatch for hand edits (unknown keys a hand edit
-added are surfaced in the editor and would be dropped by a GUI save;
-use the file for those).
+"Open config" from the tray icon, and the bar switches into editor
+mode (the same single window -- no second window, no dialog).
+
+The editor is rendered ENTIRELY from the shipped JSON Schema
+(`schemas/config.schema.json`), so every setting appears with its
+real type and its full documentation:
+
+- booleans are toggles, enums dropdowns, numbers spinners carrying
+  the schema's bounds, strings text fields; every control shows the
+  schema description as help text, and a filter box at the top
+  narrows the ~50 settings by name or description;
+- the two API keys (`preview.kagi.apiKey`, `preview.openai.apiKey`)
+  render as password fields with a show/hide toggle and are never
+  echoed anywhere else;
+- string lists (`roots`, `excludes`, `watcher.watchExcludes`,
+  `bangs.sigils`) are one-entry-per-line editors; `bangs.aliases` is
+  a key/value row editor with add/remove;
+- everything without a dedicated control -- `plugins.entries` (with
+  its opaque per-plugin `settings`), `rewrites`, and any shape the
+  schema grows later -- falls back to a raw-JSON sub-editor that must
+  parse before a save is allowed.
+
+Saving (the button or Ctrl+S) round-trips through the Go side: a
+strict decode (typos are named with a line number), atomic write,
+then the live-apply pass -- and the editor reports exactly what
+happened: the applied sections, any per-knob "takes effect at next
+launch" note (see below), and any apply errors, then re-fetches so
+the app-repaired values are what you see. Esc (or Close) leaves the
+editor; with unsaved edits the first press warns and a second within
+two seconds discards them. Hiding the bar mid-edit (hotkey, tray,
+`hide`) keeps the unsaved working copy in memory: the next summon is
+the normal search bar, and reopening the editor in the same run
+restores the edits with the unsaved-changes note showing. While the
+editor is up, alt-tabbing away does NOT hide the window (the normal
+focus-loss auto-hide is suspended so you can check things mid-edit).
+
+`config.json` itself stays reachable as an escape hatch via the
+"Open config.json" button: unknown keys a hand edit added are listed
+in a warning strip -- a GUI save would drop them, so make those edits
+in the file. If the file changes on disk while the editor is open
+(the app hot-applies external edits), a clean editor reloads
+silently; one with unsaved edits keeps them and offers a Reload
+button instead.
 
 EVERY setting applies LIVE -- no restarts, no "restart required"
 badges:

@@ -195,6 +195,7 @@ async function enterMode(): Promise<void> {
     console.warn("config editor load failed: " + String(err));
     return;
   }
+  lastSummary = []; // never open onto a previous session's summary
   active = true;
   escArmedAt = 0;
   document.body.classList.add("with-config");
@@ -245,6 +246,7 @@ async function fetchDoc(): Promise<void> {
   loadWarning = fe.loadWarning ?? "";
   dirty = false;
   externalChange = false;
+  lastSummary = []; // a fresh document is a fresh slate
 }
 
 function getPath(obj: unknown, path: string[]): unknown {
@@ -326,16 +328,17 @@ function doSave(): void {
         flash("save failed", FLASH_ERROR_MS);
         return;
       }
-      lastSummary = buildSummary(res);
       escArmedAt = 0;
       flash("Saved", FLASH_OK_MS);
       // Re-fetch so the editor shows the repaired (Normalize) truth,
-      // then re-render preserving scroll and filter.
+      // then re-render preserving scroll and filter. The summary is
+      // set AFTER the fetch (which starts a fresh slate).
       try {
         await fetchDoc();
       } catch (err: unknown) {
         console.warn("config refetch after save failed: " + String(err));
       }
+      lastSummary = buildSummary(res);
       const scrollTop = bodyEl.scrollTop;
       renderEditor();
       bodyEl.scrollTop = scrollTop;
