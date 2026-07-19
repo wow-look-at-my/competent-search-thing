@@ -6,8 +6,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,25 +79,43 @@ func run(t *testing.T, gui *guiRecorder, args ...string) (code int, stdout, stde
 	return code, out.String(), errOut.String()
 }
 
-// ipcCounters tracks handler invocations on a live test server.
-type ipcCounters struct {
-	toggles, shows, hides atomic.Int32
+// ipcSignals carries per-command invocation signals from a live test
+// server. The server acknowledges before running a handler, so tests
+// wait for the matching signal instead of asserting side effects right
+// after a Send returned.
+type ipcSignals struct {
+	toggles, shows, hides chan struct{}
 }
 
-// liveServer starts a real IPC server with counting handlers on the
+// liveServer starts a real IPC server with signalling handlers on the
 // test socket.
-func liveServer(t *testing.T, path string) *ipcCounters {
+func liveServer(t *testing.T, path string) *ipcSignals {
 	t.Helper()
 	srv, err := ipc.Listen(path, testVersion)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Close() })
-	c := &ipcCounters{}
+	c := &ipcSignals{
+		toggles: make(chan struct{}, 8),
+		shows:   make(chan struct{}, 8),
+		hides:   make(chan struct{}, 8),
+	}
 	srv.SetHandlers(ipc.Handlers{
-		Toggle: func() { c.toggles.Add(1) },
-		Show:   func() { c.shows.Add(1) },
-		Hide:   func() { c.hides.Add(1) },
+		Toggle: func() { c.toggles <- struct{}{} },
+		Show:   func() { c.shows <- struct{}{} },
+		Hide:   func() { c.hides <- struct{}{} },
 	})
 	return c
+}
+
+// awaitHandler waits for one invocation signal from a liveServer
+// handler channel.
+func awaitHandler(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the %s handler never ran", what)
+	}
 }
 
 func TestRootStartsGUIWithServer(t *testing.T) {
@@ -127,8 +145,81 @@ func TestRootSecondInstanceShowsTheFirst(t *testing.T) {
 	code, stdout, _ := run(t, gui)
 	require.Equal(t, 0, code)
 	require.Contains(t, stdout, "competent-search-thing is already running; showing it")
-	require.Equal(t, int32(1), c.shows.Load(), "the running instance was asked to show")
+	awaitHandler(t, c.shows, "show")
 	require.Equal(t, 0, gui.count(), "no second GUI starts")
+}
+
+func TestRootSecondInstanceStillStartingUp(t *testing.T) {
+	path := testSocketEnv(t)
+	srv, err := ipc.Listen(path, testVersion)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
+	// No SetHandlers: the instance is "booting".
+	gui := &guiRecorder{}
+
+	code, stdout, stderr := run(t, gui)
+	require.Equal(t, 0, code)
+	require.Contains(t, stdout, "competent-search-thing is already running (still starting up)")
+	require.NotContains(t, stdout, "showing it", "no confirmed-show claim on a not-ready reply")
+	require.Empty(t, stderr)
+	require.Equal(t, 0, gui.count())
+}
+
+func TestRootReportsUnresponsiveInstance(t *testing.T) {
+	path := testSocketEnv(t)
+	// A fake instance that accepts and closes without ever replying:
+	// the stale-socket probe still sees a live socket (so Listen says
+	// ErrAlreadyRunning) while the show exchange itself fails -- and
+	// does so immediately, no client-timeout wait.
+	ln, err := net.Listen("unix", path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	gui := &guiRecorder{}
+
+	code, stdout, stderr := run(t, gui)
+	require.Equal(t, 1, code)
+	require.Empty(t, stdout, "no 'showing it' claim when the show failed")
+	require.Contains(t, stderr, "competent-search-thing is already running but did not respond")
+	require.Equal(t, 1, strings.Count(stderr, "already running but did not respond"),
+		"the notice prints once, not doubled by cobra")
+	require.Equal(t, 0, gui.count())
+}
+
+func TestRootReportsUnexpectedReply(t *testing.T) {
+	path := testSocketEnv(t)
+	// A fake instance that answers garbage to the show request.
+	ln, err := net.Listen("unix", path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 64)
+			_, _ = conn.Read(buf)
+			_, _ = conn.Write([]byte("wat\n"))
+			_ = conn.Close()
+		}
+	}()
+	gui := &guiRecorder{}
+
+	code, stdout, stderr := run(t, gui)
+	require.Equal(t, 1, code)
+	require.Empty(t, stdout)
+	require.Contains(t, stderr, "already running but did not respond")
+	require.Contains(t, stderr, `unexpected reply "wat"`)
+	require.Equal(t, 0, gui.count())
 }
 
 func TestRootRunsGUIWithoutIPCWhenListenFails(t *testing.T) {
@@ -160,7 +251,7 @@ func TestToggleTalksToRunningInstance(t *testing.T) {
 
 	code, _, _ := run(t, gui, "toggle")
 	require.Equal(t, 0, code)
-	require.Equal(t, int32(1), c.toggles.Load())
+	awaitHandler(t, c.toggles, "toggle")
 	require.Equal(t, 0, gui.count())
 }
 
@@ -171,7 +262,7 @@ func TestShowTalksToRunningInstance(t *testing.T) {
 
 	code, _, _ := run(t, gui, "show")
 	require.Equal(t, 0, code)
-	require.Equal(t, int32(1), c.shows.Load())
+	awaitHandler(t, c.shows, "show")
 	require.Equal(t, 0, gui.count())
 }
 
@@ -182,7 +273,7 @@ func TestHideTalksToRunningInstance(t *testing.T) {
 
 	code, _, stderr := run(t, gui, "hide")
 	require.Equal(t, 0, code, "stderr: %s", stderr)
-	require.Equal(t, int32(1), c.hides.Load())
+	awaitHandler(t, c.hides, "hide")
 	require.Equal(t, 0, gui.count())
 }
 
@@ -249,6 +340,24 @@ func TestSummonTreatsNotReadyAsSuccess(t *testing.T) {
 		require.Equal(t, 0, code, "%s against a booting instance succeeds (stderr: %s)", sub, stderr)
 	}
 	require.Equal(t, 0, gui.count())
+}
+
+func TestSummonNotReadyPrintsNotice(t *testing.T) {
+	path := testSocketEnv(t)
+	srv, err := ipc.Listen(path, testVersion)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Close() })
+	// No SetHandlers: the instance is "booting".
+
+	for _, sub := range []string{"toggle", "show"} {
+		gui := &guiRecorder{}
+		code, stdout, stderr := run(t, gui, sub)
+		require.Equal(t, 0, code, sub)
+		require.Contains(t, stdout,
+			"competent-search-thing is still starting up; it may take a moment to respond", sub)
+		require.Empty(t, stderr, sub)
+		require.Equal(t, 0, gui.count(), sub)
+	}
 }
 
 func TestUnexpectedReplyIsAnError(t *testing.T) {

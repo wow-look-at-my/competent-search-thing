@@ -37,11 +37,22 @@ type RunOptions struct {
 	ShowOnStartup bool
 }
 
-// env is the state every command builder closes over: the app version
-// and the blocking GUI entry point.
+// env is the state every command builder closes over: the app version,
+// the blocking GUI entry point, and the process stdout for the
+// user-facing notices summon prints (injectable in tests).
 type env struct {
 	version string
 	runGUI  func(RunOptions) error
+	out     io.Writer
+}
+
+// stdout returns the notice writer, defaulting to os.Stdout when none
+// was injected (the cobra OutOrStdout convention).
+func (e *env) stdout() io.Writer {
+	if e.out != nil {
+		return e.out
+	}
+	return os.Stdout
 }
 
 // commandBuilders collects the subcommand constructors. Each
@@ -81,22 +92,47 @@ func newRoot(e *env) *cobra.Command {
 
 // runRoot is the bare-invocation GUI path: acquire the single-instance
 // socket, then run the GUI. When another instance already holds the
-// socket, show that one and exit cleanly instead; when the socket
-// cannot be created at all, run the GUI without IPC rather than not at
-// all.
+// socket, ask it to show its bar and report what actually happened;
+// when the socket cannot be created at all, run the GUI without IPC
+// rather than not at all.
 func runRoot(cmd *cobra.Command, e *env) error {
 	path := ipc.SocketPath(os.Getenv)
 	srv, err := ipc.Listen(path, e.version)
 	if err != nil {
 		if errors.Is(err, ipc.ErrAlreadyRunning) {
-			_, _ = ipc.Send(path, ipc.CmdShow, sendTimeout)
-			fmt.Fprintln(cmd.OutOrStdout(), "competent-search-thing is already running; showing it")
-			return nil
+			return showRunningInstance(cmd, path)
 		}
 		log.Printf("ipc: %v (running without single-instance IPC)", err)
 		srv = nil
 	}
 	return e.runGUI(RunOptions{Server: srv})
+}
+
+// showRunningInstance is the second-launch path: deliver "show" to the
+// instance holding the socket and report honestly -- "showing it" only
+// on a confirmed acknowledgement, a still-starting notice on a
+// not-ready reply, and a nonzero exit when the instance did not answer
+// at all.
+func showRunningInstance(cmd *cobra.Command, path string) error {
+	resp, err := ipc.Send(path, ipc.CmdShow, sendTimeout)
+	if err == nil {
+		switch resp {
+		case ipc.ReplyOK:
+			fmt.Fprintln(cmd.OutOrStdout(), "competent-search-thing is already running; showing it")
+			return nil
+		case ipc.ReplyNotReady:
+			fmt.Fprintln(cmd.OutOrStdout(), "competent-search-thing is already running (still starting up)")
+			return nil
+		default:
+			err = fmt.Errorf("unexpected reply %q", resp)
+		}
+	}
+	// Print the failure ourselves and keep cobra from adding its
+	// "Error:" line on top (the hide subcommand's pattern).
+	cmd.SilenceErrors = true
+	err = fmt.Errorf("competent-search-thing is already running but did not respond: %v", err)
+	fmt.Fprintln(cmd.ErrOrStderr(), err)
+	return err
 }
 
 // summon delivers cmdName (toggle or show) to the running instance;
@@ -106,7 +142,7 @@ func summon(e *env, cmdName string) error {
 	path := ipc.SocketPath(os.Getenv)
 	resp, err := ipc.Send(path, cmdName, sendTimeout)
 	if err == nil {
-		return checkReply(resp)
+		return summonReply(e, resp)
 	}
 	if !ipc.IsNotRunning(err) {
 		return err
@@ -120,12 +156,23 @@ func summon(e *env, cmdName string) error {
 			if serr != nil {
 				return serr
 			}
-			return checkReply(resp)
+			return summonReply(e, resp)
 		}
 		log.Printf("ipc: %v (running without single-instance IPC)", lerr)
 		srv = nil
 	}
 	return e.runGUI(RunOptions{Server: srv, ShowOnStartup: true})
+}
+
+// summonReply maps a summon exchange's reply to its result. A
+// not-ready reply still counts as success (checkReply), but earns a
+// one-line heads-up: the instance is booting and cannot act on the
+// summon just yet.
+func summonReply(e *env, resp string) error {
+	if resp == ipc.ReplyNotReady {
+		fmt.Fprintln(e.stdout(), "competent-search-thing is still starting up; it may take a moment to respond")
+	}
+	return checkReply(resp)
 }
 
 // checkReply maps an IPC response line to a subcommand result.
@@ -148,7 +195,7 @@ func Execute(version string, runGUI func(RunOptions) error) int {
 
 // execute is Execute with the process bits injectable for tests.
 func execute(version string, runGUI func(RunOptions) error, args []string, out, errOut io.Writer) int {
-	root := newRoot(&env{version: version, runGUI: runGUI})
+	root := newRoot(&env{version: version, runGUI: runGUI, out: out})
 	root.SetArgs(args)
 	root.SetOut(out)
 	root.SetErr(errOut)

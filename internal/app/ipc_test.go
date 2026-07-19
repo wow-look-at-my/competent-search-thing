@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/ipc"
+	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 )
 
 // newTestIPC starts a real IPC server on a private socket for the
@@ -29,20 +30,53 @@ func TestStartupWiresIPCHandlers(t *testing.T) {
 	a.Startup(context.Background())
 	a.DomReady(context.Background())
 
+	// The server acks before the handler's side effects necessarily
+	// land (it may reply first and execute after), so every effect is
+	// awaited, never asserted right off the Send return.
 	resp, err := ipc.Send(path, ipc.CmdShow, time.Second)
 	require.NoError(t, err)
 	require.Equal(t, ipc.ReplyOK, resp)
-	require.True(t, r.has("show"), "IPC show reaches the window seam")
-	require.Len(t, r.emitted(eventShown), 1)
+	require.Eventually(t, func() bool { return r.has("show") },
+		5*time.Second, 5*time.Millisecond, "IPC show reaches the window seam")
+	require.Eventually(t, func() bool { return len(r.emitted(eventShown)) == 1 },
+		5*time.Second, 5*time.Millisecond)
 
 	resp, err = ipc.Send(path, ipc.CmdToggle, time.Second)
 	require.NoError(t, err)
 	require.Equal(t, ipc.ReplyOK, resp)
-	require.True(t, r.has("hide"), "IPC toggle on a visible bar hides it")
+	require.Eventually(t, func() bool { return r.has("hide") },
+		5*time.Second, 5*time.Millisecond, "IPC toggle on a visible bar hides it")
 
 	resp, err = ipc.Send(path, ipc.CmdHide, time.Second)
 	require.NoError(t, err)
 	require.Equal(t, ipc.ReplyOK, resp, "IPC hide is wired (idempotent here)")
+}
+
+func TestStartupWiresIPCBeforeHotkey(t *testing.T) {
+	// The ordering regression this pins: SetHandlers must precede
+	// registerHotkey, because hotkey registration can block briefly (on
+	// darwin, the Cocoa main-loop race) and IPC summons arriving during
+	// that window used to be answered "err not ready" and dropped. The
+	// fake hotkey backend runs synchronously inside Startup and sends a
+	// real toggle through the socket -- only the reply string is
+	// asserted (the server acks before executing the handler; the
+	// summon itself just latches pendingShow pre-DomReady).
+	srv, path := newTestIPC(t)
+	a, _ := newTestApp(t, nil, Options{IPC: srv, Hotkey: "alt+space"})
+	var reply string
+	ran := false
+	a.plat.startHotkey = func(platform.Hotkey, func()) (func(), error) {
+		ran = true
+		resp, err := ipc.Send(path, ipc.CmdToggle, time.Second)
+		require.NoError(t, err)
+		reply = resp
+		return func() {}, nil
+	}
+	a.Startup(context.Background())
+
+	require.True(t, ran, "the fake hotkey backend ran during Startup")
+	require.Equal(t, ipc.ReplyOK, reply,
+		"a summon arriving during hotkey registration is acked, not answered not-ready")
 }
 
 func TestShutdownClosesIPC(t *testing.T) {

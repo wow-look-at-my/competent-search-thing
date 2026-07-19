@@ -30,7 +30,10 @@ const (
 )
 
 // Handlers carries the app callbacks the server invokes for the
-// toggle/show/hide commands. Handlers are invoked on connection
+// toggle/show/hide commands. Handlers are invoked AFTER the
+// acknowledgement is written: a slow or blocked handler (e.g. one
+// stuck behind a busy GUI main thread during startup indexing) can no
+// longer time out the client. Handlers still run on connection
 // goroutines and must be safe to call concurrently. A nil member
 // answers ReplyNotReady, so a not-yet-wired (or partially wired)
 // server degrades gracefully instead of crashing.
@@ -133,7 +136,9 @@ func (s *Server) accept() {
 	}
 }
 
-// handle serves one request/response exchange on conn.
+// handle serves one request/response exchange on conn: read the
+// command, write the response, then run the command's handler (if
+// any).
 func (s *Server) handle(conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
@@ -142,16 +147,26 @@ func (s *Server) handle(conn net.Conn) {
 	if err != nil && line == "" {
 		return // nothing readable (timeout, empty close): no response owed
 	}
-	_, _ = conn.Write([]byte(s.respond(strings.TrimSpace(line)) + "\n"))
+	reply, after := s.plan(strings.TrimSpace(line))
+	_, _ = conn.Write([]byte(reply + "\n"))
+	if after != nil {
+		// The handler runs only after the acknowledgement is on the
+		// wire, so a slow app never times the client out -- but still
+		// on this connection goroutine, so Close's WaitGroup (which
+		// tracks it) keeps waiting for in-flight handlers.
+		after()
+	}
 }
 
-// respond maps one command line to its response line.
-func (s *Server) respond(cmd string) string {
+// plan maps one command line to its response line plus the handler to
+// invoke after that response is written (nil for commands that answer
+// without side effects, unknown commands, and unwired handlers).
+func (s *Server) plan(cmd string) (reply string, after func()) {
 	switch cmd {
 	case CmdPing:
-		return ReplyOK
+		return ReplyOK, nil
 	case CmdVersion:
-		return s.version
+		return s.version, nil
 	case CmdToggle, CmdShow, CmdHide:
 		s.mu.Lock()
 		var f func()
@@ -165,11 +180,10 @@ func (s *Server) respond(cmd string) string {
 		}
 		s.mu.Unlock()
 		if f == nil {
-			return ReplyNotReady
+			return ReplyNotReady, nil
 		}
-		f()
-		return ReplyOK
+		return ReplyOK, f
 	default:
-		return replyUnknown
+		return replyUnknown, nil
 	}
 }

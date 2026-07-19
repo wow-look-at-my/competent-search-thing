@@ -9,9 +9,13 @@
 // Protocol: one request per connection. The client writes a single
 // command line ("toggle", "show", "hide", "version" or "ping",
 // newline-terminated) and reads exactly one response line back: "ok"
-// for an executed command, the bare version string for "version", or
+// for an accepted command, the bare version string for "version", or
 // "err <reason>" -- "err not ready" while the app is still booting (or
-// for an unwired handler), "err unknown command" otherwise.
+// for an unwired handler), "err unknown command" otherwise. "ok" is
+// written BEFORE the toggle/show/hide handler runs, so an app whose
+// main thread is briefly stalled (startup indexing) acknowledges
+// instantly instead of timing the client out; "ok" means accepted,
+// not completed.
 package ipc
 
 import (
@@ -36,7 +40,8 @@ const (
 // Canned response lines (the "version" response is the version string
 // itself and has no constant).
 const (
-	// ReplyOK acknowledges an executed toggle/show/hide/ping.
+	// ReplyOK acknowledges an accepted toggle/show/hide (executed
+	// right after the reply is written) or an executed ping.
 	ReplyOK = "ok"
 	// ReplyNotReady answers toggle/show/hide while no handler is
 	// wired yet (the app is still booting).

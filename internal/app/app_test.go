@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/launch"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/portal"
+	"github.com/wow-look-at-my/competent-search-thing/internal/progress"
 	"github.com/wow-look-at-my/competent-search-thing/internal/watch"
 )
 
@@ -166,6 +168,11 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 		defer r.mu.Unlock()
 		return r.moveOK
 	}
+	// The panel hook reports "nothing to configure" like every
+	// non-darwin platform; deliberately not recorded so sequence
+	// assertions stay untouched. The DomReady test overrides it with a
+	// counting fake.
+	a.plat.configurePanel = func() bool { return false }
 	// The hint probe answers "nothing exists" so Search never touches
 	// the real disk; hint tests override it (some with the real
 	// os.Lstat over temp trees).
@@ -225,6 +232,10 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// nothing. Stats tests inject a recording fake (or restore
 	// a.buildStats explicitly).
 	a.newStats = func() statsSource { return nil }
+	// The progress printer is inert: non-TTY (never intercepts the
+	// global log output), io.Discard target, dropped non-TTY lines.
+	// Progress tests inject recording printers.
+	a.newProgress = func() *progress.Printer { return progress.New(io.Discard, false, nil) }
 	return a, r
 }
 
@@ -398,6 +409,8 @@ func TestBuildIndexCancelledDiscardsPartialAndLogs(t *testing.T) {
 
 	require.Contains(t, buf.String(), "index: initial build cancelled")
 	require.NotContains(t, buf.String(), "initial build failed")
+	require.NotContains(t, buf.String(), "index: startup complete:",
+		"the startup summary never fires on the cancelled path")
 	require.Equal(t, 0, m.LiveCount(), "the partial store is discarded, never swapped in")
 	require.False(t, watchUp(a), "a cancelled build never starts the watch layer")
 }

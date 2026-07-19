@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -91,26 +90,31 @@ func TestCommandsBeforeSetHandlersAreNotReady(t *testing.T) {
 
 func TestHandlersInvoked(t *testing.T) {
 	s, path := listen(t, "v")
-	var toggles, shows, hides atomic.Int32
+	ran := make(chan string, 3)
 	s.SetHandlers(Handlers{
-		Toggle: func() { toggles.Add(1) },
-		Show:   func() { shows.Add(1) },
-		Hide:   func() { hides.Add(1) },
+		Toggle: func() { ran <- CmdToggle },
+		Show:   func() { ran <- CmdShow },
+		Hide:   func() { ran <- CmdHide },
 	})
 	for _, cmd := range []string{CmdToggle, CmdShow, CmdHide} {
 		resp, err := Send(path, cmd, time.Second)
 		require.NoError(t, err, cmd)
 		require.Equal(t, ReplyOK, resp, cmd)
+		// The handler runs after the reply is written: wait for its
+		// signal instead of asserting it already ran.
+		select {
+		case got := <-ran:
+			require.Equal(t, cmd, got)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the %s handler never ran", cmd)
+		}
 	}
-	require.Equal(t, int32(1), toggles.Load())
-	require.Equal(t, int32(1), shows.Load())
-	require.Equal(t, int32(1), hides.Load())
 }
 
 func TestNilHandlerMemberIsNotReady(t *testing.T) {
 	s, path := listen(t, "v")
-	var toggles atomic.Int32
-	s.SetHandlers(Handlers{Toggle: func() { toggles.Add(1) }})
+	ran := make(chan struct{}, 1)
+	s.SetHandlers(Handlers{Toggle: func() { ran <- struct{}{} }})
 
 	resp, err := Send(path, CmdShow, time.Second)
 	require.NoError(t, err)
@@ -119,7 +123,65 @@ func TestNilHandlerMemberIsNotReady(t *testing.T) {
 	resp, err = Send(path, CmdToggle, time.Second)
 	require.NoError(t, err)
 	require.Equal(t, ReplyOK, resp)
-	require.Equal(t, int32(1), toggles.Load())
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the toggle handler never ran")
+	}
+}
+
+func TestReplyArrivesBeforeHandlerFinishes(t *testing.T) {
+	s, path := listen(t, "v")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var unblock sync.Once
+	// Whatever happens below, never leave the handler -- and with it
+	// the server's Close -- blocked past the end of the test.
+	t.Cleanup(func() { unblock.Do(func() { close(release) }) })
+	s.SetHandlers(Handlers{Toggle: func() {
+		close(entered)
+		<-release
+	}})
+
+	// The acknowledgement must arrive while the handler is blocked:
+	// the old order (handler first) would sit on <-release until the
+	// client deadline killed the exchange with an i/o timeout.
+	start := time.Now()
+	resp, err := Send(path, CmdToggle, 5*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, ReplyOK, resp)
+	require.Less(t, time.Since(start), time.Second, "the reply must not wait for the handler")
+
+	// The handler is provably still mid-flight: wait for its entry
+	// signal (the reply can beat the handler's first statement), and
+	// nothing has released it yet.
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the toggle handler never started")
+	}
+
+	// Close must keep waiting for the in-flight handler (the conn
+	// goroutine running it is tracked by the same WaitGroup) ...
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close() }()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while the handler was still blocked")
+	case <-time.After(50 * time.Millisecond):
+		// Bounded no-progress check, not synchronization: a buggy
+		// Close would have delivered by now; a correct one is parked
+		// in wg.Wait until the handler is released below.
+	}
+
+	// ... and return once the handler finishes.
+	unblock.Do(func() { close(release) })
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close never returned after the handler was released")
+	}
 }
 
 func TestUnknownAndEmptyCommands(t *testing.T) {
@@ -229,10 +291,10 @@ func TestSocketFileIsOwnerOnly(t *testing.T) {
 
 func TestConcurrentSends(t *testing.T) {
 	s, path := listen(t, "v")
-	var toggles atomic.Int32
-	s.SetHandlers(Handlers{Toggle: func() { toggles.Add(1) }})
-
 	const n = 24
+	done := make(chan struct{}, n)
+	s.SetHandlers(Handlers{Toggle: func() { done <- struct{}{} }})
+
 	var wg sync.WaitGroup
 	errs := make([]error, n)
 	resps := make([]string, n)
@@ -248,7 +310,15 @@ func TestConcurrentSends(t *testing.T) {
 		require.NoError(t, errs[i], "send %d", i)
 		require.Equal(t, ReplyOK, resps[i], "send %d", i)
 	}
-	require.Equal(t, int32(n), toggles.Load())
+	// Handlers run after their replies: collect all n invocation
+	// signals instead of asserting a count right after the sends.
+	for i := 0; i < n; i++ {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d of %d toggle handlers ran", i, n)
+		}
+	}
 }
 
 func TestCloseIsIdempotentAndUnlinks(t *testing.T) {

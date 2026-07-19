@@ -17,7 +17,7 @@ import (
 // EnvHotkeyBackend overrides the automatic hotkey backend selection.
 // Recognized values: "auto" (or empty; the default), "x11" (the native
 // startHotkey path: XGrabKey on linux, RegisterHotKey on windows,
-// CGEventTap on darwin), "portal" (XDG Desktop Portal
+// Carbon RegisterEventHotKey on darwin), "portal" (XDG Desktop Portal
 // GlobalShortcuts), "gsettings" (GNOME custom keybinding running the
 // CLI), "none" (no global hotkey; the IPC toggle/show/hide commands
 // keep working). Anything else warns once and behaves like auto.

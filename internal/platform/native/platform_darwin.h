@@ -1,10 +1,13 @@
-// C interface of the small Cocoa shim behind display_darwin.go and
-// movewindow_darwin.go. All coordinates crossing this boundary are
+// C interface of the small Cocoa/Carbon shim behind display_darwin.go,
+// movewindow_darwin.go, appsource_darwin.go, hotkey_darwin.go and
+// panel_darwin.go. All coordinates crossing this boundary are
 // top-left-origin virtual-desktop pixels (the Go side's convention);
 // the .m implementation converts from/to Cocoa's bottom-left-origin
 // global coordinates.
 #ifndef CS_PLATFORM_DARWIN_H
 #define CS_PLATFORM_DARWIN_H
+
+#include <stdint.h>
 
 typedef struct {
 	double x, y, w, h;     // full frame
@@ -39,5 +42,24 @@ int csFrontmostApp(csAppInfo *out);
 // regular activation policy (i.e. appear in the Dock and app
 // switcher); returns the count written (0 on failure).
 int csRunningApps(csAppInfo *out, int max);
+
+// csRegisterHotkey installs (once) the application-level Carbon event
+// handler for hotkey presses and registers keyCode (a kVK_* virtual
+// keycode) + carbonMods (a cmdKey/shiftKey/optionKey/controlKey mask)
+// as the process's single global hotkey; every press calls the Go
+// export csHotkeyFired. Synchronous (main-thread hop); returns 1 on
+// success, 0 on any failure.
+int csRegisterHotkey(uint32_t keyCode, uint32_t carbonMods);
+
+// csUnregisterHotkey removes the registered hotkey, asynchronously (it
+// runs during shutdown and must never block on a stopping main loop)
+// and idempotently.
+void csUnregisterHotkey(void);
+
+// csConfigurePanel applies Spotlight-style panel behavior to the app's
+// first window (join all Spaces, show over fullscreen apps, stay out
+// of the window cycle, never hide on app deactivation); returns 1 on
+// success, 0 when there is no window yet.
+int csConfigurePanel(void);
 
 #endif

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,7 @@ import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/ipc"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/preview"
+	"github.com/wow-look-at-my/competent-search-thing/internal/progress"
 	"github.com/wow-look-at-my/competent-search-thing/internal/watch"
 )
 
@@ -118,7 +120,7 @@ type App struct {
 	hkOnce    sync.Once
 	notesOnce sync.Once
 
-	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, history, launchCtx, launchCancel
+	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, history, launchCtx, launchCancel, progress
 	ctx        context.Context
 	visible    bool
 	lastToggle time.Time
@@ -156,6 +158,11 @@ type App struct {
 	// pendingShow and executed once by DomReady.
 	domReady    bool
 	pendingShow bool
+	// panelOnce guards the one-time Spotlight-style panel configuration
+	// DomReady applies through the plat.configurePanel seam -- DomReady
+	// is the earliest point every platform has a native window to
+	// configure.
+	panelOnce sync.Once
 
 	// sessionOnce caches desktop session detection (hotkey backend
 	// selection, the Wayland show path, and the open-windows provider
@@ -203,6 +210,18 @@ type App struct {
 	newStats    func() statsSource
 	stats       statsSource
 	statsCancel context.CancelFunc
+
+	// Startup progress printer (see progress.go in this package): the
+	// initial index build's "indexing..." line -- in-place on a TTY
+	// (where it also intercepts the standard logger until Shutdown
+	// restores stderr), throttled log lines elsewhere. newProgress is a
+	// seam over buildProgress so unit tests never touch the real stderr
+	// or the global log output; the printer is built once (Startup, or
+	// buildIndex's own Once for direct-call tests) and never nil after
+	// that -- a nil seam degrades to an inert io.Discard printer.
+	progressOnce sync.Once
+	newProgress  func() *progress.Printer
+	progress     *progress.Printer
 
 	// Preview pane layer (see preview.go in this package): the
 	// dispatcher (nil while the pane is disabled), the cancel func for
@@ -257,18 +276,22 @@ func New(m *index.Manager, opt Options) *App {
 	a.newRegistry = a.buildRegistry
 	a.newTray = a.buildTray
 	a.newStats = a.buildStats
+	a.newProgress = a.buildProgress
 	return a
 }
 
 // Startup is wired to the Wails OnStartup hook: it saves the runtime
-// context, brings up the global hotkey through the session's backend
-// plan (best effort; see hotkey.go), starts the tray icon (linux
-// only, async, best effort; see tray.go), starts the system-stats
-// sampler (idle until the bar first shows; see stats.go), wires the
-// single-instance IPC handlers (when Options.IPC is set), brings the
+// context, wires the single-instance IPC handlers first (when
+// Options.IPC is set; see the ordering note in the body), brings up
+// the global hotkey through the session's backend plan (best effort;
+// see hotkey.go), starts the tray icon (linux only, async, best
+// effort; see tray.go), starts the system-stats sampler (idle until
+// the bar first shows; see stats.go), brings the
 // plugin layer up (app-context cache + registry; cheap file IO),
 // builds the query-history store (best effort; see history.go),
-// starts theme hot reload (best effort, see theme.go), and kicks off
+// starts theme hot reload (best effort, see theme.go), builds the
+// startup progress printer (see progress.go in this package), and
+// kicks off
 // the initial index build in the background, so the window is
 // responsive immediately while the walk fills the index. An
 // Options.ShowOnStartup request is latched here and executed by
@@ -280,6 +303,20 @@ func (a *App) Startup(ctx context.Context) {
 		a.pendingShow = true
 	}
 	a.mu.Unlock()
+	// The IPC handlers are wired BEFORE everything else, in particular
+	// before registerHotkey: on darwin the hotkey registration can
+	// block briefly on the Cocoa main-loop race, and summons sent over
+	// IPC during that window used to be answered "err not ready" and
+	// dropped. All three handlers are safe this early: toggle and
+	// showIfHidden latch pendingShow while domReady is false, and Hide
+	// no-ops without a runtime ctx.
+	if a.opt.IPC != nil {
+		a.opt.IPC.SetHandlers(ipc.Handlers{
+			Toggle: a.toggle,
+			Show:   a.showIfHidden,
+			Hide:   a.Hide,
+		})
+	}
 	a.notesOnce.Do(func() {
 		for _, n := range a.opt.ConfigNotes {
 			log.Printf("config: %s", n)
@@ -289,18 +326,14 @@ func (a *App) Startup(ctx context.Context) {
 	a.hkOnce.Do(a.registerHotkey)
 	a.trayOnce.Do(a.startTray)
 	a.statsOnce.Do(a.startStats)
-	if a.opt.IPC != nil {
-		a.opt.IPC.SetHandlers(ipc.Handlers{
-			Toggle: a.toggle,
-			Show:   a.showIfHidden,
-			Hide:   a.Hide,
-		})
-	}
 	a.pluginOnce.Do(a.startPlugins)
 	a.previewOnce.Do(a.startPreview)
 	a.histOnce.Do(a.startHistory)
 	a.frecOnce.Do(a.startFrecency)
 	a.themeOnce.Do(a.startThemeWatch)
+	// The progress printer exists before the build kick: the walk's
+	// first tick can arrive immediately.
+	a.progressOnce.Do(a.startProgress)
 	if a.manager == nil {
 		return
 	}
@@ -314,7 +347,8 @@ func (a *App) Startup(ctx context.Context) {
 }
 
 // DomReady is wired to the Wails OnDomReady hook: the frontend is
-// loaded and can render. It executes at most one show that was
+// loaded and can render. It applies the native panel configuration
+// once, then executes at most one show that was
 // requested earlier (Options.ShowOnStartup, or a hotkey press / IPC
 // toggle/show that arrived while the frontend was still loading);
 // after it has run, summons act immediately.
@@ -327,22 +361,39 @@ func (a *App) DomReady(ctx context.Context) {
 	pending := a.pendingShow
 	a.pendingShow = false
 	a.mu.Unlock()
+	// Spotlight-style collection behavior must be applied after the
+	// window exists; DomReady is the earliest point every platform has
+	// one (and it precedes the pending show, so the first mapping
+	// already carries the behavior).
+	a.panelOnce.Do(func() {
+		if a.plat.configurePanel != nil {
+			a.plat.configurePanel()
+		}
+	})
 	if pending {
 		a.captureAppContext()
 		a.showOnCursorDisplay()
 	}
 }
 
-// buildIndex runs the full disk walk -- forwarding progress to the log
-// and to the frontend as eventIndexProgress -- then brings the
-// live-update layer up. Cancelling ctx (Shutdown) aborts the walk
+// buildIndex runs the full disk walk -- forwarding progress to the
+// progress printer (in place on a TTY, throttled log lines otherwise;
+// see internal/progress) and to the frontend as eventIndexProgress --
+// then brings the live-update layer up and logs the one
+// startup-complete summary. Cancelling ctx (Shutdown) aborts the walk
 // mid-flight: the partial store is discarded (BuildFromDisk only swaps
-// on success) and the watch layer never starts.
+// on success), the watch layer never starts, and no summary is logged.
 func (a *App) buildIndex(ctx context.Context) {
+	// The same Once Startup runs before kicking the build; tests that
+	// drive buildIndex directly get the printer here.
+	a.progressOnce.Do(a.startProgress)
+	a.mu.Lock()
+	pr := a.progress
+	a.mu.Unlock()
 	start := a.plat.now()
-	progress := func(indexed int, done bool) {
+	onProgress := func(indexed int, done bool) {
 		if !done {
-			log.Printf("index: indexing... %d entries", indexed)
+			pr.Indexing(int64(indexed))
 		}
 		a.emitEvent(eventIndexProgress, indexProgress{
 			Indexed: indexed,
@@ -350,7 +401,11 @@ func (a *App) buildIndex(ctx context.Context) {
 			Seconds: a.plat.now().Sub(start).Seconds(),
 		})
 	}
-	count, dur, err := a.manager.BuildFromDisk(ctx, progress)
+	count, dur, err := a.manager.BuildFromDisk(ctx, onProgress)
+	// Clear the in-place line (a no-op off a TTY) BEFORE any completion
+	// or error log line, so none of them can collide with a
+	// still-rendered progress row.
+	pr.Done()
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			log.Printf("index: initial build cancelled")
@@ -361,6 +416,11 @@ func (a *App) buildIndex(ctx context.Context) {
 	}
 	log.Printf("index: %d entries in %s", count, dur.Round(time.Millisecond))
 	a.startWatch()
+	// The user-facing startup summary fires only once the watch layer
+	// is established: the elapsed figure covers index build + watch
+	// setup, the whole time-to-ready.
+	log.Printf("index: startup complete: %d entries in %s, %s ram",
+		count, a.plat.now().Sub(start).Round(time.Millisecond), progress.RAMString())
 }
 
 // startWatch starts the fsnotify Watcher over the manager's roots --
@@ -425,7 +485,9 @@ func (a *App) emitDegraded(s watch.Stats) {
 // is cancelled, never waited out, so quit stays fast even mid-walk on
 // a huge index. Safe to call at any point, even before the watch layer
 // came up; the shuttingDown flag keeps a racing startWatch from
-// starting it afterwards.
+// starting it afterwards. The very last step clears the TTY progress
+// line and restores the standard logger to stderr (non-TTY printers
+// never touched it).
 func (a *App) Shutdown(_ context.Context) {
 	if a.opt.IPC != nil {
 		if err := a.opt.IPC.Close(); err != nil {
@@ -529,6 +591,22 @@ func (a *App) Shutdown(_ context.Context) {
 	// single bounded file operation or /proc walk -- no lock is held
 	// here and none of them can block indefinitely.
 	a.frecWG.Wait()
+
+	// Restore the standard logger LAST: in TTY mode installProgressLog
+	// pointed it at the printer, and keeping that interception through
+	// the teardown above let every log line up to here interleave
+	// cleanly with a still-rendered progress row. Done clears any
+	// in-place line first, so nothing written after us collides with a
+	// leftover row. Non-TTY printers never touched the logger and are
+	// left alone (unit tests capture log output; Shutdown must not
+	// clobber their buffers).
+	a.mu.Lock()
+	pr := a.progress
+	a.mu.Unlock()
+	if pr != nil && pr.TTY() {
+		pr.Done()
+		log.SetOutput(os.Stderr)
+	}
 }
 
 // Search returns index entries whose name contains query,

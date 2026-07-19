@@ -1,9 +1,10 @@
-// Cocoa shim for display_darwin.go / movewindow_darwin.go /
-// appsource_darwin.go. Kept minimal and conventional: CI compiles
-// linux/amd64 only, so nothing here is exercised before a real macOS
-// build.
+// Cocoa/Carbon shim for display_darwin.go / movewindow_darwin.go /
+// appsource_darwin.go / hotkey_darwin.go / panel_darwin.go. Kept
+// minimal and conventional: CI compiles this (darwin job) but never
+// runs it, so nothing here is exercised before a real macOS session.
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <Carbon/Carbon.h>
 
 #include <string.h>
 
@@ -86,6 +87,33 @@ int csMoveWindow(double x, double y) {
 	return ok;
 }
 
+int csConfigurePanel(void) {
+	__block int ok = 0;
+	runOnMain(^{
+		// Same window selection as csMoveWindow: the app's first (and
+		// only) NSWindow.
+		NSArray<NSWindow *> *windows = [NSApp windows];
+		if (windows == nil || windows.count == 0) {
+			return;
+		}
+		NSWindow *w = windows[0];
+		// Spotlight-style panel behavior. Wails only sets the floating
+		// window level; without CanJoinAllSpaces a hidden always-on-top
+		// window orders back in on the Space it was created on -- not
+		// the one the user is looking at -- and without
+		// FullScreenAuxiliary it cannot appear over fullscreen apps.
+		// IgnoresCycle keeps the panel out of the window cycle, and
+		// hidesOnDeactivate stays off because the frontend's blur
+		// handler owns hiding.
+		w.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces
+			| NSWindowCollectionBehaviorFullScreenAuxiliary
+			| NSWindowCollectionBehaviorIgnoresCycle;
+		[w setHidesOnDeactivate:NO];
+		ok = 1;
+	});
+	return ok;
+}
+
 // fillAppInfo copies one NSRunningApplication into the C struct.
 // Every accessor is nil-tolerant (messaging nil yields nil/NULL) and
 // the memset guarantees NUL termination after the bounded copies.
@@ -138,4 +166,76 @@ int csRunningApps(csAppInfo *out, int max) {
 		}
 	});
 	return n;
+}
+
+// --- Carbon global hotkey (hotkey_darwin.go) ---
+//
+// RegisterEventHotKey needs no Accessibility/TCC permission, unlike a
+// CGEventTap. Events arrive through the Carbon event dispatcher, which
+// [NSApp run] pumps as part of the main run loop.
+
+// csHotkeyFired is exported from Go (hotkey_darwin.go); cgo emits the
+// definition, this file only references it.
+extern void csHotkeyFired(void);
+
+// One registration at a time (the Go side guards): the installed
+// handler and the active hotkey are main-thread-only static state.
+static EventHandlerRef csHotkeyHandler = NULL;
+static EventHotKeyRef csHotkeyRef = NULL;
+
+// csHotkeyCallback runs on the main run loop for every press of a
+// hotkey registered by this process -- only ever the single one
+// csRegisterHotkey installed, so no id dispatch is needed.
+static OSStatus csHotkeyCallback(EventHandlerCallRef next, EventRef event, void *userData) {
+	csHotkeyFired();
+	return noErr;
+}
+
+int csRegisterHotkey(uint32_t keyCode, uint32_t carbonMods) {
+	__block int ok = 0;
+	runOnMain(^{
+		if (csHotkeyRef != NULL) {
+			// Already holding a registration; the Go side prevents
+			// this, but never stack a second one.
+			return;
+		}
+		if (csHotkeyHandler == NULL) {
+			EventTypeSpec spec;
+			spec.eventClass = kEventClassKeyboard;
+			spec.eventKind = kEventHotKeyPressed;
+			OSStatus st = InstallEventHandler(GetEventDispatcherTarget(),
+				NewEventHandlerUPP(csHotkeyCallback), 1, &spec, NULL,
+				&csHotkeyHandler);
+			if (st != noErr) {
+				csHotkeyHandler = NULL;
+				return;
+			}
+		}
+		EventHotKeyID hkID;
+		// 'CSTH' as a numeric FourCharCode: multi-character char
+		// constants trip -Wfour-char-constants.
+		hkID.signature = (OSType)0x43535448; // 'CSTH'
+		hkID.id = 1;
+		EventHotKeyRef ref = NULL;
+		OSStatus st = RegisterEventHotKey(keyCode, carbonMods, hkID,
+			GetEventDispatcherTarget(), 0, &ref);
+		if (st != noErr || ref == NULL) {
+			return;
+		}
+		csHotkeyRef = ref;
+		ok = 1;
+	});
+	return ok;
+}
+
+void csUnregisterHotkey(void) {
+	// Async on purpose: this runs during shutdown, when the main run
+	// loop may already be stopping, and a synchronous hop could block
+	// forever. Idempotent: without a registration the block no-ops.
+	dispatch_async(dispatch_get_main_queue(), ^{
+		if (csHotkeyRef != NULL) {
+			UnregisterEventHotKey(csHotkeyRef);
+			csHotkeyRef = NULL;
+		}
+	});
 }
