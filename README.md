@@ -427,7 +427,16 @@ the full path instead (Everything-style):
   everything under any `etc` directory at any depth, but not the
   `etc` directories themselves.
 - Within a rank class the usual tie-breaks apply: directories first,
-  then shorter paths, then alphabetical.
+  then shorter paths, then alphabetical -- with numbers newest-first
+  (next bullet).
+- Alphabetical order is numeric-aware, always on: when two otherwise
+  tied paths differ at aligned digit runs, the HIGHER number ranks
+  first, so datestamped and versioned families deliver newest first
+  -- `Screenshot 2026-07-18...png` above `Screenshot 2024-02-01...png`,
+  `invoice_v2.pdf` above `invoice_v1.pdf` (previously plain byte
+  order put the oldest first). Names without such aligned numbers
+  order exactly as before, and the earlier tie-breaks still win --
+  a shorter `v9` still precedes a longer `v10`.
 
 ## Fuzzy matching and multi-term queries
 
@@ -535,6 +544,46 @@ paths (the lowest decayed counts are pruned), created with mode 0600.
 Delete the file to reset the learning; set
 `"search": { "frecency": { "disabled": true } }` to never record
 anything.
+
+### Pick-memory priors (opt-in)
+
+`search.priors.enabled` (default `false`) adds one more learned
+layer on top of the blend: priors derived from which results you
+actually PICK.
+
+```json
+"search": { "priors": { "enabled": true } }
+```
+
+How priors learn: the layer only READS two local files that already
+exist for other features --
+
+- `<configDir>/telemetry.jsonl` (+ its rotated `.1` generation), the
+  opt-in ranking telemetry log (`search.telemetry.enabled`). Each
+  logged pick teaches three small tables: an exact-query pick memory
+  (picked `report_q3.md` for the query `rep` before, and `rep` pins
+  that row near the top of its match class -- decaying with a 14-day
+  half-life so stale habits fade), a per-extension pick rate, and a
+  per-folder-prefix pick rate (the first three path components).
+  The rates are smoothed and applied as small nudges on the same
+  scale as the recency/noise signals; the exact-query memory is the
+  strong signal and outweighs them. NOTE: pick data only accrues
+  once the ranking telemetry feature is present and
+  `search.telemetry` is enabled; until then the bootstrap below is
+  the only signal.
+- `<configDir>/frecency.json` as the BOOTSTRAP: while the telemetry
+  log holds few picks, the extension/folder tables are seeded from
+  the decayed open counts instead ("this user opens `.md` files
+  under `~/notes` a lot"), so enabling the knob nudges from day one
+  and keeps learning from ordinary opens even without telemetry.
+
+The tables rebuild asynchronously at startup and after successful
+activations (no timers, no background polling while idle), are
+hard-capped well under 1 MiB of memory, and only ever REORDER
+results within their match class -- exact matches still beat prefix
+matches, recall is untouched, and disabling the knob restores
+today's ordering exactly. Everything stays on this machine: the
+priors layer writes nothing and sends nothing.
 
 ## Rewrite rules
 
@@ -648,7 +697,8 @@ The file is created with defaults on first run:
       "weightCwd": 1,
       "weightNoise": 1,
       "tierJumpCount": 3
-    }
+    },
+    "priors": { "enabled": false }
   },
   "watcher": { "maxWatches": 0, "sweepMinutes": 0, "sweepDisabled": false, "watchExcludes": [] },
   "theme": "dark",
@@ -747,6 +797,8 @@ Field reference:
   `tierJumpCount` (default 3) is the decayed-open-count threshold for
   competing one match tier up. For every frecency number, `0` means
   "use the default" and a NEGATIVE value turns that one signal off.
+  `priors.enabled` (default `false`) turns the opt-in pick-memory
+  priors on -- see [Pick-memory priors](#pick-memory-priors-opt-in).
 - `watcher` -- the live-watch layer: `backend` (`auto` | `fanotify` =
   strict, no inotify fallback | `inotify`; unset means `auto`),
   `maxWatches` (hot-set budget; 0 =

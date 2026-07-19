@@ -77,6 +77,7 @@ func runGUI(opts cli.RunOptions) error {
 		HistoryPersistDisabled: cfg.History.PersistDisabled,
 		ConfigNotes:            cfg.MigrationNotes,
 		Frecency:               cfg.Search.Frecency,
+		Priors:                 cfg.Search.Priors,
 		Preview:                cfg.Preview,
 		WindowWidth:            width,
 		WindowHeight:           height,

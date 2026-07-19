@@ -71,7 +71,7 @@ func naiveQueryMulti(entries []refEntry, q string, limit int, fuzzyOff bool) []R
 		if len(a.path) != len(b.path) {
 			return len(a.path) < len(b.path)
 		}
-		return a.path < b.path
+		return refPathLess(a.path, b.path)
 	})
 	if len(matches) == 0 {
 		return nil

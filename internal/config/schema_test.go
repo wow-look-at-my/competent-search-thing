@@ -71,6 +71,7 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 				WeightNoise:    1,
 				TierJumpCount:  5,
 			},
+			Priors: PriorsConfig{Enabled: true},
 		},
 		Watcher: WatcherConfig{
 			MaxWatches:    -1,
@@ -158,6 +159,11 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"misspelled watcher backend":       `{"watcher":{"backend":"inotfy"}}`,
 		"empty watcher backend":            `{"watcher":{"backend":""}}`,
 		"non-string watcher backend":       `{"watcher":{"backend":true}}`,
+		"priors key typo":                  `{"search":{"priors":{"enabld":true}}}`,
+		"non-bool priors enabled":          `{"search":{"priors":{"enabled":"yes"}}}`,
+		"non-object priors":                `{"search":{"priors":true}}`,
+		"unknown priors key":               `{"search":{"priors":{"enabled":true,"halfLifeDays":7}}}`,
+		"priors misspelled in search":      `{"search":{"prios":{"enabled":true}}}`,
 		"frecency key typo":                `{"search":{"frecency":{"halfLifeDay":7}}}`,
 		"non-bool frecency disabled":       `{"search":{"frecency":{"disabled":"yes"}}}`,
 		"zero frecency half-life":          `{"search":{"frecency":{"halfLifeDays":0}}}`,
@@ -278,6 +284,8 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json $defs/watcherConfig out of sync with WatcherConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(FrecencyConfig{})), configSchemaProperties(t, "frecencyConfig"),
 		"config.schema.json $defs/frecencyConfig out of sync with FrecencyConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PriorsConfig{})), configSchemaProperties(t, "priorsConfig"),
+		"config.schema.json $defs/priorsConfig out of sync with PriorsConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PluginsConfig{})), configSchemaProperties(t, "pluginsConfig"),
 		"config.schema.json $defs/pluginsConfig out of sync with PluginsConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PluginEntry{})), configSchemaProperties(t, "pluginEntry"),

@@ -21,6 +21,7 @@ import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/ipc"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/preview"
+	"github.com/wow-look-at-my/competent-search-thing/internal/priors"
 	"github.com/wow-look-at-my/competent-search-thing/internal/progress"
 	"github.com/wow-look-at-my/competent-search-thing/internal/watch"
 )
@@ -102,6 +103,11 @@ type Options struct {
 	// search.frecency here; see frecency.go). Weights arrive
 	// Normalize-repaired; Disabled leaves the whole layer unwired.
 	Frecency config.FrecencyConfig
+	// Priors configures the pick-memory ranking priors (wire config's
+	// search.priors here; see priors.go in this package). OPT-IN: the
+	// zero value keeps the layer entirely unwired -- no file reads,
+	// no goroutines, no blend term.
+	Priors config.PriorsConfig
 	// Preview is the preview pane configuration (wire config's
 	// preview section here); the zero value keeps the pane off and
 	// every preview method degrades to a no-op. See preview.go.
@@ -274,6 +280,23 @@ type App struct {
 	frecBlend   index.Blend
 	frecWG      sync.WaitGroup
 
+	// Pick-memory priors (see priors.go in this package): the lookup
+	// store whose resolver rides frecBlend.Prior, built once at
+	// Startup when config search.priors opts in; nil otherwise --
+	// every hook then no-ops. The busy/again pair single-flights the
+	// asynchronous table rebuilds; priorsClosed stops re-arms during
+	// Shutdown's priorsWG drain.
+	priorsOnce    sync.Once
+	priorsErrOnce sync.Once
+	priorsLogOnce sync.Once
+	priorsMu      sync.Mutex // guards priorsStore, priorsDir, priorsBusy, priorsAgain, priorsClosed
+	priorsStore   *priors.Store
+	priorsDir     string
+	priorsBusy    bool
+	priorsAgain   bool
+	priorsClosed  bool
+	priorsWG      sync.WaitGroup
+
 	// rt and plat are seams over the Wails runtime and the platform
 	// layer. Production fills them in New; unit tests MUST replace
 	// every rt member before driving code that reaches it (the real
@@ -349,6 +372,7 @@ func (a *App) Startup(ctx context.Context) {
 	a.previewOnce.Do(a.startPreview)
 	a.histOnce.Do(a.startHistory)
 	a.frecOnce.Do(a.startFrecency)
+	a.priorsOnce.Do(a.startPriors)
 	a.themeOnce.Do(a.startThemeWatch)
 	// The progress printer exists before the build kick: the walk's
 	// first tick can arrive immediately.
@@ -573,6 +597,11 @@ func (a *App) Shutdown(_ context.Context) {
 	// here and none of them can block indefinitely.
 	a.frecWG.Wait()
 
+	// Same for the priors layer's table rebuilds (bounded local file
+	// reads); the closed flag inside keeps a finishing rebuild from
+	// re-arming behind the drain.
+	a.shutdownPriors()
+
 	// Restore the standard logger LAST: in TTY mode installProgressLog
 	// pointed it at the printer, and keeping that interception through
 	// the teardown above let every log line up to here interleave
@@ -622,6 +651,7 @@ func (a *App) Open(path string) error {
 		return err
 	}
 	a.recordOpen(path)
+	a.kickPriorsRefresh()
 	a.Hide()
 	return nil
 }
@@ -635,6 +665,7 @@ func (a *App) Reveal(path string) error {
 		return err
 	}
 	a.recordOpen(path)
+	a.kickPriorsRefresh()
 	a.Hide()
 	return nil
 }

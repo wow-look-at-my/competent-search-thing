@@ -200,7 +200,8 @@ type RewriteRule struct {
 }
 
 // SearchConfig configures the search engine. The zero value means the
-// default behavior: fuzzy matching on, frecency ranking on.
+// default behavior: fuzzy matching on, frecency ranking on, priors
+// off.
 type SearchConfig struct {
 	// FuzzyDisabled true turns the fuzzy (subsequence) name-match tier
 	// off, leaving exact/prefix/substring matching only. The zero
@@ -210,6 +211,25 @@ type SearchConfig struct {
 	FuzzyDisabled bool `json:"fuzzyDisabled"`
 	// Frecency configures the frecency/recency/noise ranking blend.
 	Frecency FrecencyConfig `json:"frecency"`
+	// Priors configures the pick-memory ranking priors (see
+	// internal/priors).
+	Priors PriorsConfig `json:"priors"`
+}
+
+// PriorsConfig configures the pick-memory ranking priors: small
+// local lookup tables -- exact-query pick memory plus per-extension
+// and per-directory-prefix pick rates -- learned from the opt-in
+// ranking telemetry log (search.telemetry) and bootstrapped from
+// frecency.json, folded into result ordering as one additive blend
+// term (see internal/priors and the README's "Pick-memory priors").
+// OPT-IN: the zero value keeps the feature entirely off (no file
+// reads, no goroutines) -- the preview.enabled privacy precedent,
+// deliberately NOT the tray.disabled convention, because the feature
+// consumes behavioral data. The half-life, smoothing, and table caps
+// are internal defaults; the switch is the whole knob.
+type PriorsConfig struct {
+	// Enabled turns the priors layer on.
+	Enabled bool `json:"enabled"`
 }
 
 // FrecencyConfig tunes the frecency ranking blend (see the README's
