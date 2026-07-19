@@ -174,6 +174,37 @@ interface PreviewPayload {
   durMs: number;
 }
 
+// One delivered row's identity in a RecordPick report (internal/
+// telemetry ShownRef): the slice index is the rank. File rows carry
+// only the path; plugin rows carry the provider id and the engine
+// wire score. Feature values are NEVER sent from the frontend -- the
+// Go side joins them from its own query ring.
+interface TelemetryShownRef {
+  kind: "file" | "plugin";
+  path?: string; // file rows
+  plugin?: string; // plugin rows
+  score?: number; // plugin rows: the engine wire score
+}
+
+// The activated row of a RecordPick report (internal/telemetry
+// PickedRef): its index into shown, the action kind that ran, and the
+// reveal flag (file rows only).
+interface TelemetryPickedRef {
+  rank: number;
+  action: string;
+  revealed: boolean;
+}
+
+// A RecordPick report (internal/telemetry PickReport): the query, the
+// delivered flat row list, and the pick. Sent fire-and-forget after
+// an activation actually ran; a no-op Go-side unless
+// search.telemetry.enabled opted in.
+interface TelemetryPickReport {
+  query: string;
+  shown: TelemetryShownRef[];
+  picked: TelemetryPickedRef;
+}
+
 // GetPreviewConfig answer (internal/app PreviewConfigInfo): whether
 // the pane is on, whether the web/AI providers have credentials
 // (config key or environment variable), and the pixel width the left
@@ -206,6 +237,12 @@ interface WailsAppBindings {
   // Record one executed query (called after an activation actually
   // ran; Go trims it, skips blanks, and dedups exact repeats).
   AddHistory(entry: string): Promise<void>;
+  // Report one activated result for the opt-in ranking telemetry log
+  // (called beside AddHistory at the same activation-success sites,
+  // fire-and-forget). Go re-validates the echoed report, joins the
+  // ranking signals from its own query ring, and appends locally; a
+  // silent no-op while search.telemetry is off or the query is blank.
+  RecordPick(report: TelemetryPickReport): Promise<void>;
   // Resolved theme tokens: every internal/theme.TokenNames key mapped
   // to a validated CSS value (theme.ts sets each as --sb-<key>).
   GetTheme(): Promise<Record<string, string>>;

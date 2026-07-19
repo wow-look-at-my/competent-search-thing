@@ -99,6 +99,13 @@ type Blend struct {
 	// Now is the clock recency ages are measured against (tests);
 	// nil means time.Now.
 	Now func() time.Time
+
+	// trace, when non-nil, receives the delivered rows' ranking
+	// components (see signalstrace.go). Only ever set on the
+	// per-query copies traceBlend builds -- never on a Blend handed
+	// to Manager.SetBlend, so the immutability contract above is
+	// untouched.
+	trace *[]ResultSignals
 }
 
 // active reports whether the blend participates in ranking at all.
@@ -167,6 +174,18 @@ func (s *Store) selectBlended(all []cand, limit int, b *Blend) []Result {
 	}
 	nowT := now()
 
+	// A requested signals trace (signalstrace.go) captures each
+	// component exactly as it participates below -- indices into
+	// arrays this stage computes anyway, nothing new evaluated. With
+	// tr nil (the normal case) the captures compile to nothing.
+	tr := b.traceBuf()
+	var trRec, trCwd, trPen []float64
+	if tr != nil {
+		trRec = make([]float64, n)
+		trCwd = make([]float64, n)
+		trPen = make([]float64, n)
+	}
+
 	eff := make([]uint8, n)
 	blended := make([]float64, n)
 	for i, c := range all {
@@ -176,12 +195,24 @@ func (s *Store) selectBlended(all []cand, limit int, b *Blend) []Result {
 		}
 		if w := b.WeightRecency; w > 0 && boost[i] == 0 {
 			if ts, ok := rec[paths[i]]; ok {
-				d += w * recencyScore(nowT.Sub(ts))
+				r := recencyScore(nowT.Sub(ts))
+				d += w * r
+				if tr != nil {
+					trRec[i] = r
+				}
 			}
 		}
-		d += b.Signals.CwdBoost(paths[i])
+		cw := b.Signals.CwdBoost(paths[i])
+		d += cw
+		if tr != nil {
+			trCwd[i] = cw
+		}
 		if w := b.WeightNoise; w > 0 {
-			d -= w * b.Signals.Penalty(paths[i])
+			p := b.Signals.Penalty(paths[i])
+			d -= w * p
+			if tr != nil {
+				trPen[i] = p
+			}
 		}
 		blended[i] = d
 		eff[i] = c.class
@@ -210,6 +241,25 @@ func (s *Store) selectBlended(all []cand, limit int, b *Blend) []Result {
 	out := make([]Result, len(ord))
 	for x, i := range ord {
 		out[x] = Result{Path: paths[i], Name: s.Name(all[i].id), IsDir: all[i].isDir}
+	}
+	if tr != nil {
+		sig := make([]ResultSignals, len(ord))
+		for x, i := range ord {
+			c := all[i]
+			sig[x] = ResultSignals{
+				Path:     paths[i],
+				Class:    c.class,
+				EffClass: eff[i],
+				Align:    c.score,
+				Boost:    boost[i],
+				Recency:  trRec[i],
+				Cwd:      trCwd[i],
+				Penalty:  trPen[i],
+				IsDir:    c.isDir,
+				PathLen:  c.pathLen,
+			}
+		}
+		*tr = sig
 	}
 	return out
 }
