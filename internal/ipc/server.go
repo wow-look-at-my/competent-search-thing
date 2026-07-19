@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
@@ -137,8 +138,10 @@ func (s *Server) accept() {
 }
 
 // handle serves one request/response exchange on conn: read the
-// command, write the response, then run the command's handler (if
-// any).
+// request line, sniff its shape (a first byte of '{' after trimming =
+// the JSON v2 protocol, anything else = the legacy v1 line protocol,
+// byte-for-byte), write the matching response, then run the command's
+// handler (if any).
 func (s *Server) handle(conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
@@ -147,8 +150,19 @@ func (s *Server) handle(conn net.Conn) {
 	if err != nil && line == "" {
 		return // nothing readable (timeout, empty close): no response owed
 	}
-	reply, after := s.plan(strings.TrimSpace(line))
-	_, _ = conn.Write([]byte(reply + "\n"))
+	trimmed := strings.TrimSpace(line)
+	var reply []byte
+	var after func()
+	if strings.HasPrefix(trimmed, "{") {
+		var resp Response
+		resp, after = s.planJSON(trimmed)
+		reply, _ = json.Marshal(resp) // plain struct: Marshal cannot fail
+	} else {
+		var legacy string
+		legacy, after = s.plan(trimmed)
+		reply = []byte(legacy)
+	}
+	_, _ = conn.Write(append(reply, '\n'))
 	if after != nil {
 		// The handler runs only after the acknowledgement is on the
 		// wire, so a slow app never times the client out -- but still
@@ -158,32 +172,67 @@ func (s *Server) handle(conn net.Conn) {
 	}
 }
 
-// plan maps one command line to its response line plus the handler to
-// invoke after that response is written (nil for commands that answer
-// without side effects, unknown commands, and unwired handlers).
+// plan maps one legacy (v1) command line to its response line plus the
+// handler to invoke after that response is written (nil for commands
+// that answer without side effects, unknown commands, and unwired
+// handlers). The legacy replies are a compatibility contract: old
+// clients must keep seeing the exact pre-JSON bytes.
 func (s *Server) plan(cmd string) (reply string, after func()) {
 	switch cmd {
 	case CmdPing:
 		return ReplyOK, nil
 	case CmdVersion:
 		return s.version, nil
-	case CmdToggle, CmdShow, CmdHide:
-		s.mu.Lock()
-		var f func()
-		switch cmd {
-		case CmdToggle:
-			f = s.handlers.Toggle
-		case CmdShow:
-			f = s.handlers.Show
-		case CmdHide:
-			f = s.handlers.Hide
-		}
-		s.mu.Unlock()
-		if f == nil {
-			return ReplyNotReady, nil
-		}
-		return ReplyOK, f
-	default:
+	}
+	f, known := s.handlerFor(cmd)
+	if !known {
 		return replyUnknown, nil
 	}
+	if f == nil {
+		return ReplyNotReady, nil
+	}
+	return ReplyOK, f
+}
+
+// planJSON maps one JSON (v2) request line to its Response plus the
+// handler to invoke after that response is written -- the same
+// semantics as plan in the JSON shape. Unknown fields in the request
+// are ignored (the tolerance contract); a '{' line that is not valid
+// JSON answers the invalid-request error.
+func (s *Server) planJSON(line string) (Response, func()) {
+	var req Request
+	if err := json.Unmarshal([]byte(line), &req); err != nil {
+		return Response{Error: errInvalidRequest}, nil
+	}
+	switch req.Cmd {
+	case CmdPing:
+		return Response{OK: true}, nil
+	case CmdVersion:
+		return Response{OK: true, Version: s.version}, nil
+	}
+	f, known := s.handlerFor(req.Cmd)
+	if !known {
+		return Response{Error: errUnknownCommand}, nil
+	}
+	if f == nil {
+		return Response{Error: errNotReady}, nil
+	}
+	return Response{OK: true, Accepted: req.Cmd}, f
+}
+
+// handlerFor resolves a toggle/show/hide command to its wired handler
+// (nil = not wired yet, the not-ready answer); known is false for any
+// other command.
+func (s *Server) handlerFor(cmd string) (f func(), known bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch cmd {
+	case CmdToggle:
+		return s.handlers.Toggle, true
+	case CmdShow:
+		return s.handlers.Show, true
+	case CmdHide:
+		return s.handlers.Hide, true
+	}
+	return nil, false
 }

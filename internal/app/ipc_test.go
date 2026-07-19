@@ -33,23 +33,23 @@ func TestStartupWiresIPCHandlers(t *testing.T) {
 	// The server acks before the handler's side effects necessarily
 	// land (it may reply first and execute after), so every effect is
 	// awaited, never asserted right off the Send return.
-	resp, err := ipc.Send(path, ipc.CmdShow, time.Second)
+	rep, err := ipc.Send(path, ipc.CmdShow, time.Second)
 	require.NoError(t, err)
-	require.Equal(t, ipc.ReplyOK, resp)
+	require.True(t, rep.OK)
 	require.Eventually(t, func() bool { return r.has("show") },
 		5*time.Second, 5*time.Millisecond, "IPC show reaches the window seam")
 	require.Eventually(t, func() bool { return len(r.emitted(eventShown)) == 1 },
 		5*time.Second, 5*time.Millisecond)
 
-	resp, err = ipc.Send(path, ipc.CmdToggle, time.Second)
+	rep, err = ipc.Send(path, ipc.CmdToggle, time.Second)
 	require.NoError(t, err)
-	require.Equal(t, ipc.ReplyOK, resp)
+	require.True(t, rep.OK)
 	require.Eventually(t, func() bool { return r.has("hide") },
 		5*time.Second, 5*time.Millisecond, "IPC toggle on a visible bar hides it")
 
-	resp, err = ipc.Send(path, ipc.CmdHide, time.Second)
+	rep, err = ipc.Send(path, ipc.CmdHide, time.Second)
 	require.NoError(t, err)
-	require.Equal(t, ipc.ReplyOK, resp, "IPC hide is wired (idempotent here)")
+	require.True(t, rep.OK, "IPC hide is wired (idempotent here)")
 }
 
 func TestStartupWiresIPCBeforeHotkey(t *testing.T) {
@@ -63,19 +63,19 @@ func TestStartupWiresIPCBeforeHotkey(t *testing.T) {
 	// summon itself just latches pendingShow pre-DomReady).
 	srv, path := newTestIPC(t)
 	a, _ := newTestApp(t, nil, Options{IPC: srv, Hotkey: "alt+space"})
-	var reply string
+	var reply ipc.Reply
 	ran := false
 	a.plat.startHotkey = func(platform.Hotkey, func()) (func(), error) {
 		ran = true
-		resp, err := ipc.Send(path, ipc.CmdToggle, time.Second)
+		rep, err := ipc.Send(path, ipc.CmdToggle, time.Second)
 		require.NoError(t, err)
-		reply = resp
+		reply = rep
 		return func() {}, nil
 	}
 	a.Startup(context.Background())
 
 	require.True(t, ran, "the fake hotkey backend ran during Startup")
-	require.Equal(t, ipc.ReplyOK, reply,
+	require.True(t, reply.OK,
 		"a summon arriving during hotkey registration is acked, not answered not-ready")
 }
 

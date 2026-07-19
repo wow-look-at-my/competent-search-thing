@@ -22,7 +22,7 @@ func newHideCmd(_ *env) *cobra.Command {
 			"running it prints a notice and exits nonzero.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			resp, err := ipc.Send(ipc.SocketPath(os.Getenv), ipc.CmdHide, sendTimeout)
+			rep, err := ipc.Send(ipc.SocketPath(os.Getenv), ipc.CmdHide, sendTimeout)
 			if err != nil {
 				if ipc.IsNotRunning(err) {
 					// Print the plain notice ourselves and keep cobra
@@ -32,7 +32,7 @@ func newHideCmd(_ *env) *cobra.Command {
 				}
 				return err
 			}
-			return checkReply(resp)
+			return checkReply(rep)
 		},
 	}
 }

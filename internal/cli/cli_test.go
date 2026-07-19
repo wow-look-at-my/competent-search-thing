@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"net"
@@ -132,9 +133,9 @@ func TestRootStartsGUIWithServer(t *testing.T) {
 
 	// The server really is listening on the configured socket and
 	// carries the version.
-	resp, err := ipc.Send(path, ipc.CmdVersion, time.Second)
+	rep, err := ipc.Send(path, ipc.CmdVersion, time.Second)
 	require.NoError(t, err)
-	require.Equal(t, testVersion, resp)
+	require.Equal(t, testVersion, rep.Version)
 }
 
 func TestRootSecondInstanceShowsTheFirst(t *testing.T) {
@@ -275,6 +276,65 @@ func TestHideTalksToRunningInstance(t *testing.T) {
 	require.Equal(t, 0, code, "stderr: %s", stderr)
 	awaitHandler(t, c.hides, "hide")
 	require.Equal(t, 0, gui.count())
+}
+
+// legacyDaemon fakes an OLD, pre-JSON instance on path: bare command
+// words in, raw legacy reply lines out; a JSON request line matches no
+// command and earns "err unknown command" -- which the new client must
+// answer with one legacy-line retry.
+func legacyDaemon(t *testing.T, path string) <-chan string {
+	t.Helper()
+	ln, err := net.Listen("unix", path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	cmds := make(chan string, 8)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				line, err := bufio.NewReader(conn).ReadString('\n')
+				if err != nil && line == "" {
+					return
+				}
+				switch cmd := strings.TrimSpace(line); cmd {
+				case "toggle", "show", "hide":
+					cmds <- cmd
+					_, _ = conn.Write([]byte("ok\n"))
+				default:
+					_, _ = conn.Write([]byte("err unknown command\n"))
+				}
+			}(conn)
+		}
+	}()
+	return cmds
+}
+
+func TestSubcommandsAgainstOldLegacyDaemon(t *testing.T) {
+	// The version-skew cell the JSON migration must not break: a NEW
+	// CLI driving an OLD daemon succeeds via the one-shot legacy
+	// retry, with the user-visible behavior of a plain success.
+	for _, sub := range []string{"toggle", "show", "hide"} {
+		t.Run(sub, func(t *testing.T) {
+			path := testSocketEnv(t)
+			cmds := legacyDaemon(t, path)
+			gui := &guiRecorder{}
+
+			code, stdout, stderr := run(t, gui, sub)
+			require.Equal(t, 0, code, "stderr: %s", stderr)
+			require.Empty(t, stdout, "a clean legacy-fallback success prints nothing")
+			select {
+			case got := <-cmds:
+				require.Equal(t, sub, got, "the legacy retry delivered the command")
+			case <-time.After(5 * time.Second):
+				t.Fatalf("the old daemon never received %s", sub)
+			}
+			require.Equal(t, 0, gui.count(), "no GUI starts; the old daemon handled it")
+		})
+	}
 }
 
 func TestToggleStartsGUIWhenNotRunning(t *testing.T) {

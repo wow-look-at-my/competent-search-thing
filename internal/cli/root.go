@@ -114,17 +114,17 @@ func runRoot(cmd *cobra.Command, e *env) error {
 // not-ready reply, and a nonzero exit when the instance did not answer
 // at all.
 func showRunningInstance(cmd *cobra.Command, path string) error {
-	resp, err := ipc.Send(path, ipc.CmdShow, sendTimeout)
+	rep, err := ipc.Send(path, ipc.CmdShow, sendTimeout)
 	if err == nil {
-		switch resp {
-		case ipc.ReplyOK:
+		switch {
+		case rep.OK:
 			fmt.Fprintln(cmd.OutOrStdout(), "competent-search-thing is already running; showing it")
 			return nil
-		case ipc.ReplyNotReady:
+		case rep.NotReady():
 			fmt.Fprintln(cmd.OutOrStdout(), "competent-search-thing is already running (still starting up)")
 			return nil
 		default:
-			err = fmt.Errorf("unexpected reply %q", resp)
+			err = fmt.Errorf("unexpected reply %q", rep.Raw)
 		}
 	}
 	// Print the failure ourselves and keep cobra from adding its
@@ -140,9 +140,9 @@ func showRunningInstance(cmd *cobra.Command, path string) error {
 // the bar shown once the frontend is ready.
 func summon(e *env, cmdName string) error {
 	path := ipc.SocketPath(os.Getenv)
-	resp, err := ipc.Send(path, cmdName, sendTimeout)
+	rep, err := ipc.Send(path, cmdName, sendTimeout)
 	if err == nil {
-		return summonReply(e, resp)
+		return summonReply(e, rep)
 	}
 	if !ipc.IsNotRunning(err) {
 		return err
@@ -152,11 +152,11 @@ func summon(e *env, cmdName string) error {
 	if lerr != nil {
 		if errors.Is(lerr, ipc.ErrAlreadyRunning) {
 			// Lost a startup race; the winner shows the bar instead.
-			resp, serr := ipc.Send(path, ipc.CmdShow, sendTimeout)
+			rep, serr := ipc.Send(path, ipc.CmdShow, sendTimeout)
 			if serr != nil {
 				return serr
 			}
-			return summonReply(e, resp)
+			return summonReply(e, rep)
 		}
 		log.Printf("ipc: %v (running without single-instance IPC)", lerr)
 		srv = nil
@@ -164,25 +164,28 @@ func summon(e *env, cmdName string) error {
 	return e.runGUI(RunOptions{Server: srv, ShowOnStartup: true})
 }
 
-// summonReply maps a summon exchange's reply to its result. A
+// summonReply maps a summon exchange's parsed reply to its result. A
 // not-ready reply still counts as success (checkReply), but earns a
 // one-line heads-up: the instance is booting and cannot act on the
 // summon just yet.
-func summonReply(e *env, resp string) error {
-	if resp == ipc.ReplyNotReady {
+func summonReply(e *env, rep ipc.Reply) error {
+	if rep.NotReady() {
 		fmt.Fprintln(e.stdout(), "competent-search-thing is still starting up; it may take a moment to respond")
 	}
-	return checkReply(resp)
+	return checkReply(rep)
 }
 
-// checkReply maps an IPC response line to a subcommand result.
-// ReplyNotReady counts as success: the instance is booting and shows
-// the bar itself once the frontend is ready.
-func checkReply(resp string) error {
-	if resp == ipc.ReplyOK || resp == ipc.ReplyNotReady {
+// checkReply maps a parsed IPC reply to a subcommand result. A
+// not-ready reply counts as success: the instance is booting and
+// shows the bar itself once the frontend is ready. The reply parsing
+// itself -- JSON, legacy, or the old-daemon fallback -- lives
+// entirely in ipc.Send; this layer only maps outcomes to exit
+// behavior.
+func checkReply(rep ipc.Reply) error {
+	if rep.OK || rep.NotReady() {
 		return nil
 	}
-	return fmt.Errorf("unexpected reply from the running instance: %q", resp)
+	return fmt.Errorf("unexpected reply from the running instance: %q", rep.Raw)
 }
 
 // Execute runs the CLI and returns the process exit code. version is
