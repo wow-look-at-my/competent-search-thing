@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	goruntime "runtime"
+	"runtime/debug"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -71,7 +72,13 @@ type platformSeams struct {
 	// command consumes it as a fallback candidate.
 	args0         func() string
 	detectSession func() platform.Session
-	startHotkey   func(hk platform.Hotkey, onDown func()) (stop func(), err error)
+	// setGCPercent swaps the runtime's GOGC value and returns the
+	// previous one; the initial index build lowers it temporarily to
+	// bound the walk's peak heap (gcbound.go). Production is
+	// debug.SetGCPercent, whose percentage composes with any
+	// externally installed GOMEMLIMIT.
+	setGCPercent func(pct int) int
+	startHotkey  func(hk platform.Hotkey, onDown func()) (stop func(), err error)
 	// startPortal registers the summon shortcut through the XDG portal
 	// (may block on interactive approval; ctx aborts); production is
 	// startPortalShortcut in hotkey.go.
@@ -162,6 +169,7 @@ func defaultPlatformSeams() platformSeams {
 			return os.Args[0]
 		},
 		detectSession: func() platform.Session { return platform.DetectSession(os.Getenv) },
+		setGCPercent:  debug.SetGCPercent,
 		startHotkey:   native.StartHotkey,
 		startPortal:   startPortalShortcut,
 		ensureGnomeBinding: func(ctx context.Context, hk platform.Hotkey, command string) (gsettings.Applied, error) {

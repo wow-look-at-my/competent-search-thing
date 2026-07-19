@@ -38,6 +38,10 @@ type seamRecorder struct {
 	emits   []emittedEvent
 	setPosX []int
 	setPosY []int
+	// gcPercents records every setGCPercent value in call order: the
+	// build-window bound writes buildGCPercent, its restore writes the
+	// fake's fixed previous value back.
+	gcPercents []int
 
 	winX, winY int  // what getPos returns
 	cursorOK   bool // what cursorInfo returns
@@ -142,6 +146,14 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// same-binary guard, so the seam's path is written verbatim.
 	a.plat.args0 = func() string { return "" }
 	a.plat.detectSession = func() platform.Session { return platform.Session{} }
+	// A recording GC seam so no test flips the real runtime's GOGC;
+	// the fake's previous value is a recognizable non-default.
+	a.plat.setGCPercent = func(pct int) int {
+		r.mu.Lock()
+		r.gcPercents = append(r.gcPercents, pct)
+		r.mu.Unlock()
+		return testPrevGCPercent
+	}
 	a.plat.startPortal = func(context.Context, platform.Hotkey, func()) (portalHandle, error) {
 		r.call("startPortal")
 		return nil, portal.ErrNoPortal

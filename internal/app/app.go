@@ -420,7 +420,12 @@ func (a *App) buildIndex(ctx context.Context) {
 			Seconds: a.plat.now().Sub(start).Seconds(),
 		})
 	}
+	// Bound the walk's GC headroom for exactly the build window: the
+	// restore runs before the watch layer comes up, so steady-state
+	// behavior is untouched (gcbound.go has the full rationale).
+	restoreGC := boundBuildGC(a.plat.setGCPercent)
 	count, dur, err := a.manager.BuildFromDisk(ctx, onProgress)
+	restoreGC()
 	// Clear the in-place line (a no-op off a TTY) BEFORE any completion
 	// or error log line, so none of them can collide with a
 	// still-rendered progress row.
