@@ -410,12 +410,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   is booting and shows itself). hide never starts the app: not
   running = plain notice on
   stderr + exit 1 (cobra error/usage output suppressed). The CLI
-  branches ONLY on ipc.Reply fields (checkReply/summonReply); wire
-  parsing incl. the old-daemon legacy retry lives entirely in
-  ipc.Send, so version skew is invisible here -- user-visible
-  messages and exit codes are identical either way
-  (TestSubcommandsAgainstOldLegacyDaemon pins the skew cell against a
-  fake legacy daemon). Convention:
+  branches ONLY on ipc.Reply fields (checkReply/summonReply); ALL
+  wire parsing lives in ipc.Send -- a non-JSON reply (e.g. a
+  still-running pre-JSON daemon's raw line) arrives in-band via Raw
+  and lands in the "unexpected reply" error path. Convention:
   ONE self-registering subcommand per file (init -> registerCommand);
   newRoot() consumes the builder registry so Execute -- and every
   test -- gets a fresh command tree. RunOptions{Server,
@@ -427,39 +425,34 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   and headless-tested. SocketPath: $COMPETENT_SEARCH_SOCKET override,
   else $XDG_RUNTIME_DIR/competent-search-thing.sock, else a per-uid
   name under os.TempDir(). ONE request per conn (2s conn deadline,
-  4 KiB line cap), one newline-terminated line each way, TWO wire
-  shapes the server picks per request by sniffing the trimmed line's
-  first byte: '{' = the JSON v2 protocol -- request
-  {"cmd":"toggle|show|hide|version|ping"} with unknown JSON fields
-  IGNORED on both sides (the documented tolerance contract), response
-  {"ok":true} (ping) / {"ok":true,"version":v} /
-  {"ok":true,"accepted":cmd} / {"ok":false,"error":"not ready"|
-  "unknown command"|"invalid request"} -- anything else = the legacy
-  v1 line protocol byte-for-byte ("ok" | the bare version string |
-  "err not ready" | "err unknown command"; pinned with string
-  literals by TestLegacyWireIsByteIdentical), so an OLD client
-  against a NEW daemon is untouched. Commands answer "not ready"
+  4 KiB line cap), one newline-terminated JSON object each way --
+  JSON is the ONLY wire shape (the legacy v1 line protocol is
+  DELETED): request {"cmd":"toggle|show|hide|version|ping"} with
+  unknown JSON fields IGNORED on both sides (the documented
+  tolerance contract), response {"ok":true} (ping) /
+  {"ok":true,"version":v} / {"ok":true,"accepted":cmd} /
+  {"ok":false,"error":"not ready"|"unknown command"|
+  "invalid request"}; a request line that does not parse as JSON --
+  incl. the old protocol's bare command words and arbitrary garbage
+  -- earns "invalid request" and runs nothing (pinned by
+  TestNonJSONRequestsAreRejected). Commands answer "not ready"
   until SetHandlers wires the app (nil handler members stay not
-  ready; version/ping always answer), and in BOTH shapes the ack is
+  ready; version/ping always answer), and the ack is
   written BEFORE the toggle/show/hide handler runs -- ack = accepted,
   not completed, so an app whose main thread is briefly stalled
   (startup indexing) can never time the client out; the handler then
   runs on the same conn goroutine, so Close still waits for in-flight
   handlers. Send(path, cmd, timeout) speaks JSON and returns a parsed
-  Reply{OK, Accepted, Version, Err, Raw, Legacy} + NotReady() -- ALL
+  Reply{OK, Accepted, Version, Err, Raw} + NotReady() -- ALL
   reply parsing lives here, callers branch on fields, never wire
-  strings: stray legacy reply lines map equivalently (middle-state
-  servers), and EXACTLY the legacy "err unknown command" string
-  answering the JSON request means an OLD pre-JSON daemon -> ONE
-  retry on a fresh conn (one request per conn) with the bare legacy
-  command line, Legacy=true -- so a NEW CLI degrades gracefully
-  against an old daemon across an upgrade
-  (TestSendFallsBackToLegacyAgainstOldDaemon + the cli-level
-  TestSubcommandsAgainstOldLegacyDaemon drive a fake legacy daemon).
-  Garbage replies come back in-band (Raw set, OK false, empty Err)
-  for callers to quote; only transport failures are errors, dial
+  strings. A reply line that does not parse as JSON -- incl. every
+  pre-JSON daemon reply line -- comes back in-band (Raw set, OK
+  false, empty Err) for callers to quote as "unexpected reply", the
+  restart-the-old-instance-once upgrade signal
+  (TestSendReturnsOldDaemonReplyInBand pins one conn, no retry);
+  only transport failures are errors, dial
   failures wrapped in ErrNotRunning (test with IsNotRunning); timeout
-  is ONE absolute deadline across dial + exchange + retry. Listen
+  is ONE absolute deadline across dial + exchange. Listen
   recovers stale sockets:
   EADDRINUSE -> 500ms probe dial; an answer = ErrAlreadyRunning, a
   dead socket = os.Remove + retry ONCE; after listening the file is
@@ -2107,8 +2100,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   `.github/scripts/darwin-smoke.ts` (typescript action, `file:`
   input) boots the built binary on the runner's real WindowServer
   session and asserts boot + JSON-shaped IPC round-trips within hard
-  deadlines + one legacy line-protocol exchange (a8-legacy-ipc, the
-  compat promise) + a real on-screen window via a compiled
+  deadlines + the legacy-rejection check (a8-legacy-rejected: a bare
+  v1 line must earn the JSON invalid-request error or a silent
+  close, never the old raw "ok") + a real on-screen window via a compiled
   CGWindowList Swift probe, including while a big index build is
   PROVABLY in flight (the hard B-midindex-window check: progress
   line present, completion line absent, before b1 runs) -- the step

@@ -7,7 +7,8 @@
 // B-midindex-window check gates on that proof) -- the exact user-reported
 // failure was `toggle` timing out with "read unix ...sock: i/o timeout"
 // during startup indexing, with no window ever appearing -- and (d) the
-// legacy v1 line protocol still answers byte-for-byte (a8-legacy-ipc).
+// deleted legacy v1 line protocol is REJECTED: a bare-word request must earn
+// the JSON invalid-request error, never a raw "ok" (a8-legacy-rejected).
 //
 // Verdicts and evidence go to the JOB LOG. Every "SMOKE PASS: <id>" /
 // "SMOKE FAIL: <id>" line is a hard check -- there are no warn-and-continue
@@ -128,10 +129,10 @@ fs.chmodSync(bin, 0o755);
 core.info(`binary: ${builtBin} (${fs.statSync(builtBin).size} bytes) -> throwaway copy ${bin}`);
 
 // ---- raw IPC transport --------------------------------------------------------
-// One request per connection, one line each way. The primary shape is the
-// JSON v2 protocol (write '{"cmd":"ping"}\n', read one JSON object line);
-// the bare-word legacy v1 shape ("ping\n" -> "ok") stays answered
-// byte-for-byte and a8-legacy-ipc CI-enforces that compat promise. The
+// One request per connection, one line each way. JSON is the ONLY wire shape
+// (write '{"cmd":"ping"}\n', read one JSON object line); the pre-JSON
+// bare-word v1 shape is deleted and must be rejected with the JSON
+// invalid-request error -- a8-legacy-rejected CI-enforces that deletion. The
 // server closes the conn after the reply (and after a 2s server-side
 // deadline when wedged -- an empty reply here is exactly the user-reported
 // failure signature).
@@ -495,11 +496,32 @@ async function scenarioA(): Promise<void> {
     return r.raw.detail;
   });
 
-  // The legacy v1 compat promise, CI-enforced: a bare-word request must keep
-  // answering the exact pre-JSON bytes (old clients vs a new daemon).
-  await check("a8-legacy-ipc", async () => {
+  // The legacy v1 line protocol is DELETED, CI-enforced: a bare-word request
+  // must be rejected with the JSON invalid-request error (or the conn closed
+  // with no reply) -- the old raw "ok" answer is now a FAIL.
+  await check("a8-legacy-rejected", async () => {
     const r = rawSend(app.sock, "ping", RAW_RTT_MS);
-    if (r.reply !== "ok") throw new Error(`legacy "ping" must answer exactly "ok": ${r.detail}`);
+    if (r.reply === "ok") {
+      throw new Error(`bare "ping" earned the legacy raw "ok" -- the v1 line protocol must be gone: ${r.detail}`);
+    }
+    if (r.reply === "") {
+      // No reply line at all is acceptable only as a clean close; a hang
+      // until the timeout kill is the wedged-server signature, not a
+      // rejection.
+      if (r.detail.includes("no reply within")) {
+        throw new Error(`bare "ping" hung instead of being rejected: ${r.detail}`);
+      }
+      return `conn closed with no reply; ${r.detail}`;
+    }
+    let ok: unknown;
+    try {
+      const parsed: unknown = JSON.parse(r.reply);
+      if (typeof parsed !== "object" || parsed === null) throw new Error("not a JSON object");
+      ok = (parsed as Record<string, unknown>).ok;
+    } catch (err) {
+      throw new Error(`bare "ping" must earn a JSON error reply (or no reply at all): ${r.detail}`);
+    }
+    if (ok !== false) throw new Error(`bare "ping" must be rejected with {"ok":false,...}: ${r.detail}`);
     return r.detail;
   });
 

@@ -36,8 +36,8 @@ const (
 // stuck behind a busy GUI main thread during startup indexing) can no
 // longer time out the client. Handlers still run on connection
 // goroutines and must be safe to call concurrently. A nil member
-// answers ReplyNotReady, so a not-yet-wired (or partially wired)
-// server degrades gracefully instead of crashing.
+// answers the not-ready error, so a not-yet-wired (or partially
+// wired) server degrades gracefully instead of crashing.
 type Handlers struct {
 	Toggle func()
 	Show   func()
@@ -47,7 +47,7 @@ type Handlers struct {
 // Server owns the unix listener and the accept loop behind the
 // single-instance socket. Create one with Listen; wire the app in
 // later with SetHandlers (commands arriving before that are answered
-// ReplyNotReady, except version/ping which always work).
+// the not-ready error, except version/ping which always work).
 type Server struct {
 	ln      net.Listener
 	version string
@@ -138,10 +138,11 @@ func (s *Server) accept() {
 }
 
 // handle serves one request/response exchange on conn: read the
-// request line, sniff its shape (a first byte of '{' after trimming =
-// the JSON v2 protocol, anything else = the legacy v1 line protocol,
-// byte-for-byte), write the matching response, then run the command's
-// handler (if any).
+// request line, plan its JSON response, write it, then run the
+// command's handler (if any). JSON is the only wire shape: a line
+// that does not parse as a JSON request -- including the bare command
+// words of the deleted pre-JSON line protocol -- is answered with the
+// invalid-request error.
 func (s *Server) handle(conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
@@ -150,18 +151,8 @@ func (s *Server) handle(conn net.Conn) {
 	if err != nil && line == "" {
 		return // nothing readable (timeout, empty close): no response owed
 	}
-	trimmed := strings.TrimSpace(line)
-	var reply []byte
-	var after func()
-	if strings.HasPrefix(trimmed, "{") {
-		var resp Response
-		resp, after = s.planJSON(trimmed)
-		reply, _ = json.Marshal(resp) // plain struct: Marshal cannot fail
-	} else {
-		var legacy string
-		legacy, after = s.plan(trimmed)
-		reply = []byte(legacy)
-	}
+	resp, after := s.plan(strings.TrimSpace(line))
+	reply, _ := json.Marshal(resp) // plain struct: Marshal cannot fail
 	_, _ = conn.Write(append(reply, '\n'))
 	if after != nil {
 		// The handler runs only after the acknowledgement is on the
@@ -172,34 +163,13 @@ func (s *Server) handle(conn net.Conn) {
 	}
 }
 
-// plan maps one legacy (v1) command line to its response line plus the
-// handler to invoke after that response is written (nil for commands
-// that answer without side effects, unknown commands, and unwired
-// handlers). The legacy replies are a compatibility contract: old
-// clients must keep seeing the exact pre-JSON bytes.
-func (s *Server) plan(cmd string) (reply string, after func()) {
-	switch cmd {
-	case CmdPing:
-		return ReplyOK, nil
-	case CmdVersion:
-		return s.version, nil
-	}
-	f, known := s.handlerFor(cmd)
-	if !known {
-		return replyUnknown, nil
-	}
-	if f == nil {
-		return ReplyNotReady, nil
-	}
-	return ReplyOK, f
-}
-
-// planJSON maps one JSON (v2) request line to its Response plus the
-// handler to invoke after that response is written -- the same
-// semantics as plan in the JSON shape. Unknown fields in the request
-// are ignored (the tolerance contract); a '{' line that is not valid
-// JSON answers the invalid-request error.
-func (s *Server) planJSON(line string) (Response, func()) {
+// plan maps one request line to its Response plus the handler to
+// invoke after that response is written (nil for commands that answer
+// without side effects, unknown commands, unwired handlers, and
+// invalid requests). Unknown fields in the request are ignored (the
+// tolerance contract); a line that does not parse as JSON answers the
+// invalid-request error and runs nothing.
+func (s *Server) plan(line string) (Response, func()) {
 	var req Request
 	if err := json.Unmarshal([]byte(line), &req); err != nil {
 		return Response{Error: errInvalidRequest}, nil
