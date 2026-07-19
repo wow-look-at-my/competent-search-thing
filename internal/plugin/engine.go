@@ -42,6 +42,18 @@ type resultProvider interface {
 	query(ctx context.Context, req Request) ([]Result, []string, error)
 }
 
+// prioritized is an OPTIONAL provider extension (the internal/watch
+// backendInfo pattern): a section-level source weight the frontend
+// uses for PLACEMENT. priority > 0 means "render this provider's
+// section in the zone ABOVE the file results"; the magnitude orders
+// prioritized sections among themselves. It is metadata, NOT a score:
+// it never touches match.Rank's canonical bands or any Result.Score,
+// and external plugins can never carry one -- the Emission field is
+// stamped registry-side from this interface, which only in-process
+// builtin sources can implement (the wire Response has no priority
+// field at all). Providers without the extension default to 0.
+type prioritized interface{ priority() int }
+
 // sourceResults runs one candidate source through the engine: the
 // single choke point for builtin results.
 func sourceResults(src candidateSource, ctx context.Context, req Request, fuzzyDisabled bool) ([]Result, error) {

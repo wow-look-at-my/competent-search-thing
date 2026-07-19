@@ -15,6 +15,15 @@ const builtinAppsSearchID = "apps-search"
 // the targeted !app / !launch path keeps its 15.
 const maxAppsSearchResults = 6
 
+// sourcePriorityApps places the untargeted apps section ABOVE the
+// file results (Emission.Priority via the prioritized extension:
+// priority > 0 = the frontend's above-files zone, magnitude orders
+// prioritized sections among themselves). Launchable apps are what
+// a Spotlight-style bar answers first; the targeted !app / !launch
+// provider deliberately stays 0 -- bang queries have no file results
+// to outrank, so targeted mode keeps today's layout.
+const sourcePriorityApps = 1
+
 // appsSearchProvider surfaces installed applications in NORMAL search
 // results: no bangs, an all_queries trigger (whose effective minimum
 // query length defaults to 2 runes). It is a candidate SOURCE: the
@@ -54,6 +63,10 @@ func (p *appsSearchProvider) match(query string, focused *AppInfo) (string, int,
 }
 
 func (p *appsSearchProvider) limit() int { return maxAppsSearchResults }
+
+// priority implements the optional prioritized extension: the apps
+// section renders above the file results.
+func (p *appsSearchProvider) priority() int { return sourcePriorityApps }
 
 func (p *appsSearchProvider) candidates(_ context.Context, _ Request) ([]match.Candidate, error) {
 	if p.installed == nil {

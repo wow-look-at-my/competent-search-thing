@@ -78,6 +78,12 @@ interface PluginEmission {
   name: string; // section header display name
   gen: number; // DROP unless === the current frontend seq
   results: PluginResult[]; // non-empty (empty answers never emit)
+  // Source priority, stamped registry-side for builtin sources only
+  // (internal/plugin Emission.Priority, json omitempty: absent means
+  // 0; external plugins can never set it). Sections with priority > 0
+  // render in the #priority-results zone ABOVE the file rows, and
+  // the magnitude orders prioritized sections among themselves.
+  priority?: number;
 }
 
 // The preview target QueryPreview sends (internal/preview Target).
