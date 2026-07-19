@@ -22,6 +22,13 @@ import (
 //	  exclude lists are stamped only, with an informational note.
 const currentRootsVersion = 3
 
+// CurrentRootsVersion returns the rootsVersion stamp this build
+// writes. Writers that must preserve the field across a full-file
+// rewrite (the app's GUI save path forces the on-disk value so a save
+// can never reset it to 0 and re-trigger the Load migrations) use it
+// as the fallback when no on-disk value is available.
+func CurrentRootsVersion() int { return currentRootsVersion }
+
 // baseExcludes returns the name-based exclude patterns every platform
 // defaults to. A fresh slice on every call so callers may append.
 // This is deliberately frozen as the v2-era set: migrations use it to
