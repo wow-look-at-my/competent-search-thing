@@ -324,7 +324,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (once, from startWatch; see above), "app:shown", "theme:changed" (no
   payload; frontend refetches GetTheme/GetCustomCSS),
   "plugin:results" (payload plugin.Emission
-  {plugin,name,gen,results}), "stats:update" (payload
+  {plugin,name,gen,results,priority} -- priority omitempty, > 0 =
+  the frontend's above-files zone), "stats:update" (payload
   sysstats.Snapshot {enabled,cpuPct,cpuOk,gpuPct,gpuOk,memUsed,
   memTotal,memOk,swapUsed,swapTotal,swapOk,netRxBps,netTxBps,netOk};
   enabled always true on the event -- it only ever fires from a live
@@ -842,13 +843,51 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   SysRoot "/sys", GOOS
   runtime.GOOS, Interval 1500ms, GPUInterval 5s, GPUTimeout 1s,
   LookPath exec.LookPath, OnUpdate, Logf; unexported test seams
-  gpuExec + now})` probes sources ONCE, cheaply (no subprocess
-  spawns): GOOS != linux = zero sources + one "placeholders" log;
+  gpuExec + now + darwin})` probes sources ONCE, cheaply (no
+  subprocess spawns), by a GOOS switch: windows/unknown = zero
+  sources + one "placeholders" log;
   linux = the three proc files assumed present, GPU = first readable
   glob hit of SysRoot/class/drm/card*/device/gpu_busy_percent
   (amdgpu) else LookPath("nvidia-smi") else none (intel: deliberately
   absent, no cheap sysfs busy%), all summarized in ONE "stats:
-  sources: cpu=... gpu=..." line. THE invariant: nothing outside the
+  sources: cpu=... gpu=..." line; darwin = the darwinReaders seam
+  (Options.darwin, else newDarwinReaders -- binding only, zero IO at
+  probe time) + its own accurate source line ("cpu=host_statistics
+  mem=vm_statistics64+hw.memsize swap=vm.swapusage net=sysctl(iflist2)
+  gpu=none"), while a readers value with nothing bound (the !darwin
+  stub) degrades to the placeholders path. DARWIN LAYOUT (the
+  fixture tests must keep running on BOTH CI jobs, so the split is
+  VALUE-driven, build tags confined to the thin readers): darwin.go
+  is UNTAGGED pure logic -- the darwinReaders struct (cpuTicks/
+  memTotal/vmStat/swapRaw/ifRIB/ifNames; nil member = that metric
+  degrades alone), cpuCountersFromTicks (busy=user+system+nice,
+  total=busy+idle; uint32 tick wraps take the linux skip-one-update
+  path), memFromVMStat = Activity Monitor's "Memory Used"
+  ((internal - purgeable clamped at 0) + wired + compressor pages *
+  pageSize -- NOT total-free, which macOS's tiny free_count makes
+  meaningless), decodeXswUsage (vm.swapusage xsw_usage: LE uint64s
+  at 0/8/16, min len 24; total 0 = the valid empty-dynamic-swap
+  dash), decodeIfList2 (bounds-checked NET_RT_IFLIST2 walker, the
+  fanotify_parse pattern: 4-byte prologue, advance by ifm_msglen,
+  RTM_IFINFO2=0x12 records read ifm_index@12 + if_data64 64-bit
+  ibytes/obytes@96/104; malformed lengths error, zero usable records
+  error -- never a silent zero), the SEPARATE darwin iface filter
+  (skip lo/gif/stf/awdl/llw/utun/ap/bridge/anpi/pktap/feth/vmnet;
+  keep en* -- Wi-Fi IS en0 on Macs -- and bond*), and the
+  sampleCPUDarwin/sampleMemDarwin/sampleNetDarwin bodies;
+  readers_darwin.go (the package's ONE cgo file, darwin-only) binds
+  host_statistics/host_statistics64+host_page_size (mach ports
+  deallocated per call) + unix.SysctlUint64("hw.memsize") +
+  unix.SysctlRaw("vm.swapusage") + syscall.RouteRIB(NET_RT_IFLIST2)
+  (deprecated-but-kept: x/net/route exposes NO darwin byte counters
+  -- verified) + net.Interfaces; readers_other.go (!darwin) binds
+  nothing. sampleCPU/sampleMem/sampleNet dispatch on s.dwn != nil
+  and share the extracted updateCPURate/updateNetRate with linux
+  (byte-identical linux behavior); sampleGPU is untouched -- darwin
+  GPU is the DELIBERATE dash (GPUOK false, gpu=none in the probe
+  log; the IOKit IOAccelerator "PerformanceStatistics" route is the
+  documented future source, the "intel: deliberately absent"
+  precedent). THE invariant: nothing outside the
   sampler goroutines ever does IO -- Snapshot() is a mutex-guarded
   copy, SetVisible(v) is a flag flip (+ non-blocking 1-buffered kick
   send on true), and while hidden the loops sample NOTHING, so the
@@ -883,7 +922,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   math on a fake clock, full lifecycle over a real loop, nvidia fake
   incl. ctx-deadline + real /bin/sh subprocess kill) plus
   BenchmarkSample: one full fast-path sample against the real /proc
-  (skips where unreadable). Consumed by internal/app's stats.go.
+  (skips where unreadable). darwin_test.go is UNTAGGED (synthetic
+  xsw_usage/RIB buffers, scripted fakeDarwin readers with call
+  counts, GOOS "darwin" + injected seam lifecycle incl. the
+  hidden-reads-nothing proof -- runs on linux CI AND the mac job;
+  the nil-seam stub expectation is runtime.GOOS-gated);
+  readers_darwin_test.go (darwin-only) real-calls every production
+  reader on the mac runner (tick monotonicity, memsize/vm_stat
+  sanity, real-RIB decode against the documented offsets, and a
+  two-real-samples end-to-end with live cpu/net + the GPU dash).
+  Consumed by internal/app's stats.go.
 - `internal/theme` -- design-token resolution. WARNING: the 22
   `TokenNames` (bg, bg-elevated, fg, fg-dim, accent, accent-fg,
   selection-bg, selection-fg, border, highlight, warning, badge-bg,
@@ -996,7 +1044,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   per-provider 5s-throttled logging (throttle.go), focused boost
   added and clamped at 100, emit only with results and only while ctx
   is live -- emit runs on provider goroutines and MUST be
-  goroutine-safe. Routing: resolved bang (exact/alias/unique-prefix)
+  goroutine-safe. SOURCE PRIORITY (placement metadata, NEVER a
+  score): `prioritized` (engine.go, the watch backendInfo
+  optional-extension pattern) is `priority() int`; Emission gains
+  Priority (json priority,omitempty) stamped in dispatchOne and
+  CheatSheet via providerPriority (type assertion, absent = 0).
+  Only apps-search implements it (sourcePriorityApps = 1, the
+  above-file-results placement); the targeted apps provider stays 0
+  (bang queries have no files to outrank), and external plugins can
+  NEVER set it -- the wire Response has no priority field and
+  *externalProvider does not implement the extension (pinned by
+  TestSourcePriorityMetadata + TestExternalEmissionPriorityAlwaysZero
+  + TestPriorityNeverChangesMintedScores: the mint is byte-identical,
+  bands untouched). Routing: resolved bang (exact/alias/unique-prefix)
   + space => ONLY that provider, all trigger gating bypassed;
   bare/partial/ambiguous or resolved-without-space sigil => ONLY the
   builtin suggestions provider; bang-shaped text with zero candidates
@@ -1022,10 +1082,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   launch with activation credentials);
   builtin_apps_search.go "apps-search"/Apps -- installed apps in
   NORMAL results: no bangs, a real all_queries Trigger (match
-  override on builtinBase, effective min 2 runes), ranking exact 100
-  / prefix 90 / word-start 75 (words = letter/digit runs, so spaces,
-  hyphens, dots split) / substring 60, cap 6, same run_command
-  launch; bang routing keeps it exclusive with the targeted !app
+  override on builtinBase, effective min 2 runes), the shared
+  engine's canonical bands over the app name (words = letter/digit
+  runs, so spaces, hyphens, dots split), cap 6, same run_command
+  launch, and THE one prioritized source (priority() = 1 -> its
+  Emission renders above the file results); bang routing keeps it
+  exclusive with the targeted !app
   path, and a nil/empty snapshot emits nothing;
   builtin_openwindows.go "windows"/Open Windows -- also in the normal
   fan-out (no bangs; own all-queries match, min 2 runes of
@@ -1842,9 +1904,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `wails.json` -- Wails CLI project config (app name, frontend
   install/build commands) read by `wails dev`/`wails build` only; the
   no-CLI go-toolchain path does not use it.
-- `frontend/` -- vanilla TypeScript + Vite. No framework. `index.html`
+- `frontend/` -- vanilla TypeScript + Vite. No framework. Tiny vitest
+  + jsdom suite (`npm test` = `vitest run`; vitest.config.ts +
+  src/test-setup.ts, which loads the REAL index.html body into jsdom
+  before render.ts's module-load template grabs, so the DOM-order
+  tests fail if the zones/templates change shape; src/priority.test.ts
+  pins priority-above-files rendering, the flat traversal order, and
+  the reconcileSelection rules -- run in the CI linux job's frontend
+  step). `index.html`
   (query row with inline SVG magnifier + hidden bang chip; #results
-  split into #file-results / static #empty ("No matches") /
+  split into #priority-results (plugin sections with priority > 0,
+  ABOVE the files) / #file-results / static #empty ("No matches") /
   #plugin-results zones; status bar + degraded chip + backend chip;
   the #stats row
   BELOW the status bar -- the bottom-most chrome, five STATIC
@@ -1886,10 +1956,24 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   without error, or RunPluginAction resolved without error --
   set_query and blank queries never commit;
   "plugin:results" emissions are dropped unless gen === seq, else
-  upsert that plugin's section (keyed by id) and re-render the plugin
-  area BELOW the file rows, never displacing them; selection is one
-  flat list, file rows then plugin rows: ArrowUp/Down wrap, Home/End,
-  hover -- selection scrollIntoView fires ONLY for keyboard/auto-
+  upsert that plugin's section (keyed by id; priority = e.priority ??
+  0) and renderPluginArea re-renders BOTH plugin zones
+  (render.ts splitByPriority: priority > 0 -> #priority-results above
+  the file rows -- the apps section -- everything else below;
+  compareSections = priority desc, max score desc, plugin id);
+  selection is one flat list in DOM order -- priority rows, then file
+  rows, then below-zone plugin rows: ArrowUp/Down wrap, Home/End,
+  hover; row handlers resolve their index at EVENT time
+  (rows.indexOf(row) -- render-time captured indices went stale when
+  a late priority emission PREPENDED rows above the files), and every
+  re-render reconciles the selection through selection.ts
+  reconcileSelection: userNavigated (set by arrows/Home/End/hover,
+  cleared per generation in runSearch) preserves the selected item BY
+  IDENTITY at its shifted index, while an un-navigated bar re-runs
+  auto-select on row 0 so a late apps section takes the selection
+  Spotlight-style (never at a blank query -- the cheat sheet stays
+  unselected, and its section is always priority 0/below);
+  selection scrollIntoView fires ONLY for keyboard/auto-
   select navigation (applySelection/select carry a scroll flag;
   hover and the plugin-area re-render select without scrolling, so
   they never move the viewport), and wheel input on #results is
@@ -2188,8 +2272,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   #23 briefly added was redundant and was removed in the 2026-07-17
   ci.yml cleanup (#25).
 - The `linux` job: checkout -> apt install gtk/webkit/x11 dev packages plus
-  xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run build`
-  in `frontend/` -> `wow-look-at-my/go-toolchain@v1`
+  xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run
+  build && npm test` in `frontend/` (npm test = the vitest
+  DOM-ordering gate) -> `wow-look-at-my/go-toolchain@v1`
   with `targets: linux/amd64,windows/amd64`, `cgo: 'true'`,
   `timeout: '20'`, `autorelease: 'false'`, and env
   `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> two

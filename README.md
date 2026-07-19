@@ -412,8 +412,9 @@ buildhost (see [Install](#install)):
       built-in commands (`!rescan`, `!reload`, `!config`, `!version`,
       `!quit`, `!app`) and three documented example plugins
 - [x] Installed apps in normal results: matching apps show up as an
-      async Apps section below the file results for plain queries
-      (exact/prefix/word-start/substring ranking, capped at 6; see
+      async Apps section ABOVE the file results for plain queries
+      (a source-priority placement, not a score hack; engine
+      exact/prefix/word-start/substring ranking, capped at 6; see
       [Apps in normal results](#apps-in-normal-results))
 - [x] Empty-query cheat sheet: an empty bar lists the available
       commands (the same list a bare `!` shows) with no row
@@ -1399,8 +1400,10 @@ and macOS enumeration is best-effort.
 ### Apps in normal results
 
 Installed apps also surface in plain queries -- no bang needed. Typing
-`fire` shows an **Apps** section (below the file results, like any
-plugin section) with Firefox in it; Enter launches the selection
+`fire` shows an **Apps** section ABOVE the file results with Firefox
+in it, auto-selected as row 0 (Spotlight-style: Enter launches the
+app) unless you have already arrowed or hovered into the list, in
+which case your selection stays put. Enter launches the selection
 exactly like `!app` does. This is the fourth built-in provider,
 `apps-search`:
 
@@ -1410,9 +1413,16 @@ exactly like `!app` does. This is the fourth built-in provider,
   substring; ties break alphabetically. The section caps at 6 results
   to stay out of the way -- use `!app` / `!launch` for the full list
   of 15.
+- "Above the files" is a SOURCE PRIORITY, not a score: the section
+  carries priority 1 on its emission (every other section is 0 and
+  keeps rendering below the file results), the UI places priority > 0
+  sections in the zone above the file rows, and the engine's scoring
+  bands are untouched. The priority is stamped by the app for its
+  built-in sources; external plugins cannot set it.
 - Bang routing keeps the two paths mutually exclusive: a `!app ...` /
-  `!launch ...` query dispatches only the targeted launcher, so apps
-  never render twice.
+  `!launch ...` query dispatches only the targeted launcher (in the
+  classic below zone -- there are no file results to outrank on a
+  bang query), so apps never render twice.
 - To turn the untargeted section off (the targeted `!app` / `!launch`
   bangs are unaffected):
 
@@ -1812,10 +1822,40 @@ Per metric honesty, on Linux:
   busy-percent file, so Intel GPUs show a dash (running a whole
   `intel_gpu_top` pipeline is not worth it here).
 
+On macOS the row is live too, from spawn-free system calls:
+
+- **CPU** comes from the mach host tick counters (`host_statistics`
+  `HOST_CPU_LOAD_INFO`), through the same delta/staleness/wrap
+  machinery as Linux.
+- **Memory** is `hw.memsize` for the total, and the used figure is
+  computed from the `host_statistics64` page counts the way Activity
+  Monitor computes "Memory Used": App Memory (anonymous pages minus
+  purgeable) + wired + compressed. That is the number macOS users
+  will diff the row against -- "total - free" would overstate wildly,
+  because macOS keeps `free_count` tiny by design (file cache).
+- **Swap** is the `vm.swapusage` sysctl. macOS swap is dynamic: while
+  it is empty the total reports 0 and the row shows a dash, exactly
+  like a swapless Linux box.
+- **Network** sums the 64-bit per-interface byte counters from the
+  `NET_RT_IFLIST2` routing sysctl. Loopback and Apple's
+  pseudo-interfaces are excluded (`awdl`/`llw` wireless links, `utun`
+  VPNs incl. iCloud Private Relay, the `ap` hotspot, `bridge`
+  Internet Sharing -- member traffic would double-count -- plus
+  `gif`/`stf`/`anpi`/`pktap`/`feth`/`vmnet`); `en*` (Wi-Fi is `en0`
+  on Macs, Thunderbolt/USB ethernet are `enN`) and `bond*` count.
+- **GPU deliberately shows a dash** on macOS for now. The only
+  spawn-free source is IOKit's IOAccelerator "PerformanceStatistics"
+  registry ("Device Utilization %"), which is a pile of
+  IOKit/CoreFoundation cgo whose key names are not API-stable across
+  macOS releases -- the same honesty call as Intel-on-Linux: a
+  reliable dash beats a fragile number. The startup probe log says
+  `gpu=none`; the IOAccelerator route is the documented future source
+  if the dash ever needs replacing.
+
 Any metric whose source is missing or failing shows a dash instead of
 a stale or fake number, and the failure is logged once, not per
-sample. On Windows and macOS there are no sources wired up yet, so
-the whole row shows dashes there for now.
+sample. On Windows there are no sources wired up yet, so the whole
+row shows dashes there for now.
 
 `stats.disabled` in `config.json` turns the feature off entirely: no
 sampler is built and the row is removed from the bar (not dashes --
