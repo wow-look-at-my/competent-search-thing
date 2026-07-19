@@ -206,10 +206,10 @@ func TestDefaultRootsAreWholeFilesystem(t *testing.T) {
 	require.Equal(t, []string{"/"}, c.Roots, "linux/darwin default root is the filesystem root")
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t,
-		[]string{".git", "node_modules", ".cache",
+		withFirmlink([]string{".git", "node_modules", ".cache",
 			".hg", ".svn", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox", ".venv",
-			"/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"},
-		c.Excludes, "defaults carry the noise and system excludes on unix-likes")
+			"/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"}),
+		c.Excludes, "defaults carry the noise and system excludes on unix-likes, plus the firmlink dedup on darwin")
 }
 
 func TestDirUsesEnvOverride(t *testing.T) {
