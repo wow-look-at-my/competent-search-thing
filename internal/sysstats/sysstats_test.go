@@ -122,8 +122,10 @@ func (f *fixture) options(lr *logRecorder) Options {
 	return Options{ProcRoot: f.proc, SysRoot: f.sys, GOOS: "linux", Logf: lr.logf}
 }
 
-func TestNewNonLinux(t *testing.T) {
-	for _, goos := range []string{"windows", "darwin"} {
+// TestNewNoSourcePlatforms covers the platforms with zero sources
+// (darwin has real sources now -- its cases live in darwin_test.go).
+func TestNewNoSourcePlatforms(t *testing.T) {
+	for _, goos := range []string{"windows", "plan9"} {
 		t.Run(goos, func(t *testing.T) {
 			lr := &logRecorder{}
 			var calls atomic.Int64
