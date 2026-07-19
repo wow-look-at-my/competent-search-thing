@@ -146,6 +146,18 @@ A whole-system walk needs guardrails, and they are on by default:
   [File watching and freshness](#file-watching-and-freshness)). On
   Windows only the name patterns apply (it has no such virtual
   trees).
+- **macOS firmlink dedup.** Since Catalina, macOS mounts the writable
+  APFS Data volume at `/System/Volumes/Data` and *also* exposes its
+  content at the canonical paths (`/Users`, `/Applications`,
+  `/usr/local`, ...) through firmlinks. Both spellings name the same
+  files, so a whole-filesystem walk from `/` without a guard indexes
+  roughly 45% of the disk twice -- double the entries, double the RAM,
+  double the build time, duplicate search results. Fresh macOS
+  configs therefore exclude `/System/Volumes/Data` (a full-path
+  pattern); everything stays searchable under its canonical spelling.
+  If you truly want the raw Data-volume view indexed too, delete that
+  pattern from `excludes` in config.json -- it is an ordinary exclude,
+  not hardcoded.
 - **Mount skipping.** At every index build and rescan the app reads
   `/proc/self/mounts` (Linux) and skips mountpoints under the roots
   whose filesystem type is kernel-virtual (`proc`, `sysfs`, `tmpfs`,
@@ -168,7 +180,7 @@ To narrow the scope, edit `roots` in config.json (see
 ```json
 {
   "roots": ["/home/me", "/etc"],
-  "rootsVersion": 3
+  "rootsVersion": 4
 }
 ```
 
@@ -183,14 +195,19 @@ additionally get the v3 step: if your `excludes` still contain all
 three stock patterns (`.git`, `node_modules`, `.cache`), the missing
 high-churn noise patterns are appended (see
 [File watching and freshness](#file-watching-and-freshness)); a
-curated or emptied list is left exactly as you wrote it. Either way
-`"rootsVersion": 3` is written back so the check never re-runs. Watch
+curated or emptied list is left exactly as you wrote it. On macOS,
+configs stamped below 4 get the v4 step under the same rule: the
+firmlink-dedup exclude `/System/Volumes/Data` (see above) is appended
+to default-shaped lists, while curated lists only get an
+informational note. Either way
+`"rootsVersion": 4` is written back so the check never re-runs. Watch
 for these startup log lines:
 
 ```
 config: index roots upgraded to the whole-filesystem default (/); edit roots in config.json to revert -- the first rescan will re-walk everything
 config: system exclude patterns added for whole-filesystem indexing: /proc, /sys, /dev, /run, /tmp, /var/tmp, lost+found
 config: high-churn exclude patterns added for the watch layer: .hg, .svn, __pycache__, .mypy_cache, .pytest_cache, .ruff_cache, .tox, .nox, .venv; remove any of them in config.json to index those trees
+config: macOS firmlink exclude added: /System/Volumes/Data (macOS shows the same files at /Users, /Applications, ...; indexing both nearly doubles the index and its RAM); remove it in config.json to index the Data volume twice
 ```
 
 To revert, set `roots` back to what you want (e.g. `["/home/me"]`) and
@@ -222,6 +239,16 @@ reports the whole time-to-ready:
 ```
 index: startup complete: 12449259 entries in 41.3s, 384.2MB ram
 ```
+
+The `ram` figure is the process's **current** memory footprint: on
+Linux the resident set from `/proc/self/statm`, on macOS the mach
+`phys_footprint` -- the same number Activity Monitor's "Memory"
+column shows (older builds reported `getrusage` `ru_maxrss` there,
+the peak high-water mark, which could only ever grow). While the
+initial build runs the app also lowers the Go garbage collector's
+growth target (`GOGC` 40 for just that window, restored right after)
+so the walk's transient allocations cannot balloon the peak to ~2x
+the live index; steady-state behavior is untouched.
 
 ## File watching and freshness
 

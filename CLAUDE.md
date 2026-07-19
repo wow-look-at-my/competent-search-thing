@@ -158,7 +158,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   printer too), and kicks the initial disk walk in a
   goroutine (under a cancellable context) whose ticks render through
   the printer (Done clears the line before the completion/error
-  logs); when the walk finishes,
+  logs); the BuildFromDisk window runs under a lowered GOGC
+  (gcbound.go: boundBuildGC over the plat.setGCPercent seam,
+  production debug.SetGCPercent, buildGCPercent 40, restored
+  immediately after BuildFromDisk returns on every path -- walk churn
+  otherwise doubles the peak heap at GOGC=100, and nothing else
+  bounds it on darwin where the cgroup GOMEMLIMIT guard is inert; a
+  percentage composes with any external GOMEMLIMIT, which is why
+  SetGCPercent was chosen over a derived byte limit); when the walk
+  finishes,
   `startWatch` brings up the `watch.Watcher` + `watch.Rescanner` +
   `watch.Sweeper` trio honoring the Options watcher knobs
   (WatchMaxWatches, WatchExcludes -> a second watch-only Excluder,
@@ -731,15 +739,25 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   .pytest_cache .ruff_cache .tox .nox .venv, the v3 high-churn set) +
   the system trees (/proc /sys /dev /run /tmp /var/tmp full-path +
   lost+found by name; unix-likes only -- windows gets the name
-  patterns without system trees). rootsVersion (0 = legacy, current
-  3) drives the one-shot Load migration, each missing step applied in
+  patterns without system trees) + firmlinkExcludesFor (darwin only:
+  /System/Volumes/Data full-path -- the APFS Data volume macOS ALSO
+  exposes at the firmlinked canonical paths /Users, /Applications,
+  ..., so an unguarded "/" walk indexes ~45% of the disk twice).
+  rootsVersion (0 = legacy, current
+  4) drives the one-shot Load migration (migrateRootsFor; goos is a
+  parameter so tests cover the darwin shape headlessly), each missing
+  step applied in
   order: the v2 step moves configs whose roots are exactly the legacy
   home default (or empty) to the new default roots + appends the
   missing system excludes (user patterns untouched; customized roots
   stamped only); the v3 step appends the MISSING noiseExcludes -- but
   ONLY when the exclude list still contains ALL of baseExcludes
   (default-shaped); a curated-away or explicitly empty list is
-  stamped only, with an informational note. Either way version 3 is
+  stamped only, with an informational note; the v4 step applies the
+  identical policy to the darwin firmlink exclude (non-darwin = pure
+  stamp, nothing added or announced), and each step is gated on its
+  own version so already-fired informational notes never repeat.
+  Either way version 4 is
   Saved back, and every user-visible change lands in the
   non-serialized MigrationNotes (json:"-") that internal/app logs
   loudly at startup -- the scope never changes silently. `Load` never crashes: missing file -> defaults
@@ -1291,7 +1309,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   with the process RAM figure resampled at most once per second;
   `Done()` erases and resets all render/throttle state (safe when
   nothing rendered); `TTY()`; `IsTerminal(*os.File)`; mem.go `RAM()`
-  (platform RSS via rss_{linux,darwin,windows}.go, runtime Sys
+  (platform CURRENT footprint via rss_{linux,darwin,windows}.go --
+  linux /proc/self/statm, windows WorkingSetSize, darwin mach
+  task_info TASK_VM_INFO phys_footprint (Activity Monitor's figure)
+  through the package's ONE cgo file footprint_darwin.go (the
+  sysstats readers_darwin.go pattern; darwin builds need cgo, which
+  Wails already requires) with getrusage ru_maxrss -- the PEAK, in
+  bytes on darwin -- as the mach-failure fallback; runtime Sys
   fallback) / `RAMString()` / `FormatBytes` (decimal MB/GB, one
   decimal). All methods goroutine-safe. Consumed by internal/app's
   progress.go (the `newProgress` seam).
