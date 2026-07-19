@@ -144,12 +144,26 @@ jobs:
           timeout: '30'
 
       - name: GUI smoke (window + IPC round-trip)
-        # Non-gating while the macOS summon fix iterates on this branch;
-        # flipped to a hard gate before merge.
-        continue-on-error: true
+        # HARD GATE: a smoke failure fails the darwin job (and with it
+        # the required all-builds status). Every SMOKE id in the script
+        # is a hard pass/fail; screenshots are evidence, not checks.
         uses: wow-look-at-my/actions@typescript#latest
         with:
           file: .github/scripts/darwin-smoke.ts
+
+      - name: Upload smoke screenshots
+        # Mirrors the linux job's Xvfb screenshots artifact: the smoke
+        # script drops its best-effort captures in smoke-shots/ at the
+        # workspace root. ignore (not warn): a failure before any
+        # capture -- or a TCC-restricted screencapture -- legitimately
+        # leaves nothing to upload, and the smoke step itself is the
+        # gate.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: darwin-smoke-${{ github.sha }}
+          path: smoke-shots/
+          if-no-files-found: ignore
 
       - name: Hand off the darwin binary to the publish job
         # Same org-standard cache hand-off the linux job uses.

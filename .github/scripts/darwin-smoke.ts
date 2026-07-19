@@ -1,16 +1,22 @@
-// macOS GUI smoke gate: boots the freshly built app on the runner's real
-// WindowServer session and verifies, with hard evidence in the job log, that
-// (a) the app boots and its IPC socket answers, (b) `show` makes a real
-// on-screen window appear (CGWindowList probe), and (c) IPC toggle/show
-// round-trips answer within a deadline EVEN WHILE a large index build is
-// running -- the exact user-reported failure was `toggle` timing out with
-// "read unix ...sock: i/o timeout" during startup indexing, with no window
-// ever appearing.
+// macOS GUI smoke gate (HARD-GATING: any SMOKE FAIL fails the job): boots the
+// freshly built app on the runner's real WindowServer session and verifies,
+// with hard evidence in the job log, that (a) the app boots and its IPC
+// socket answers the JSON protocol, (b) `show` makes a real on-screen window
+// appear (CGWindowList probe), (c) IPC toggle/show round-trips answer within
+// a deadline EVEN WHILE a large index build is provably running (the
+// B-midindex-window check gates on that proof) -- the exact user-reported
+// failure was `toggle` timing out with "read unix ...sock: i/o timeout"
+// during startup indexing, with no window ever appearing -- and (d) the
+// legacy v1 line protocol still answers byte-for-byte (a8-legacy-ipc).
 //
-// All evidence goes to the JOB LOG (org rule: no actions/upload-artifact).
-// Every check logs "SMOKE PASS: <id> (<ms>ms, detail)" or "SMOKE FAIL: ...";
-// the round-trip milliseconds ARE the evidence for the IPC bug. Full app
-// logs are dumped at teardown prefixed applog[A]| / applog[B]|.
+// Verdicts and evidence go to the JOB LOG. Every "SMOKE PASS: <id>" /
+// "SMOKE FAIL: <id>" line is a hard check -- there are no warn-and-continue
+// ids -- while screenshots are best-effort EVIDENCE (logged as "evidence:",
+// never a SMOKE id; copied to smoke-shots/ at the workspace root, which
+// ci.yml uploads as the darwin-smoke artifact, mirroring the linux job's
+// screenshots artifact). App logs dump at teardown prefixed applog[A]| /
+// applog[B]| -- in full when anything failed, filtered to the
+// summary-relevant lines on an all-green run.
 //
 // Runs via wow-look-at-my/actions@typescript#latest (file: input). Injected
 // globals used: core, $, fs, path, os, child_process, env.
@@ -36,6 +42,7 @@ const RAW_RTT_MS = 2000; // raw socket round-trip budget (version/ping checks)
 const CLI_RTT_MS = 2500; // `<bin> toggle|show|hide` must exit within this
 const WINDOW_DEADLINE_MS = 8000; // idle-scenario window appear/disappear budget
 const WINDOW_DEADLINE_BUSY_MS = 10000; // scenario B window budget while indexing
+const MIDINDEX_WINDOW_MS = 20000; // scenario B: progress line must appear within this
 const SCENARIO_B_CAP_MS = 180000; // hard cap on ALL of scenario B, then SIGKILL
 const STOP_GRACE_MS = 5000; // SIGTERM -> SIGKILL grace on app teardown
 const POLL_MS = 250; // generic poll interval
@@ -82,6 +89,7 @@ async function pollFor<T>(
 
 // ---- check verdicts ----------------------------------------------------------
 const failures: string[] = [];
+let fatal = false; // an abort outside the per-check verdicts (setFailed in the catch)
 
 async function check(id: string, fn: () => Promise<string>): Promise<boolean> {
   const t0 = Date.now();
@@ -120,10 +128,13 @@ fs.chmodSync(bin, 0o755);
 core.info(`binary: ${builtBin} (${fs.statSync(builtBin).size} bytes) -> throwaway copy ${bin}`);
 
 // ---- raw IPC transport --------------------------------------------------------
-// The line protocol: write "<cmd>\n", read exactly one reply line ("ok" /
-// version string / "err <reason>"); the server closes the conn after the
-// reply (and after a 2s server-side deadline when wedged -- an empty reply
-// here is exactly the user-reported failure signature).
+// One request per connection, one line each way. The primary shape is the
+// JSON v2 protocol (write '{"cmd":"ping"}\n', read one JSON object line);
+// the bare-word legacy v1 shape ("ping\n" -> "ok") stays answered
+// byte-for-byte and a8-legacy-ipc CI-enforces that compat promise. The
+// server closes the conn after the reply (and after a 2s server-side
+// deadline when wedged -- an empty reply here is exactly the user-reported
+// failure signature).
 const haveNC = fs.existsSync("/usr/bin/nc");
 const NODE_SEND_SRC =
   'const net = require("net");' +
@@ -178,6 +189,25 @@ function rawSend(sock: string, cmd: string, timeoutMs: number): RawReply {
       ms,
       detail: `${cmd} -> ${why} in ${ms}ms${got !== "" ? ` partial="${got}"` : ""}${errOut !== "" ? ` stderr=${errOut}` : ""}`,
     };
+  }
+}
+
+// jsonSend: one JSON (v2) exchange -- the request is {"cmd":<cmd>} and the
+// reply must parse as a JSON object (obj undefined = no/non-JSON reply; the
+// RawReply carries the evidence either way).
+interface JsonReply {
+  obj: Record<string, unknown> | undefined;
+  raw: RawReply;
+}
+
+function jsonSend(sock: string, cmd: string, timeoutMs: number): JsonReply {
+  const raw = rawSend(sock, JSON.stringify({ cmd }), timeoutMs);
+  try {
+    const parsed: unknown = JSON.parse(raw.reply);
+    if (typeof parsed === "object" && parsed !== null) return { obj: parsed as Record<string, unknown>, raw };
+    return { obj: undefined, raw };
+  } catch (err) {
+    return { obj: undefined, raw };
   }
 }
 
@@ -368,15 +398,17 @@ async function expectWindow(app: App, want: boolean, deadlineMs: number): Promis
 }
 
 // ---- shared boot check ---------------------------------------------------------
+// Boot = the socket answers a JSON ping with {"ok":true}, so every boot also
+// asserts the v2 protocol shape.
 function bootCheck(id: string, app: App): Promise<boolean> {
   return check(id, () =>
-    pollFor(`ipc socket ${app.sock} to answer ping`, BOOT_DEADLINE_MS, POLL_MS, async () => {
+    pollFor(`ipc socket ${app.sock} to answer a JSON ping`, BOOT_DEADLINE_MS, POLL_MS, async () => {
       if (app.proc.exitCode !== null) {
         throw new Error(`app exited early (code ${app.proc.exitCode}); log tail:\n${logTail(app, 25)}`);
       }
       if (!fs.existsSync(app.sock)) return undefined;
-      const r = rawSend(app.sock, "ping", BOOT_PING_MS);
-      return r.reply === "ok" ? `ping "ok" in ${r.ms}ms` : undefined;
+      const r = jsonSend(app.sock, "ping", BOOT_PING_MS);
+      return r.obj !== undefined && r.obj.ok === true ? `json ping ok in ${r.raw.ms}ms` : undefined;
     }),
   );
 }
@@ -411,23 +443,30 @@ function makeFixtureTree(): string {
   return fixture; // ~207 files across 7 dirs, deterministic
 }
 
-async function screenshotBestEffort(): Promise<void> {
-  // a4: best-effort evidence, NEVER a FAIL (screencapture is TCC-gated on
-  // some runner images). The size + dimensions in the log are the evidence.
+async function screenshotBestEffort(name: string): Promise<void> {
+  // EVIDENCE CAPTURE, not a requirement check: screencapture is TCC-gated on
+  // some runner images, so a screenshot can never be required. Deliberately
+  // logged as "evidence:" with NO SMOKE id -- every remaining SMOKE id is a
+  // hard pass/fail, and nothing here can soft-pass one. Successful captures
+  // are also copied to smoke-shots/ at the workspace root, which ci.yml
+  // uploads as the darwin-smoke artifact (the linux screenshots pattern).
   const t0 = Date.now();
-  const file = path.join(work, "smoke-a.png");
+  const file = path.join(work, name);
   try {
     const cap = await $`screencapture -x ${file}`.silent().nothrow();
     if (cap.exitCode !== 0 || !fs.existsSync(file)) {
-      core.info(`SMOKE WARN: a4 screenshot unavailable: exit=${cap.exitCode} ${String(cap.stderr).trim()}`);
+      core.info(`evidence: screenshot ${name} unavailable (exit=${cap.exitCode} ${String(cap.stderr).trim()})`);
       return;
     }
     const size = fs.statSync(file).size;
     const sips = await $`sips -g pixelWidth -g pixelHeight ${file}`.silent().nothrow();
     const dims = String(sips.stdout).trim().replace(/\s+/g, " ");
-    core.info(`SMOKE PASS: a4-screenshot (${Date.now() - t0}ms, exit=0, ${file}: ${size} bytes, ${dims})`);
+    const shotsDir = path.join(workspace, "smoke-shots");
+    fs.mkdirSync(shotsDir, { recursive: true });
+    fs.copyFileSync(file, path.join(shotsDir, name));
+    core.info(`evidence: screenshot ${name} captured (${Date.now() - t0}ms, ${size} bytes, ${dims}) -> smoke-shots/${name}`);
   } catch (err) {
-    core.info(`SMOKE WARN: a4 screenshot unavailable: ${errMsg(err)}`);
+    core.info(`evidence: screenshot ${name} unavailable: ${errMsg(err)}`);
   }
 }
 
@@ -448,14 +487,25 @@ async function scenarioA(): Promise<void> {
   );
 
   await check("a1-version", async () => {
-    const r = rawSend(app.sock, "version", RAW_RTT_MS);
-    if (r.reply === "" || r.reply.startsWith("err")) throw new Error(r.detail);
+    const r = jsonSend(app.sock, "version", RAW_RTT_MS);
+    if (r.obj === undefined) throw new Error(`reply is not a JSON object: ${r.raw.detail}`);
+    if (r.obj.ok !== true || typeof r.obj.version !== "string" || r.obj.version === "") {
+      throw new Error(`want {"ok":true,"version":"<non-empty>"}: ${r.raw.detail}`);
+    }
+    return r.raw.detail;
+  });
+
+  // The legacy v1 compat promise, CI-enforced: a bare-word request must keep
+  // answering the exact pre-JSON bytes (old clients vs a new daemon).
+  await check("a8-legacy-ipc", async () => {
+    const r = rawSend(app.sock, "ping", RAW_RTT_MS);
+    if (r.reply !== "ok") throw new Error(`legacy "ping" must answer exactly "ok": ${r.detail}`);
     return r.detail;
   });
 
   await check("a2-show", async () => assertCli(app, "show"));
   await check("a3-window-appears", () => expectWindow(app, true, WINDOW_DEADLINE_MS));
-  await screenshotBestEffort();
+  await screenshotBestEffort("01-summoned-macos.png");
 
   await check("a5-toggle-hides", async () => {
     const d = assertCli(app, "toggle");
@@ -467,6 +517,7 @@ async function scenarioA(): Promise<void> {
     const d = assertCli(app, "toggle");
     return `${d}; ${await expectWindow(app, true, WINDOW_DEADLINE_MS)}`;
   });
+  await screenshotBestEffort("02-reshown-macos.png");
 
   await check("a7-hide", async () => {
     const d = assertCli(app, "hide");
@@ -509,16 +560,28 @@ async function scenarioB(): Promise<void> {
 
   if (!(await bootCheck("B-boot", app))) return;
 
-  // Prove the big index build is actually in flight before the checks run.
-  const log0 = readLog(app);
-  if (INDEX_DONE_RE.test(log0)) {
-    core.info("SMOKE WARN: big index finished too fast; mid-index timing not exercised");
-  } else {
-    const evidence = INDEX_PROGRESS_RE.test(log0)
-      ? '"index: indexing..." progress line in the log'
-      : "no completion line in the log yet";
-    core.info(`mid-index confirmed: ${evidence}`);
-  }
+  // HARD GATE on the mid-index window: before b1 runs, the app log must
+  // already contain an "index: indexing..." progress line AND not yet the
+  // completion line, or scenario B proves nothing about the user-reported
+  // mid-index failure. The socket answers before the walk's first progress
+  // tick lands in the log (ipc.Listen precedes the GUI boot), so the
+  // progress line is polled for briefly -- but a completion line at ANY
+  // point before the window is proven fails immediately: with an Xcode.app
+  // root a too-fast finish is implausible, so hitting this is a real
+  // harness bug to fix (bigger root, tighter boot detection), never a
+  // warning to shrug off.
+  await check("B-midindex-window", () =>
+    pollFor('an "index: indexing..." line with no completion line', MIDINDEX_WINDOW_MS, POLL_MS, async () => {
+      if (app.proc.exitCode !== null) throw new Error(`app exited (code ${app.proc.exitCode})`);
+      const log0 = readLog(app);
+      if (INDEX_DONE_RE.test(log0)) {
+        throw new Error(
+          `the big index (root ${root}) completed before the mid-index checks began -- the window was missed`,
+        );
+      }
+      return INDEX_PROGRESS_RE.test(log0) ? "progress line present, completion line absent" : undefined;
+    }),
+  );
 
   if (capBail()) return;
   // b3 is the exact user-reported failure: on their Mac, `toggle` during
@@ -531,9 +594,11 @@ async function scenarioB(): Promise<void> {
   await check("b3-toggle-during-index", async () => assertCli(app, "toggle"));
   if (capBail()) return;
   await check("b4-ping-during-index", async () => {
-    const r = rawSend(app.sock, "ping", RAW_RTT_MS);
-    if (r.reply !== "ok") throw new Error(r.detail);
-    return r.detail;
+    const r = jsonSend(app.sock, "ping", RAW_RTT_MS);
+    if (r.obj === undefined || r.obj.ok !== true) {
+      throw new Error(`want JSON {"ok":true}: ${r.raw.detail}`);
+    }
+    return r.raw.detail;
   });
 
   const endState = INDEX_DONE_RE.test(readLog(app)) ? "completed during the checks" : "still building (as intended)";
@@ -555,6 +620,21 @@ function dumpAppLog(label: string, app: App): void {
     .map((l) => `applog[${label}]|${l}`)
     .join("\n");
   core.info(`---- full app log [${label}] (${app.logFile}) ----\n${prefixed}`);
+}
+
+// The lines that make a green run self-explanatory without the full dump:
+// hotkey wiring, index build/progress/summary (which includes "startup
+// complete"), watch backend state, and anything that panicked.
+const SUMMARY_LINE_RE = /hotkey:|index:|watch:|startup complete|panic/;
+
+function dumpAppLogSummary(label: string, app: App): void {
+  const lines = readLog(app)
+    .replace(/\n$/, "")
+    .split("\n")
+    .filter((l) => SUMMARY_LINE_RE.test(l))
+    .map((l) => `applog[${label}]|${l}`);
+  const body = lines.length > 0 ? lines.join("\n") : `applog[${label}]|(no summary-relevant lines)`;
+  core.info(`---- app log summary [${label}] (${app.logFile}; full dump prints only on failure) ----\n${body}`);
 }
 
 try {
@@ -581,16 +661,20 @@ try {
     core.info("SMOKE: all checks passed");
   }
 } catch (err) {
+  fatal = true;
   const sofar = failures.length > 0 ? ` (failed checks so far: ${failures.join(", ")})` : "";
   core.setFailed(`darwin-smoke: ${errMsg(err)}${sofar}`);
 } finally {
   for (const [, app] of apps) await stopApp(app);
-  // The app logs are the primary debugging evidence for iterating on the
-  // macOS summon bug -- dump them in full.
-  for (const [label, app] of apps) dumpAppLog(label, app);
+  // App logs are the primary debugging evidence: on ANY failure dump them in
+  // full; on an all-green run print only the summary-relevant lines so the
+  // gate stays self-explanatory without spamming.
+  const allGreen = failures.length === 0 && !fatal;
+  for (const [label, app] of apps) {
+    if (allGreen) dumpAppLogSummary(label, app);
+    else dumpAppLog(label, app);
+  }
   const vers = await $`sw_vers`.silent().nothrow();
-  core.info(`sw_vers:\n${String(vers.stdout).trim()}`);
-  const csr = await $`csrutil status`.silent().nothrow();
-  core.info(`csrutil: ${(String(csr.stdout).trim() || String(csr.stderr).trim()) ?? ""} (exit ${csr.exitCode})`);
+  core.info(`sw_vers: ${String(vers.stdout).trim().split("\n").join(" | ")}`);
   core.info(`darwin-smoke total wall time: ${Date.now() - stepStart}ms`);
 }
