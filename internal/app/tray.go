@@ -54,12 +54,13 @@ func (a *App) buildTray() trayHandle { return tray.New(a.trayOptions()) }
 // trayOptions describes the tray icon: identity, the summon-shortcut
 // tooltip, and a menu that reuses the app's existing behaviors --
 // Show/Hide is the hotkey toggle path (pre-DomReady deferral
-// included), Rescan now and Open config are the !rescan/!config
-// builtins minus their bar-hide (there is no bar interaction to end
-// when the click came from the tray), Quit is the quit builtin.
-// Callbacks arrive on the tray's D-Bus goroutines; every reused path
-// is goroutine-safe the same way the hotkey and IPC callbacks already
-// are.
+// included), Rescan now is the !rescan builtin minus its bar-hide
+// (there is no bar interaction to end when the click came from the
+// tray), Open config summons the in-app config editor exactly like
+// !config (showConfig; pre-DomReady deferral included), Quit is the
+// quit builtin. Callbacks arrive on the tray's D-Bus goroutines;
+// every reused path is goroutine-safe the same way the hotkey and IPC
+// callbacks already are.
 func (a *App) trayOptions() tray.Options {
 	return tray.Options{
 		ID:    "competent-search-thing",
@@ -98,11 +99,12 @@ func (a *App) trayRescan() {
 	log.Printf("tray: rescan requested")
 }
 
-// trayOpenConfig handles Open config.
+// trayOpenConfig handles Open config: the in-app config editor, the
+// same summon-into-config path the !config bang takes (the config
+// FILE stays reachable through the editor's escape hatch).
 func (a *App) trayOpenConfig() {
-	if err := a.openConfigFile(); err != nil {
-		log.Printf("tray: opening config.json: %v", err)
-	}
+	log.Printf("tray: open config editor")
+	a.showConfig()
 }
 
 // trayQuit handles Quit through the same builtin the !quit bang runs.

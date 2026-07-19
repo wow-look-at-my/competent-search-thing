@@ -139,7 +139,14 @@ func (a *App) startThemeWatch() {
 }
 
 // themeWatchLoop debounces relevant filesystem events into
-// eventThemeChanged emissions until the watcher is closed.
+// eventThemeChanged emissions until the watcher is closed. A debounce
+// batch that touched config.json itself ALSO runs the config
+// hot-apply hook (configapply.go): the same watcher covers both --
+// theme:changed keeps firing exactly as before (the frontend refetch
+// is cheap), and the config path additionally reloads and live-applies
+// external edits. An atomic Save's rename lands here too: any event
+// op on the config.json path counts, and the temp file's own events
+// fail the relevant() name check.
 func (a *App) themeWatchLoop(w *themeWatcher, cfgPath, themesDir string) {
 	defer close(w.done)
 	timer := time.NewTimer(time.Hour)
@@ -148,6 +155,7 @@ func (a *App) themeWatchLoop(w *themeWatcher, cfgPath, themesDir string) {
 	relevant := func(path string) bool {
 		return path == cfgPath || path == themesDir || filepath.Dir(path) == themesDir
 	}
+	cfgDirty := false
 	for {
 		select {
 		case ev, ok := <-w.fsw.Events:
@@ -161,17 +169,26 @@ func (a *App) themeWatchLoop(w *themeWatcher, cfgPath, themesDir string) {
 			if !relevant(ev.Name) {
 				continue
 			}
+			if ev.Name == cfgPath {
+				cfgDirty = true
+			}
 			stopThemeTimer(timer)
 			timer.Reset(themeDebounce)
 		case _, ok := <-w.fsw.Errors:
 			if !ok {
 				return
 			}
-			// Event overflow means lost events: refresh regardless.
+			// Event overflow means lost events: refresh regardless --
+			// and the lost events may have been config.json's.
+			cfgDirty = true
 			stopThemeTimer(timer)
 			timer.Reset(themeDebounce)
 		case <-timer.C:
 			a.emitEvent(eventThemeChanged)
+			if cfgDirty {
+				cfgDirty = false
+				a.handleConfigFileChange()
+			}
 		}
 	}
 }

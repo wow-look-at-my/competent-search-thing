@@ -33,7 +33,7 @@ func newAppCommandProvider(version string) *appCommandProvider {
 	table := []appCommand{
 		{bang: "rescan", title: "Rescan file index", subtitle: "Rebuild the index from disk now", icon: "bolt"},
 		{bang: "reload", title: "Reload plugins", subtitle: "Re-read plugin manifests and restart providers", icon: "bolt"},
-		{bang: "config", title: "Open config file", subtitle: "Open config.json", icon: "text"},
+		{bang: "config", title: "Open config editor", subtitle: "Edit settings in the app (config.json stays editable from there)", icon: "text"},
 		{bang: "version", title: "Show version", subtitle: "competent-search-thing " + version, icon: "info"},
 		{bang: "quit", title: "Quit", subtitle: "Close competent-search-thing", icon: "warning"},
 	}

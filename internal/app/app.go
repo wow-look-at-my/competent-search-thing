@@ -87,6 +87,10 @@ type Options struct {
 	// ShowOnStartup asks for the bar to be shown as soon as the
 	// frontend is ready (set when a CLI toggle/show started the app).
 	ShowOnStartup bool
+	// OpenConfigOnStartup asks for the bar to open straight into the
+	// config editor once the frontend is ready (set when the CLI
+	// config subcommand started the app); it implies ShowOnStartup.
+	OpenConfigOnStartup bool
 	// TrayDisabled turns the tray icon off (wire config's
 	// tray.disabled here); the default zero value keeps it on.
 	TrayDisabled bool
@@ -138,7 +142,7 @@ type App struct {
 	// (see logFanotifyGrant).
 	grantOnce sync.Once
 
-	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, history, launchCtx, launchCancel, progress
+	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, pendingConfig, history, launchCtx, launchCancel, progress
 	ctx        context.Context
 	visible    bool
 	lastToggle time.Time
@@ -176,6 +180,12 @@ type App struct {
 	// pendingShow and executed once by DomReady.
 	domReady    bool
 	pendingShow bool
+	// pendingConfig remembers a summon-into-config-editor request
+	// (the config IPC/CLI command, the !config bang, the tray item,
+	// Options.OpenConfigOnStartup) that arrived before DomReady; it
+	// rides pendingShow (always latched together) and Hide cancels
+	// both. See showConfig in configui.go.
+	pendingConfig bool
 	// panelOnce guards the one-time Spotlight-style panel configuration
 	// DomReady applies through the plat.configurePanel seam -- DomReady
 	// is the earliest point every platform has a native window to
@@ -258,6 +268,18 @@ type App struct {
 	histOnce sync.Once
 	history  *history.Store
 
+	// Config editor state (configui.go / configapply.go): the
+	// currently APPLIED configuration (the live-apply engine's diff
+	// baseline, seeded once at Startup, swapped by every apply pass)
+	// and the checksum of the last GUI-saved config.json bytes (the
+	// config-dir watcher skips re-applying the app's own writes). A
+	// nil cfgCurrent (pre-Startup) makes an apply pass treat every
+	// section as changed -- appliers are idempotent, so that is safe.
+	cfgOnce      sync.Once
+	cfgMu        sync.Mutex // guards cfgCurrent, lastSavedSum
+	cfgCurrent   *config.Config
+	lastSavedSum [32]byte
+
 	// Frecency ranking (see frecency.go): the open-count store and
 	// the blend the Manager serves, built once at Startup; nil/zero
 	// before that or when config disables the feature (recordOpen and
@@ -321,6 +343,12 @@ func (a *App) Startup(ctx context.Context) {
 	if a.opt.ShowOnStartup {
 		a.pendingShow = true
 	}
+	if a.opt.OpenConfigOnStartup {
+		// A start-into-config request is a show plus the editor mode
+		// event, executed together by DomReady (the showConfig latch).
+		a.pendingShow = true
+		a.pendingConfig = true
+	}
 	a.mu.Unlock()
 	// The IPC handlers are wired BEFORE everything else, in particular
 	// before registerHotkey: on darwin the hotkey registration can
@@ -334,6 +362,7 @@ func (a *App) Startup(ctx context.Context) {
 			Toggle: a.toggle,
 			Show:   a.showIfHidden,
 			Hide:   a.Hide,
+			Config: a.showConfig,
 		})
 	}
 	a.notesOnce.Do(func() {
@@ -349,6 +378,10 @@ func (a *App) Startup(ctx context.Context) {
 	a.previewOnce.Do(a.startPreview)
 	a.histOnce.Do(a.startHistory)
 	a.frecOnce.Do(a.startFrecency)
+	// The live-apply baseline exists BEFORE the config-dir watcher
+	// (startThemeWatch also feeds config.json hot-apply), so an
+	// external edit always diffs against a real baseline.
+	a.cfgOnce.Do(a.startConfigState)
 	a.themeOnce.Do(a.startThemeWatch)
 	// The progress printer exists before the build kick: the walk's
 	// first tick can arrive immediately.
@@ -378,7 +411,9 @@ func (a *App) DomReady(ctx context.Context) {
 	}
 	a.domReady = true
 	pending := a.pendingShow
+	pendingCfg := a.pendingConfig
 	a.pendingShow = false
+	a.pendingConfig = false
 	a.mu.Unlock()
 	// Spotlight-style collection behavior must be applied after the
 	// window exists; DomReady is the earliest point every platform has
@@ -392,6 +427,13 @@ func (a *App) DomReady(ctx context.Context) {
 	if pending {
 		a.captureAppContext()
 		a.showOnCursorDisplay()
+	}
+	if pendingCfg {
+		// A deferred summon-into-config: the mode event follows the
+		// eventShown the show above emitted (the frontend's app:shown
+		// handler re-renders the bar; an earlier config event would be
+		// clobbered).
+		a.emitEvent(eventConfigOpen)
 	}
 }
 

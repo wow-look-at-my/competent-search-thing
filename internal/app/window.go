@@ -233,8 +233,9 @@ func (a *App) Hide() {
 	a.lastHide = a.plat.now()
 	// A hide also cancels a show that has not executed yet (e.g. an
 	// IPC hide racing a pre-DomReady summon): the ordered outcome is
-	// hidden.
+	// hidden. A latched summon-into-config dies with it.
 	a.pendingShow = false
+	a.pendingConfig = false
 	a.mu.Unlock()
 	// The stats sampler goes idle with the bar (a flag flip, no IO;
 	// runs even pre-Startup, where it is a nil-safe no-op).
