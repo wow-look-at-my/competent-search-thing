@@ -35,7 +35,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/app` -- the Wails-bound App object and its methods
   (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/DomReady/
   Shutdown/QueryPlugins/RunPluginAction/CheatSheet/GetHistory/
-  AddHistory/GetStats). Bound methods
+  AddHistory/GetStats/ResolveIcons). Bound methods
   appear in JS as `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
   saves the runtime ctx, brings up the global hotkey once through a
   session-dependent backend plan (hotkey.go: empty spec = skip, parse
@@ -101,7 +101,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   error), Open config -> openConfigFile (the !config behavior minus
   the bar-hide), Quit -> runBuiltin("quit"); the tooltip getter wraps
   hotkeyDescription(), so no shortcut is promised until one is
-  proven), starts the system-stats sampler once (stats.go in this
+  proven), arms the darwin dismiss-on-Space-change once (spaceOnce ->
+  startSpaceWatch in window.go over the plat.watchSpaceChanges seam --
+  nil off-darwin via defaultSpaceWatch, the defaultProcTree pattern;
+  production native.WatchSpaceChanges -- and the spaceChanged callback
+  runs the EXISTING Hide path only when the bar is visible, so
+  lastHide is stamped and toggle-gap dismiss semantics hold, while a
+  hidden bar keeps its pending-show latch untouched; decision (b) of
+  the space-switch ghost fix: Spotlight itself dismisses on a Space
+  switch), starts the system-stats sampler once (stats.go in this
   package: the `newStats` builder seam -- production buildStats does a
   fresh config.Load (translucent.go pattern), stats.disabled = one
   "stats: disabled in config" log + nil, else sysstats.New wired with
@@ -109,7 +117,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   log.Printf -- and a non-nil sampler is Start()ed under a dedicated
   ctx cancelled in Shutdown; the sampler idles until the bar first
   shows, so startup cost is zero and newTestApp-stubbed apps spawn
-  nothing), wires the
+  nothing), builds the icon resolver once (icons.go in this package:
+  the `newIcons` builder seam, production buildIcons =
+  icons.NewService over its defaults -- zero IO at build, the first
+  Resolve pays initialization -- behind the bound
+  `ResolveIcons(keys, size) map[string]string`, which the frontend
+  calls with batched per-render icon keys; nil resolver (newTestApp)
+  = empty non-nil maps, and resolution runs on the bound method's own
+  goroutine so the query path never waits on icon IO), wires the
   single-instance IPC handlers when Options.IPC is set (Toggle =
   toggle, Show = showIfHidden, Hide = Hide; Options.ShowOnStartup
   latches a pending show) -- wired FIRST in Startup, before
@@ -340,17 +355,20 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   sampler). ALL Wails
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
-  incl. run/activateWindow/configurePanel/appSource plus getenv/executable/args0/detectSession/
+  incl. run/activateWindow/configurePanel/watchSpaceChanges/appSource plus getenv/executable/args0/detectSession/
   startPortal/ensureGnomeBinding/procTree AND the launch seams --
   open/reveal/run take extraEnv now (reveal also startupID),
   launchExec, resolveHandler, handlerByID, mintCredential,
   prepareLaunch, dbusLaunch, watchState, snRemove -- in window.go;
   defaults in New, plus
-  the `newRegistry`, `newTray`, `newStats` and `newProgress` seams);
+  the `newRegistry`, `newTray`, `newStats`, `newProgress` and
+  `newIcons` seams);
   unit tests MUST
   replace them (see
-  newTestApp, which also nils appSource AND procTree, stubs
-  newRegistry, newTray, newStats
+  newTestApp, which also nils appSource, procTree AND
+  watchSpaceChanges (non-nil on the darwin CI job's production
+  seams), stubs
+  newRegistry, newTray, newStats, newIcons
   AND newProgress (an inert non-TTY io.Discard printer) so no config,
   X11, session-bus, /proc//sys or global-log-output IO
   happens, pins goos to
@@ -751,9 +769,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   patterns without system trees) + firmlinkExcludesFor (darwin only:
   /System/Volumes/Data full-path -- the APFS Data volume macOS ALSO
   exposes at the firmlinked canonical paths /Users, /Applications,
-  ..., so an unguarded "/" walk indexes ~45% of the disk twice).
+  ..., so an unguarded "/" walk indexes ~45% of the disk twice) +
+  darwinNoiseExcludesFor (darwin only, the v5 set: Caches,
+  DerivedData, _CodeSignature, CodeResources by name +
+  /private/var/folders full-path -- macOS's real per-user temp tree,
+  the /tmp and /var/tmp excludes only cover the symlinked spellings;
+  wholesale .app/.framework internals and Application Support are
+  DELIBERATELY not excluded -- they change search semantics and
+  await an owner decision).
   rootsVersion (0 = legacy, current
-  4) drives the one-shot Load migration (migrateRootsFor; goos is a
+  5) drives the one-shot Load migration (migrateRootsFor; goos is a
   parameter so tests cover the darwin shape headlessly), each missing
   step applied in
   order: the v2 step moves configs whose roots are exactly the legacy
@@ -764,9 +789,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (default-shaped); a curated-away or explicitly empty list is
   stamped only, with an informational note; the v4 step applies the
   identical policy to the darwin firmlink exclude (non-darwin = pure
-  stamp, nothing added or announced), and each step is gated on its
+  stamp, nothing added or announced); the v5 step applies it AGAIN to
+  darwinNoiseExcludesFor -- a NEW version rather than an extension of
+  v4, so configs a v4-era build already stamped still receive it --
+  and each step is gated on its
   own version so already-fired informational notes never repeat.
-  Either way version 4 is
+  Either way version 5 is
   Saved back, and every user-visible change lands in the
   non-serialized MigrationNotes (json:"-") that internal/app logs
   loudly at startup -- the scope never changes silently. `Load` never crashes: missing file -> defaults
@@ -1016,7 +1044,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (Request/Response/Result/Action, v=1; Result also carries Keywords
   <=8x64 runes -- extra engine match texts -- and MatchRanges <=32
   half-open RUNE pairs on Title, normalizeRanges clamps/sorts/merges
-  against the post-truncation title; Action carries the
+  against the post-truncation title; Result carries the INTERNAL-ONLY
+  IconKey json:"iconKey" -- the "app:<ref>" icon-resolution key the
+  frontend hands to ResolveIcons for a real icon image, stamped by
+  the builtin app sources and CLEARED by the sanitizer on every
+  external result (image icons are a trusted-source capability;
+  InstalledApp mirrors the appctx Icon ref json:"icon" for the
+  purpose); Action carries the
   INTERNAL-ONLY DesktopID json:"desktop_id" -- the .desktop entry
   behind a builtin run_command launch, consumed by the app's
   credentialed launch path) and `SanitizeResponse`, which
@@ -1104,9 +1138,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   snapshot (empty query = first 15 alphabetical, prefix 100 /
   substring 80, cap 15, run_command argv via `parseDesktopExec`:
   quotes, backslash escapes, %-field codes stripped; the shared
-  scoring/sort/cap/result-build helper is `collectAppResults`, whose
+  candidate builder is `appCandidates`, whose
   actions also carry DesktopID = the InstalledApp.ID so the app can
-  launch with activation credentials);
+  launch with activation credentials, and whose Results carry the
+  internal-only IconKey "app:<Icon ref>" when the installed app has
+  one -- the frontend's real-icon hook);
   builtin_apps_search.go "apps-search"/Apps -- installed apps in
   NORMAL results: no bangs, a real all_queries Trigger (match
   override on builtinBase, effective min 2 runes), the shared
@@ -1328,8 +1364,44 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   fallback) / `RAMString()` / `FormatBytes` (decimal MB/GB, one
   decimal). All methods goroutine-safe. Consumed by internal/app's
   progress.go (the `newProgress` seam).
+- `internal/icons` -- result-row icon resolution to data URIs behind
+  the app's bound ResolveIcons, pure and headless-tested (every input
+  dir and external command sits behind Options seams). Key protocol
+  (the frontend wire contract): "dir", "file:<basename>",
+  "app:<ref>". NewService does NO IO; the first Resolve pays
+  initialization (mime-db load + gsettings/settings.ini theme
+  detection), and everything is served through a positive + negative
+  (name|size)->URI LRU (512 entries each) under one mutex.
+  Linux/freedesktop half (#37): theme.go/lookup.go/mimedb.go -- the
+  detected GTK theme + Inherits chain + Adwaita/hicolor, exact size
+  match then closest, then unthemed/pixmap fallbacks; absolute
+  .png/.svg refs served directly; 1 MiB MaxFileBytes cap. Darwin half
+  (bundle.go + plist.go + icns.go): an "app:" ref that is an ABSOLUTE
+  path ending ".app" (case-insensitive -- the ref SHAPE selects the
+  branch, so fixture bundles test it on any OS) resolves
+  Contents/Info.plist -> CFBundleIconFile (".icns" appended when
+  extension-less; separators/".."/non-.icns rejected) ->
+  Contents/Resources/<file> -> icnsBestPNG. plist.go is a
+  hand-rolled bounded bplist00 reader (trailer + offset table + dict/
+  ASCII/UTF-16 strings/int extended counts ONLY -- the mozLz4
+  precedent, no plist dep; caps 65536 objects / 4096-rune strings)
+  plus an encoding/xml fallback matching the same root-dict-only
+  semantics (nested decoys never match). icns.go walks the container
+  (4CC + BE length entries) and passes through the best PNG-magic
+  payload -- smallest nominal size covering the want, else largest
+  below, else unknown-size band; NO image decoding ever -- skipping
+  legacy RLE/JPEG-2000 payloads and entries over 512KB
+  (maxIcnsEntryBytes; plist capped 4 MiB, icns container 32 MiB via
+  stat-first readCapped). CFBundleIconName-only (Assets.car) apps
+  are a DELIBERATE miss (negative-cached -> glyph fallback; est.
+  5-15% of /Applications, measured by the darwin-only
+  real_darwin_test.go which runs un-gated on the mac job and fails
+  only when a POPULATED /Applications resolves nothing). Consumed by
+  internal/app icons.go (the newIcons seam).
 - `internal/appctx` -- app-context collection for the plugin system,
-  pure and headless-tested: the data types (AppInfo / InstalledApp /
+  pure and headless-tested: the data types (AppInfo / InstalledApp
+  (incl. Icon -- the platform icon ref: .desktop Icon= on linux, the
+  .app bundle path on darwin, empty on windows) /
   WindowInfo (ID uint32/Title/App/PID) /
   Snapshot -- deliberately NOT internal/plugin's wire types, the app
   layer converts), the `Source` seam (FocusedApp/RunningApps/
@@ -1688,7 +1760,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   deterministically); the icon is a magnifier DRAWN IN CODE (icon.go,
   analytic coverage rasterizer, stdlib math only, no assets) at
   22/24/48 px in ARGB32 network byte order (bytes A,R,G,B, straight
-  alpha -- v42 argbToRgba parses exactly that); ToolTip
+  alpha -- v42 argbToRgba parses exactly that; rgba.go's exported
+  `MagnifierRGBA(size)` is the one PREMULTIPLIED-RGBA variant of the
+  same rasterizer, consumed by the darwin Dock icon in
+  internal/platform/native panel_darwin.go); ToolTip
   (sa(iiay)ss) carries Title + the summon-shortcut text, re-read from
   the Tooltip getter at every (re-)registration and announced via
   NewToolTip on change (GNOME's extension ignores tooltips; KDE
@@ -1847,7 +1922,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (panel_darwin.go over csConfigurePanel; panel_other.go = false on
   !darwin): the Spotlight-style collectionBehavior canJoinAllSpaces
   + fullScreenAuxiliary + ignoresCycle plus hidesOnDeactivate NO on
-  the first NSWindow, false while no window exists yet.
+  the first NSWindow, false while no window exists yet -- and it
+  FIRST sets the Dock/Cmd-Tab icon once (dockIconOnce ->
+  tray.MagnifierRGBA(128) -> csSetDockIcon: NSBitmapImageRep over
+  premultiplied RGBA -> NSApp.applicationIconImage; the raw-binary
+  install ships no .app bundle/.icns, so a bare Mach-O would show the
+  generic icon while running). WatchSpaceChanges
+  (spacewatch_darwin.go + the !darwin always-false stub): the
+  NSWorkspaceActiveSpaceDidChangeNotification observer
+  (csObserveSpaceChanges, block-based, token retained forever under
+  MRC -- the shim compiles without ARC) feeding the csHotkeyFired
+  channel pattern (buffered(1), non-blocking send, one app-lifetime
+  drain goroutine) into the first caller's onChange -- the app's
+  dismiss-on-Space-change (window.go spaceChanged).
   display_darwin.go also carries `#cgo LDFLAGS: -framework
   UniformTypeIdentifiers` on Wails' behalf: the v2 darwin frontend
   references UTType without linking that framework, and newer Xcode
@@ -1928,7 +2015,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   darwin = NSWorkspace via the Cocoa shim (frontmostApplication /
   runningApplications with regular activation policy; Title always
   empty -- titles need the AX API), InstalledApps = /Applications +
-  ~/Applications *.app scan (Exec = `open -a "<path>"`).
+  ~/Applications *.app scan (Exec = `open -a "<path>"`, Icon = the
+  absolute bundle path -- internal/icons' darwin ref shape).
   windows/darwin files compile only on their OSes -- the CI `linux`
   job builds linux/amd64 + a windows/amd64 cross-compile but only
   ever RUNS the linux binary, and the `darwin` job cgo-compiles
@@ -2067,7 +2155,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   subtitle/badge/"label: value" fields; the builtin icon-name -> glyph
   map (calculator globe clock star info warning link terminal text
   hash bolt app puzzle; unknown/absent -> puzzle, non-name values
-  render as literal glyphs); accent_color is ONLY ever applied by
+  render as literal glyphs); REAL app icons: a row whose result
+  carries the internal-only iconKey renders its glyph, requestIcon
+  batches the pending keys per render tick (queueMicrotask) through
+  the bound ResolveIcons(keys, 64), and setIconImage swaps the glyph
+  span's content for an <img class="plugin-icon-img"> whose src is
+  the Go-minted data URI -- a DOM-node build with a property-assigned
+  src, NOT a second innerHTML sink; answers (misses included) land in
+  a module-level cache (cleared past 512 keys), stale rows are
+  skipped via isConnected, and a missing binding/miss leaves the
+  glyph standing; accent_color is ONLY ever applied by
   setting the `--plugin-accent` custom property on the row -- never
   inline color styles) + `src/theme.ts` (initTheme called first in
   wire(): fetches GetTheme and sets each token as `--sb-<k>` on
@@ -2152,7 +2249,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   window field and the internal desktop_id the frontend echoes back
   unchanged)/PluginResult/PluginEmission plus the preview contract
   Preview{Target,Payload,ConfigInfo,MetaRow,Text,Image,Dir,DirEntry,
-  Web,WebResult,AI} and the four preview bound methods -- keep in
+  Web,WebResult,AI}, ResolveIcons, and the four preview bound
+  methods -- keep in
   sync with internal/app + internal/plugin + internal/preview +
   internal/sysstats payload
   structs).

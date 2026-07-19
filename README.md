@@ -109,6 +109,20 @@ macOS-specific notes:
   use -- no Accessibility/TCC prompt, nothing to add in System
   Settings. The default hotkey is Option+Space -- Cmd+Space belongs
   to Spotlight.
+- **Dock and Cmd-Tab icon**: the raw-binary distribution ships no
+  `.app` bundle, so there is no `Info.plist` or `.icns` for macOS to
+  read -- a bare executable would normally show the generic app icon.
+  The app therefore sets its Dock/Cmd-Tab icon at runtime, from the
+  same in-code magnifier rasterizer the tray icon uses, the moment
+  its window exists. That covers the RUNNING app; a proper `.app`
+  bundle (Info.plist + iconset, CI packaging, and how it coexists
+  with the raw-binary download URLs) is a known limitation that is
+  deliberately not built yet.
+- **Space switches dismiss the bar**: like Spotlight, switching
+  Spaces (or entering a fullscreen app's Space) hides an open bar
+  instead of dragging it along -- the window joins all Spaces to
+  summon on the active one, and without the dismiss the transition
+  animation could briefly ghost a stale frame of it.
 - The darwin/arm64 binary is CI-built and passes the full unit-test
   suite on macOS runners, but it has not yet had human acceptance
   testing on real hardware.
@@ -386,6 +400,22 @@ top of the long-standing `.git`, `node_modules`, `.cache`:
 ```
 .hg .svn __pycache__ .mypy_cache .pytest_cache .ruff_cache .tox .nox .venv
 ```
+
+macOS additionally defaults to its own noise set:
+
+```
+Caches DerivedData _CodeSignature CodeResources /private/var/folders
+```
+
+`Caches` covers `~/Library/Caches` and every app's cache dir,
+`DerivedData` is Xcode's build-product tree, `_CodeSignature` /
+`CodeResources` are per-bundle code-signature manifests (thousands of
+identically named entries with zero search value), and
+`/private/var/folders` is macOS's real per-user temp tree -- the
+`/tmp` and `/var/tmp` system excludes only cover the symlinked
+spellings. Deliberately NOT excluded: `.app`/`.framework` bundle
+internals as a whole and `Application Support` -- those would make
+real files unfindable and await an explicit decision.
 
 They are ordinary `excludes` entries -- delete any of them from
 config.json to index (and watch) those trees again. Existing configs
@@ -1276,7 +1306,10 @@ and anything dropped is logged with a reason.
 
 Response-wide caps: at most 20 results per response and 1 MiB of
 response body (both transports); control characters in any string are
-replaced with spaces.
+replaced with spaces. The real-image icons on builtin app rows (see
+[App icons](#app-icons)) ride an internal-only resolution key that is
+stripped from every external response: a plugin's `icon` is always a
+builtin name or a short glyph, never an image.
 
 **Ordering**: file results always come first. Plugin sections sort by
 their best result's score (then plugin id); results within a section
@@ -1762,6 +1795,39 @@ HTTP mode), a persistent JSON-Lines command mode (one process per
 query is the only command mode), remote icons, plugin-supplied
 HTML/CSS, Wayland focused-window support, and untargeted installed-app
 results.
+
+## App icons
+
+App results show the application's real icon where the platform can
+produce one, with the built-in glyph as the always-available fallback:
+
+- **Linux**: the `.desktop` entry's `Icon=` value is resolved through
+  the freedesktop icon-theme machinery -- your detected GTK theme, its
+  `Inherits` chain, Adwaita/hicolor, then unthemed and pixmap
+  fallbacks -- to a PNG or SVG data URI.
+- **macOS**: the `.app` bundle's `Contents/Info.plist` (both the XML
+  and the binary serialization Xcode writes) names its
+  `CFBundleIconFile`; the referenced `.icns` container's best modern
+  PNG entry is served directly, no image decoding involved. Apps whose
+  icon lives ONLY in an `Assets.car` asset catalog
+  (`CFBundleIconName` without `CFBundleIconFile` -- an estimated
+  5-15% of a typical `/Applications` scan, mostly Mac App Store /
+  Catalyst-era bundles) keep the glyph, as do icns files carrying
+  only legacy RLE or JPEG 2000 entries. The darwin CI job measures
+  the real ratio against the runner's `/Applications` on every push.
+- **Windows**: no `.ico` extraction yet; app rows keep the glyph.
+
+Resolution is lazy and never blocks a query: rows render with the
+glyph instantly, the frontend batches the visible rows' icon keys to
+the Go resolver, and icons fill in when the answer lands (cached both
+sides -- misses too -- so a repeat query costs nothing). Oversized
+sources are skipped (icon files over 1 MiB, icns entries over 512 KB)
+rather than shipped into the UI.
+
+External plugins deliberately do NOT get image-icon powers: their
+`icon` field stays the sanitized builtin-name/glyph contract, and the
+internal resolution key is stripped from every external response --
+image icons are a trusted-builtin-source capability.
 
 ## Open windows
 
