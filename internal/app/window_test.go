@@ -273,6 +273,24 @@ func TestToggleRacedByDismissalStaysHidden(t *testing.T) {
 	require.Len(t, r.emitted(eventShown), 2, "a later toggle summons as usual")
 }
 
+func TestDomReadyConfiguresPanelOnce(t *testing.T) {
+	a, r := newTestApp(t, nil, Options{ShowOnStartup: true})
+	calls := 0
+	a.plat.configurePanel = func() bool {
+		calls++
+		require.False(t, r.has("show"),
+			"the panel behavior is applied before the pending show maps the window")
+		return true
+	}
+	a.Startup(context.Background())
+	require.Zero(t, calls, "nothing to configure before the window exists")
+
+	a.DomReady(context.Background())
+	a.DomReady(context.Background()) // context refresh must not re-apply
+	require.Equal(t, 1, calls, "the panel configuration runs exactly once")
+	require.Len(t, r.emitted(eventShown), 1, "the pending show still ran")
+}
+
 func TestShowOnStartupThenToggleHides(t *testing.T) {
 	// The gsd first-press boot: "<exe> toggle" with no instance
 	// running becomes the app itself (ShowOnStartup), DomReady

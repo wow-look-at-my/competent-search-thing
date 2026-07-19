@@ -1,4 +1,4 @@
-//go:build windows || darwin
+//go:build windows
 
 package native
 
@@ -12,11 +12,14 @@ import (
 )
 
 // startLibHotkey registers a hotkey through golang.design/x/hotkey
-// (used on Windows and macOS; the Linux backend of that library is
-// avoided on purpose, see the package comment) and pumps Keydown
-// events to onDown from a background goroutine. The returned stop
-// function unregisters the hotkey and ends the goroutine; it is safe
-// to call more than once.
+// (Windows only: RegisterHotKey. The Linux backend of that library is
+// avoided on purpose, see the package comment, and macOS moved to
+// Carbon RegisterEventHotKey in hotkey_darwin.go because the
+// library's CGEventTap path errors without the Accessibility
+// permission and never prompts for it) and pumps Keydown events to
+// onDown from a background goroutine. The returned stop function
+// unregisters the hotkey and ends the goroutine; it is safe to call
+// more than once.
 func startLibHotkey(mods []hotkey.Modifier, key hotkey.Key, onDown func()) (func(), error) {
 	hk := hotkey.New(mods, key)
 	if err := hk.Register(); err != nil {
@@ -43,8 +46,7 @@ func startLibHotkey(mods []hotkey.Modifier, key hotkey.Key, onDown func()) (func
 }
 
 // mapSpec translates a neutral platform.Hotkey into the library's
-// per-OS constants using the tables from hotkey_windows.go or
-// hotkey_darwin.go.
+// constants using the tables from hotkey_windows.go.
 func mapSpec(hk platform.Hotkey, mods map[platform.Mod]hotkey.Modifier, keys map[string]hotkey.Key) ([]hotkey.Modifier, hotkey.Key, error) {
 	key, ok := keys[hk.Key]
 	if !ok {

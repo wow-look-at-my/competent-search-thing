@@ -87,6 +87,11 @@ type platformSeams struct {
 	mediaKeysDaemon func(ctx context.Context) (bool, error)
 	cursorInfo      func() (cx, cy int, ds []platform.Display, ok bool)
 	moveWindow      func(x, y int) bool
+	// configurePanel applies the Spotlight-style panel collection
+	// behavior to the app window (darwin; other platforms report false,
+	// nothing to configure). Called exactly once, at DomReady -- the
+	// earliest point every platform has a native window.
+	configurePanel func() bool
 	// lstat probes the disk for the outside-roots hint (hint.go) and
 	// the launch path's directory check; production is os.Lstat, tests
 	// pin it so no real IO happens.
@@ -165,6 +170,7 @@ func defaultPlatformSeams() platformSeams {
 		mediaKeysDaemon: gsettings.DaemonRunning,
 		cursorInfo:      native.CursorDisplays,
 		moveWindow:      native.MoveWindow,
+		configurePanel:  native.ConfigurePanel,
 		lstat:           os.Lstat,
 		open:            launcher.OpenEnv,
 		reveal:          launcher.RevealEnv,

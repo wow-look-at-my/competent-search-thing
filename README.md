@@ -104,13 +104,20 @@ macOS-specific notes:
 - If Gatekeeper blocks the binary (typical when it was downloaded with
   a browser, which sets the quarantine attribute -- curl does not),
   clear it: `xattr -d com.apple.quarantine /usr/local/bin/competent-search-thing`.
-- The global hotkey uses a CGEventTap, which needs the Accessibility
-  permission: System Settings > Privacy & Security > Accessibility,
-  then add the binary. The default hotkey is Option+Space -- Cmd+Space
-  belongs to Spotlight.
+- The global hotkey needs NO permission: it registers through Carbon
+  RegisterEventHotKey, the same mechanism Spotlight-style launchers
+  use -- no Accessibility/TCC prompt, nothing to add in System
+  Settings. The default hotkey is Option+Space -- Cmd+Space belongs
+  to Spotlight.
 - The darwin/arm64 binary is CI-built and passes the full unit-test
   suite on macOS runners, but it has not yet had human acceptance
   testing on real hardware.
+
+![The searchbar summoned on the macOS CI runner, showing the empty-bar command cheat sheet](docs/screenshot-macos.png)
+
+The real macOS WebKit window on the CI runner's WindowServer session,
+captured by the hard-gated darwin GUI smoke on every push (see
+`.github/scripts/darwin-smoke.ts`).
 
 Other URL forms: `?v=N` pins a release permanently, `?branch=<name>`
 follows a branch (URL-encode slashes), and `&fmt=tar.gz`/`zip`
@@ -197,6 +204,24 @@ returns that one real file with a hint in place of the parent-dir line
 opens it like any other row. Paths that exist *inside* your roots
 never get the hint (that is an indexing gap -- typically the initial
 build still running -- not a scope gap).
+
+**Startup progress.** The initial build reports itself without
+flooding the logs. Run from a terminal, one progress line updates in
+place (plain carriage returns, no ANSI escapes; ordinary log lines
+print above it without tearing the display):
+
+```
+index: indexing... 12449259 entries, 384.2MB ram
+```
+
+With logs piped or redirected (a service manager, `2>file`) the same
+line is appended at most once every ~5 seconds instead. When the
+build *and* the file-watch setup both finish, one summary line
+reports the whole time-to-ready:
+
+```
+index: startup complete: 12449259 entries in 41.3s, 384.2MB ram
+```
 
 ## File watching and freshness
 
@@ -342,8 +367,9 @@ buildhost (see [Install](#install)):
 - [x] Global hotkey (default Alt+Space) to summon/dismiss the bar
       (XGrabKey on Linux/X11; on Wayland a portal global shortcut,
       an automatic GNOME keybinding, or one manual binding -- see
-      [Wayland](#wayland); RegisterHotKey on Windows; CGEventTap on
-      macOS, needs the Accessibility permission)
+      [Wayland](#wayland); RegisterHotKey on Windows; Carbon
+      RegisterEventHotKey on macOS, no Accessibility permission
+      needed)
 - [x] Single instance + CLI: a second launch shows the running bar;
       `toggle`/`show`/`hide` subcommands drive it over a unix socket
       (the summon path for any external keybinding mechanism)
@@ -2102,10 +2128,17 @@ The binary doubles as its own remote control. The app runs as a
 single instance around one unix socket (in `$XDG_RUNTIME_DIR`):
 
 - `competent-search-thing` -- starts the app; a second plain launch
-  just shows the already-running instance's bar and exits 0.
+  asks the running instance to show its bar and reports what actually
+  happened: `already running; showing it` on a confirmed
+  acknowledgement (exit 0), `already running (still starting up)`
+  while the instance is still booting (exit 0), and `already running
+  but did not respond` on stderr with exit 1 when the instance never
+  answered.
 - `competent-search-thing toggle` -- what the global hotkey does:
   hide when visible, summon when hidden. Starts the app when it is
-  not running (the bar shows once the frontend is ready). A toggle
+  not running (the bar shows once the frontend is ready). Sent to an
+  instance that is still booting, it prints `still starting up; it
+  may take a moment to respond` and exits 0. A toggle
   landing moments after the bar was dismissed counts as that
   dismissal instead of a re-summon: pressing a grabbed summon combo
   on an open bar unfocuses it first (which already hides it, exactly
@@ -2119,9 +2152,42 @@ single instance around one unix socket (in `$XDG_RUNTIME_DIR`):
   exits 1 when nothing is running).
 - `competent-search-thing --version` -- prints the app version.
 
+The running instance acknowledges each `toggle`/`show`/`hide`
+immediately and executes the action right after the reply, so an
+instance busy with the initial index build can no longer time the
+client out -- the command is accepted instantly and acts as soon as
+the app gets to it.
+
 Any keybinding mechanism that can run a command can therefore summon
 the bar. That is the whole Wayland story in one line: bind a key to
 `competent-search-thing toggle`.
+
+### The IPC protocol (for scripts)
+
+The socket speaks newline-delimited JSON, one request per
+connection: write one object like `{"cmd":"toggle"}` (commands
+`toggle`, `show`, `hide`, `version`, `ping`) and read one object
+back -- `{"ok":true,"accepted":"toggle"}` for an accepted command
+(written before the action runs: "ok" means accepted, not
+completed), `{"ok":true,"version":"..."}` for `version`,
+`{"ok":true}` for `ping`, and `{"ok":false,"error":"not ready"}` /
+`{"ok":false,"error":"unknown command"}` otherwise. Unknown JSON
+fields are ignored in requests, and scripts should extend the same
+tolerance to responses. For example:
+
+    printf '{"cmd":"toggle"}\n' | nc -U "$XDG_RUNTIME_DIR/competent-search-thing.sock"
+
+A request whose first non-space byte is not `{` takes the original
+v1 line protocol instead (`toggle` in, `ok` / `err not ready` /
+`err unknown command` / the bare version string out), answered
+byte-for-byte as before.
+
+Mixed versions across an upgrade keep working in both directions
+for one release: an old CLI keeps speaking v1 lines to a new daemon
+(the legacy path above), and a new CLI talking to a still-running
+old daemon recognizes the v1 `err unknown command` answer to its
+JSON request and retries once with the v1 line on a fresh
+connection.
 
 ### GNOME (Wayland)
 
@@ -2295,11 +2361,12 @@ These are Wayland design constraints, not bugs:
 - **macOS**: positioning uses a best-effort native Cocoa move of the
   app's first window (Wails' WindowSetPosition is relative to the
   window's current screen and cannot target another display); it falls
-  back to centering. The global hotkey needs the app to be trusted
-  under System Settings > Privacy & Security > Accessibility.
-  The macOS code is never compiled or tested in CI (a cgo Cocoa
-  target cannot be cross-compiled from the Linux runner); treat it as
-  best-effort until exercised on a real Mac.
+  back to centering. The global hotkey (Carbon RegisterEventHotKey)
+  needs no Accessibility permission. CI compiles darwin/arm64, runs
+  the unit-test suite, and hard-gates on a GUI smoke (boot, IPC
+  round-trips during a large index build, a real on-screen window)
+  on a macOS runner, but the GUI has had no human acceptance testing
+  on real hardware; treat it as best-effort until then.
 - **Windows**: hotkey via RegisterHotKey and monitors via user32; the
   bar positions against the current monitor's work area. CI
   cross-compiles and publishes the Windows binary (pure Go) but never

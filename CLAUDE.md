@@ -112,7 +112,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   nothing), wires the
   single-instance IPC handlers when Options.IPC is set (Toggle =
   toggle, Show = showIfHidden, Hide = Hide; Options.ShowOnStartup
-  latches a pending show), brings the plugin
+  latches a pending show) -- wired FIRST in Startup, before
+  registerHotkey, which can block briefly on darwin's Cocoa main-loop
+  race: the handlers are pre-init-safe (summons latch pendingShow
+  until DomReady, Hide no-ops without a runtime ctx), so an IPC
+  summon during registration is acked instead of answered "err not
+  ready" -- brings the plugin
   layer up once (plugins.go: an appctx.Cache over the plat.appSource
   seam + RefreshInstalledAsync, then the registry via the
   `newRegistry` builder seam, whose production value `buildRegistry`
@@ -141,8 +146,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   builtins only, no noise), starts theme hot reload (theme.go: a
   dedicated fsnotify watcher on the config dir + its themes/ subdir,
   events debounced 300ms into "theme:changed"; any failure = log +
-  run on without live reload), and kicks the initial disk walk in a
-  goroutine (under a cancellable context); when the walk finishes,
+  run on without live reload), builds the startup progress printer
+  once (progress.go in this package: the `newProgress` builder seam,
+  production buildProgress = progress.New(os.Stderr,
+  progress.IsTerminal(os.Stderr), log.Printf); a TTY printer renders
+  the "indexing..." line in place AND intercepts the standard logger
+  -- installProgressLog does log.SetOutput(printer), restored to
+  stderr as Shutdown's last step -- while non-TTY means throttled log
+  lines; a nil seam degrades to an inert io.Discard printer, and
+  buildIndex runs the same progressOnce so direct-call tests get the
+  printer too), and kicks the initial disk walk in a
+  goroutine (under a cancellable context) whose ticks render through
+  the printer (Done clears the line before the completion/error
+  logs); when the walk finishes,
   `startWatch` brings up the `watch.Watcher` + `watch.Rescanner` +
   `watch.Sweeper` trio honoring the Options watcher knobs
   (WatchMaxWatches, WatchExcludes -> a second watch-only Excluder,
@@ -159,7 +175,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the recorded event, then read the log) -- "watch: enable
   full-filesystem watching with: sudo setcap
   cap_sys_admin,cap_dac_read_search+ep <path>" with the path through
-  platform.StableExecutable(exe, args0), mirroring hotkey.go;
+  platform.StableExecutable(exe, args0), mirroring hotkey.go; after
+  startWatch returns (it waits for the watcher's initial
+  registration), buildIndex logs ONE "index: startup complete: N
+  entries in D, R ram" summary -- after watch establishment, so the
+  elapsed covers build + watch setup; never on the error/cancel
+  paths;
   `Shutdown` (wired to Wails OnShutdown) closes the IPC server first
   (when present), releases the hotkey (native stop func, cancel of
   the async portal/gsettings chain, idempotent+nil-safe close of the
@@ -178,7 +199,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   cleanly -- every step bounded, so quit never waits out a disk
   walk. Summons that arrive before
   the frontend can render are deferred: `DomReady` (wired to Wails
-  OnDomReady) executes at most ONE pending show (ShowOnStartup or an
+  OnDomReady) first applies the Spotlight-style panel collection
+  behavior exactly once (panelOnce over the plat.configurePanel seam,
+  production native.ConfigurePanel, darwin-only effect -- DomReady is
+  the earliest point every platform has a native window, and it
+  precedes the pending show), then executes at most ONE pending show
+  (ShowOnStartup or an
   early hotkey/IPC toggle/show; Hide cancels the pending flag), and
   after DomReady summons act immediately. `showIfHidden` is the IPC
   show handler: visible = plain re-WindowShow (no capture, no
@@ -302,17 +328,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   sampler). ALL Wails
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
-  incl. run/activateWindow/appSource plus getenv/executable/args0/detectSession/
+  incl. run/activateWindow/configurePanel/appSource plus getenv/executable/args0/detectSession/
   startPortal/ensureGnomeBinding/procTree AND the launch seams --
   open/reveal/run take extraEnv now (reveal also startupID),
   launchExec, resolveHandler, handlerByID, mintCredential,
   prepareLaunch, dbusLaunch, watchState, snRemove -- in window.go;
   defaults in New, plus
-  the `newRegistry`, `newTray` and `newStats` seams); unit tests MUST
+  the `newRegistry`, `newTray`, `newStats` and `newProgress` seams);
+  unit tests MUST
   replace them (see
   newTestApp, which also nils appSource AND procTree, stubs
-  newRegistry, newTray
-  AND newStats so no config, X11, session-bus or /proc//sys IO
+  newRegistry, newTray, newStats
+  AND newProgress (an inert non-TTY io.Discard printer) so no config,
+  X11, session-bus, /proc//sys or global-log-output IO
   happens, pins goos to
   "linux" -- identical launch-path behavior on the darwin CI job;
   tests exercising other OSes set goos themselves -- pins getenv to
@@ -366,15 +394,28 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/cli` -- the cobra command line, the real process entry
   point (main.go calls cli.Execute(app.Version, runGUI)). Bare
   invocation = the GUI path: ipc.Listen on ipc.SocketPath(os.Getenv);
-  ErrAlreadyRunning = Send "show" to the running instance + stdout
-  notice + exit 0; any other listen error = log + run the GUI with a
+  ErrAlreadyRunning = Send "show" to the running instance and report
+  HONESTLY (showRunningInstance): Reply.OK -> "already running;
+  showing it" + exit 0, Reply.NotReady() -> "already running (still
+  starting up)" + exit 0, no/garbage reply -> stderr "already running
+  but did not respond: ..." + exit 1 (cobra's own error line
+  suppressed, garbage quoted from Reply.Raw); any other listen error
+  = log + run the GUI with a
   NIL server (degraded, no IPC -- the app must still work). toggle /
   show send their command to the running instance; when none runs
   they start the GUI in this process with ShowOnStartup=true (on an
-  ErrAlreadyRunning race they fall back to Send "show"); an "err not
-  ready" reply counts as success (the instance is booting and shows
-  itself). hide never starts the app: not running = plain notice on
-  stderr + exit 1 (cobra error/usage output suppressed). Convention:
+  ErrAlreadyRunning race they fall back to Send "show"); a NotReady()
+  reply counts as success but prints a one-line "still
+  starting up; it may take a moment to respond" notice (the instance
+  is booting and shows itself). hide never starts the app: not
+  running = plain notice on
+  stderr + exit 1 (cobra error/usage output suppressed). The CLI
+  branches ONLY on ipc.Reply fields (checkReply/summonReply); wire
+  parsing incl. the old-daemon legacy retry lives entirely in
+  ipc.Send, so version skew is invisible here -- user-visible
+  messages and exit codes are identical either way
+  (TestSubcommandsAgainstOldLegacyDaemon pins the skew cell against a
+  fake legacy daemon). Convention:
   ONE self-registering subcommand per file (init -> registerCommand);
   newRoot() consumes the builder registry so Execute -- and every
   test -- gets a fresh command tree. RunOptions{Server,
@@ -385,19 +426,48 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/ipc` -- the single-instance unix-socket IPC layer, pure
   and headless-tested. SocketPath: $COMPETENT_SEARCH_SOCKET override,
   else $XDG_RUNTIME_DIR/competent-search-thing.sock, else a per-uid
-  name under os.TempDir(). Line protocol, ONE request per conn (2s
-  conn deadline, 4 KiB line cap): toggle/show/hide/version/ping ->
-  "ok" | the bare version string | "err <reason>" ("err not ready"
-  until SetHandlers wires the app -- nil handler members stay not
-  ready; version/ping always answer). Listen recovers stale sockets:
+  name under os.TempDir(). ONE request per conn (2s conn deadline,
+  4 KiB line cap), one newline-terminated line each way, TWO wire
+  shapes the server picks per request by sniffing the trimmed line's
+  first byte: '{' = the JSON v2 protocol -- request
+  {"cmd":"toggle|show|hide|version|ping"} with unknown JSON fields
+  IGNORED on both sides (the documented tolerance contract), response
+  {"ok":true} (ping) / {"ok":true,"version":v} /
+  {"ok":true,"accepted":cmd} / {"ok":false,"error":"not ready"|
+  "unknown command"|"invalid request"} -- anything else = the legacy
+  v1 line protocol byte-for-byte ("ok" | the bare version string |
+  "err not ready" | "err unknown command"; pinned with string
+  literals by TestLegacyWireIsByteIdentical), so an OLD client
+  against a NEW daemon is untouched. Commands answer "not ready"
+  until SetHandlers wires the app (nil handler members stay not
+  ready; version/ping always answer), and in BOTH shapes the ack is
+  written BEFORE the toggle/show/hide handler runs -- ack = accepted,
+  not completed, so an app whose main thread is briefly stalled
+  (startup indexing) can never time the client out; the handler then
+  runs on the same conn goroutine, so Close still waits for in-flight
+  handlers. Send(path, cmd, timeout) speaks JSON and returns a parsed
+  Reply{OK, Accepted, Version, Err, Raw, Legacy} + NotReady() -- ALL
+  reply parsing lives here, callers branch on fields, never wire
+  strings: stray legacy reply lines map equivalently (middle-state
+  servers), and EXACTLY the legacy "err unknown command" string
+  answering the JSON request means an OLD pre-JSON daemon -> ONE
+  retry on a fresh conn (one request per conn) with the bare legacy
+  command line, Legacy=true -- so a NEW CLI degrades gracefully
+  against an old daemon across an upgrade
+  (TestSendFallsBackToLegacyAgainstOldDaemon + the cli-level
+  TestSubcommandsAgainstOldLegacyDaemon drive a fake legacy daemon).
+  Garbage replies come back in-band (Raw set, OK false, empty Err)
+  for callers to quote; only transport failures are errors, dial
+  failures wrapped in ErrNotRunning (test with IsNotRunning); timeout
+  is ONE absolute deadline across dial + exchange + retry. Listen
+  recovers stale sockets:
   EADDRINUSE -> 500ms probe dial; an answer = ErrAlreadyRunning, a
   dead socket = os.Remove + retry ONCE; after listening the file is
   chmodded 0600 (filesystem perms are the only auth). Close is
   idempotent + nil-safe: stops the accept loop, unlinks the socket,
-  waits for in-flight conns. Send wraps every dial failure in
-  ErrNotRunning (test with IsNotRunning) so callers can branch
-  "nothing to talk to" vs a broken exchange. Handlers run on conn
-  goroutines and must be goroutine-safe.
+  waits for in-flight conns. Handlers run on conn
+  goroutines and must be goroutine-safe. Deliberately NO schema in
+  schemas/ (an internal two-party protocol, like history.json).
 - `internal/match` -- THE shared matching engine, pure (stdlib only),
   consumed by internal/index AND internal/plugin: ONE fold definition
   (FoldTable/FoldRune/FoldPattern, the per-string ASCII+rune helpers;
@@ -1139,6 +1209,25 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   flag on = preview.windowWidth/Height, threaded into
   Options.WindowWidth/WindowHeight for the positioning math
   (App.windowSize()).
+- `internal/progress` -- the startup progress printer behind the
+  initial index build's "indexing..." line, pure and
+  headless-tested. `New(w, tty, logf)` -> `Printer`: on a TTY the
+  line redraws IN PLACE (plain "\r" + space padding, no ANSI escapes;
+  self-stamped like a default log line) and the Printer implements
+  io.Writer so the app can log.SetOutput(printer) -- an intercepted
+  log write erases the line, writes the log bytes, and redraws when
+  the write ends in '\n', so ordinary logging never tears the display
+  (the Printer writes to the raw stream itself, never through log --
+  no recursion); off a TTY `Indexing` appends plain lines through
+  logf (usually log.Printf) at most one per 5s, nil logf = dropped.
+  `Indexing(entries)` renders "index: indexing... N entries, X ram"
+  with the process RAM figure resampled at most once per second;
+  `Done()` erases and resets all render/throttle state (safe when
+  nothing rendered); `TTY()`; `IsTerminal(*os.File)`; mem.go `RAM()`
+  (platform RSS via rss_{linux,darwin,windows}.go, runtime Sys
+  fallback) / `RAMString()` / `FormatBytes` (decimal MB/GB, one
+  decimal). All methods goroutine-safe. Consumed by internal/app's
+  progress.go (the `newProgress` seam).
 - `internal/appctx` -- app-context collection for the plugin system,
   pure and headless-tested: the data types (AppInfo / InstalledApp /
   WindowInfo (ID uint32/Title/App/PID) /
@@ -1600,11 +1689,22 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   = golang.design/x/hotkey (RegisterHotKey) + user32 syscalls
   (GetCursorPos, EnumDisplayMonitors with a package-level
   syscall.NewCallback, GetMonitorInfoW -> rcMonitor + rcWork).
-  darwin = golang.design/x/hotkey (CGEventTap; needs Accessibility,
-  register best-effort from a goroutine) + a small Cocoa shim
-  (platform_darwin.h/.m: cursor via CGEventCreate, screens via
-  NSScreen with bottom-left->top-left conversion, MoveWindow via
-  setFrameOrigin on the first NSWindow, all on the main thread).
+  darwin = Carbon RegisterEventHotKey via the Cocoa/Carbon shim
+  (hotkey_darwin.go + platform_darwin.h/.m: NO Accessibility/TCC
+  permission -- the old golang.design/x/hotkey CGEventTap path
+  errored without it and never prompted; registration hops to the
+  main thread through runOnMain, presses arrive via the Carbon event
+  dispatcher on the main run loop -- which [NSApp run] pumps -- and
+  are drained to onDown on a private goroutine; ONE hotkey slot, a
+  second concurrent StartHotkey errors, stop unregisters async so
+  shutdown never blocks on a stopping main loop) + the same shim's
+  cursor via CGEventCreate, screens via NSScreen with
+  bottom-left->top-left conversion, MoveWindow via setFrameOrigin on
+  the first NSWindow, all on the main thread, and ConfigurePanel
+  (panel_darwin.go over csConfigurePanel; panel_other.go = false on
+  !darwin): the Spotlight-style collectionBehavior canJoinAllSpaces
+  + fullScreenAuxiliary + ignoresCycle plus hidesOnDeactivate NO on
+  the first NSWindow, false while no window exists yet.
   display_darwin.go also carries `#cgo LDFLAGS: -framework
   UniformTypeIdentifiers` on Wails' behalf: the v2 darwin frontend
   references UTType without linking that framework, and newer Xcode
@@ -2003,7 +2103,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   filters). Jobs: `linux` (the original single build job + cache
   hand-offs of the linux and windows app binaries), `darwin`
   (macos-latest: darwin/arm64 cgo build + the full unit-test suite,
-  tags `desktop,production`, no screenshots/deb; hands off the
+  tags `desktop,production`, no deb; then
+  `.github/scripts/darwin-smoke.ts` (typescript action, `file:`
+  input) boots the built binary on the runner's real WindowServer
+  session and asserts boot + JSON-shaped IPC round-trips within hard
+  deadlines + one legacy line-protocol exchange (a8-legacy-ipc, the
+  compat promise) + a real on-screen window via a compiled
+  CGWindowList Swift probe, including while a big index build is
+  PROVABLY in flight (the hard B-midindex-window check: progress
+  line present, completion line absent, before b1 runs) -- the step
+  is a HARD GATE (no continue-on-error): every SMOKE id is pass/fail
+  and any FAIL fails the darwin job and with it all-builds;
+  screenshots are best-effort "evidence:" captures (never a SMOKE
+  id), copied to smoke-shots/ and uploaded via actions/
+  upload-artifact@v4 as `darwin-smoke-<sha>` (`if-no-files-found:
+  ignore` -- the linux screenshots pattern), and the full app-log
+  dumps print only on failure (green runs get the
+  hotkey:/index:/watch:/panic summary lines); hands off the
   darwin/arm64 app binary the same way) and `publish` (needs: [linux,
   darwin];
   publishes ONE buildhost release per push -- see "Binary publishing"
@@ -2020,7 +2136,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run build`
   in `frontend/` -> `wow-look-at-my/go-toolchain@v1`
   with `targets: linux/amd64,windows/amd64`, `cgo: 'true'`,
-  `timeout: '20'`, and env
+  `timeout: '20'`, `autorelease: 'false'`, and env
   `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> two
   `wow-look-at-my/actions@cache-upload#latest` hand-offs
   (`app-linux-amd64`, `app-windows-amd64` -- job hand-offs ride the
@@ -2076,7 +2192,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   URL only ever follows the default branch (master) -- a buildhost
   guarantee, do not re-verify it per project. This replaced
   go-toolchain's `autorelease` (removed in the 2026-07-17 cleanup #25;
-  restored as the explicit job the same day). The old autorelease also
+  restored as the explicit job the same day), and BOTH build jobs pin
+  `autorelease: 'false'` on their go-toolchain steps -- the action
+  DEFAULTS it to 'true', so #25's input-line removal had silently
+  re-enabled in-job publishing (extra app + server releases per push,
+  fixed 2026-07-19). The old autorelease also
   pushed the color-http example server binary to project
   `competent-search-thing/server`; that is deliberately NOT restored
   (dev sample, not a user-facing deliverable). Deb publishing (previous
@@ -2139,3 +2259,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `docs/screenshot.png` is the committed reference image used by
   README.md (the 02-results state, captured from the real app under
   Xvfb). If the UI changes deliberately, recapture and replace it.
+- `docs/screenshot-macos.png` is the committed macOS reference image
+  used by README.md's macOS install section (the darwin GUI smoke's
+  01-summoned capture, taken from the `darwin-smoke-<sha>` artifact).
+  If the macOS UI changes deliberately, recapture and replace it.

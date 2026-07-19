@@ -2,7 +2,8 @@
 // hotkey registration, cursor and monitor queries, the app-context
 // source (AppSource, the per-OS appctx.Source implementation feeding
 // focused/running/installed application data to the plugin system),
-// and (macOS only) native window moves. Package platform holds every
+// and (macOS only) native window moves plus Spotlight-style panel
+// configuration (ConfigurePanel). Package platform holds every
 // piece of logic that can be pure; this package only translates
 // between those pure types and the operating system.
 //
@@ -39,12 +40,19 @@
 //     (foreground/EnumWindows), kernel32 for process image paths, and
 //     the registry uninstall keys for installed software.
 //     Compile-checked only on Windows; CI builds linux/amd64.
-//   - macOS: golang.design/x/hotkey (CGEventTap; needs the
-//     Accessibility permission, Register errors without it) plus a
-//     small Cocoa cgo shim for cursor/screens/window moves and
-//     NSWorkspace app queries. The shim converts between Cocoa's
-//     bottom-left-origin global coordinates and the top-left-origin
-//     virtual desktop used everywhere else; installed apps are a
-//     plain /Applications + ~/Applications bundle scan.
-//     Compile-checked only on macOS.
+//   - macOS: Carbon RegisterEventHotKey through the Cocoa/Carbon cgo
+//     shim -- the mechanism Spotlight-style launchers use, needing NO
+//     Accessibility/TCC permission (the old golang.design/x/hotkey
+//     CGEventTap path errored without that permission and never
+//     prompted for it). Registration hops to the main thread
+//     (runOnMain); presses arrive via the Carbon event dispatcher on
+//     the main run loop and are drained to the callback on a private
+//     goroutine; one hotkey slot at a time. The same shim serves
+//     cursor/screens/window moves, Spotlight-style panel behavior
+//     (ConfigurePanel: join all Spaces, show over fullscreen apps,
+//     stay out of the window cycle) and NSWorkspace app queries,
+//     converting between Cocoa's bottom-left-origin global
+//     coordinates and the top-left-origin virtual desktop used
+//     everywhere else; installed apps are a plain /Applications +
+//     ~/Applications bundle scan. Compile-checked only on macOS.
 package native
