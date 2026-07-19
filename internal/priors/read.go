@@ -39,9 +39,9 @@ type PickRecord struct {
 // telemetryLine mirrors just the record fields the projection needs;
 // json.Unmarshal drops everything else (the tolerance contract).
 type telemetryLine struct {
-	V      int    `json:"v"`
-	TS     string `json:"ts"`
-	Query  string `json:"query"`
+	V      int            `json:"v"`
+	TS     string         `json:"ts"`
+	Query  string         `json:"query"`
 	Shown  []telemetryRow `json:"shown"`
 	Picked telemetryRow   `json:"picked"`
 }

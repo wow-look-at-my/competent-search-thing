@@ -69,16 +69,6 @@ func TestCompareJoinedNumeric(t *testing.T) {
 	}
 }
 
-func sign(v int) int {
-	switch {
-	case v < 0:
-		return -1
-	case v > 0:
-		return 1
-	}
-	return 0
-}
-
 // TestCompareJoinedNumericTotalOrder sorts a tricky corpus (digit
 // runs, leading zeros, mixed digit/letter boundaries, the historical
 // a1x/a1y/a2x non-transitivity trap of a naive skeleton-gated rule)

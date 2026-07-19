@@ -71,7 +71,7 @@ func TestBlendPriorZeroIsNoOp(t *testing.T) {
 // class, however large the value (no tier jump for priors).
 func TestBlendPriorOrdersWithinClass(t *testing.T) {
 	s := NewStore()
-	mustAdd(t, s, "/a", "report", false)        // exact
+	mustAdd(t, s, "/a", "report", false)         // exact
 	mustAdd(t, s, "/a", "report_one.txt", false) // prefix
 	mustAdd(t, s, "/a", "report_two.txt", false) // prefix
 	prior := &Blend{Prior: func(q string) func(string) float64 {

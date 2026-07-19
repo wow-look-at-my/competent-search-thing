@@ -141,9 +141,9 @@ func TestBuildTablesSkipsUnusableExactEntries(t *testing.T) {
 	long := strings.Repeat("q", maxQueryBytes+1)
 	longPath := "/" + strings.Repeat("p", maxPathBytes)
 	recs := []PickRecord{
-		rec(testNow, "", []string{"/a/x.md"}, "/a/x.md"),      // empty query
-		rec(testNow, long, []string{"/a/x.md"}, "/a/x.md"),    // oversized query
-		rec(testNow, "ok", []string{longPath}, longPath),      // oversized path
+		rec(testNow, "", []string{"/a/x.md"}, "/a/x.md"),         // empty query
+		rec(testNow, long, []string{"/a/x.md"}, "/a/x.md"),       // oversized query
+		rec(testNow, "ok", []string{longPath}, longPath),         // oversized path
 		rec(time.Time{}, "zero", []string{"/a/y.md"}, "/a/y.md"), // zero ts: stored at build now
 	}
 	tb := BuildTables(recs, nil, testNow)
@@ -161,9 +161,9 @@ func TestBuildTablesSkipsUnusableExactEntries(t *testing.T) {
 
 func TestBuildTablesBootstrapGate(t *testing.T) {
 	frec := map[string]float64{
-		"/home/me/docs/a.md":  3,
-		"/home/me/docs/b.md":  2,
-		"/home/me/bin/tool":   1,
+		"/home/me/docs/a.md": 3,
+		"/home/me/docs/b.md": 2,
+		"/home/me/bin/tool":  1,
 	}
 	// Below the gate: bootstrap folds in.
 	tb := BuildTables(nil, frec, testNow)
