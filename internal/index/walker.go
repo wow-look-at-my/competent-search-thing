@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 // readDirFn is swapped by tests to inject deterministic read errors
@@ -90,58 +92,113 @@ type walkState struct {
 }
 
 func (w *walkState) run() {
+	// scratch is this worker's reusable full-path buffer: file entries
+	// only ever need their joined path for the full-pattern exclude
+	// check, and materializing a real string for every one of them was
+	// the walk's single largest allocation source (~90-100 transient
+	// bytes per entry at whole-filesystem scale).
+	var scratch []byte
 	for {
 		dir, ok := w.q.pop()
 		if !ok {
 			return
 		}
-		w.processDir(dir)
+		scratch = w.processDir(dir, scratch)
 		w.q.taskDone()
 	}
 }
 
 // walkItem is one directory entry captured outside the store lock.
+// full is the entry's absolute path, set for directories only -- the
+// walker builds it once for the queue and appendEntry interns the
+// same string instead of re-joining it.
 type walkItem struct {
 	name  string
+	full  string
 	isDir bool
 }
 
-func (w *walkState) processDir(dir string) {
+func (w *walkState) processDir(dir string, scratch []byte) []byte {
 	entries, err := readDirFn(dir)
 	if err != nil {
 		w.errs.Add(1)
-		return
+		return scratch
 	}
 	w.dirs.Add(1)
 
+	checkFull := w.ex.HasFullPatterns()
 	batch := make([]walkItem, 0, len(entries))
 	var subdirs []string
 	for _, de := range entries {
 		name := de.Name()
-		full := joinDir(dir, name)
-		if w.ex.Match(name, full) {
+		if w.ex.MatchBase(name) {
 			continue // pruned: a matching directory is never descended
 		}
 		// DirEntry.IsDir is false for symlinks (even to directories),
 		// so the link itself is indexed but never descended.
-		isDir := de.IsDir()
-		batch = append(batch, walkItem{name: name, isDir: isDir})
-		if isDir {
+		if de.IsDir() {
+			// Directories materialize the real string: the queue and
+			// the store's dir table both keep it anyway.
+			full := joinDir(dir, name)
+			if checkFull && w.ex.MatchFull(full) {
+				continue
+			}
+			batch = append(batch, walkItem{name: name, full: full, isDir: true})
 			subdirs = append(subdirs, full)
+			continue
 		}
+		if checkFull {
+			// Files: join into the reusable buffer and hand
+			// filepath.Match a transient view -- nothing down that
+			// call retains or mutates it, so no per-entry string is
+			// allocated.
+			scratch = appendJoinDir(scratch[:0], dir, name)
+			if w.ex.MatchFull(unsafeString(scratch)) {
+				continue
+			}
+		}
+		batch = append(batch, walkItem{name: name})
 	}
 
 	if len(batch) > 0 {
 		w.mu.Lock()
 		pid := w.st.internDir(dir)
+		// One exact-size grow instead of the 1->2->4 append ladder:
+		// kills the copy churn and the ~1.32x measured cap overshoot.
+		w.st.growChildren(pid, len(batch))
 		for _, it := range batch {
-			w.st.appendEntry(pid, dir, it.name, it.isDir)
+			w.st.appendEntry(pid, it.name, it.full, it.isDir)
 		}
 		w.mu.Unlock()
 		w.prog.add(len(batch))
 		w.indexed.Add(int64(len(batch)))
 	}
 	w.q.push(subdirs...)
+	return scratch
+}
+
+// appendJoinDir appends joinDir(dir, name) to buf without allocating
+// a string (same separator rule: only a filesystem root keeps a
+// trailing separator after filepath.Clean).
+func appendJoinDir(buf []byte, dir, name string) []byte {
+	buf = append(buf, dir...)
+	if !strings.HasSuffix(dir, string(filepath.Separator)) {
+		buf = append(buf, filepath.Separator)
+	}
+	return append(buf, name...)
+}
+
+// unsafeString views b as a string for the duration of a call that
+// neither retains nor mutates it (here: filepath.Match inside
+// Excluder.MatchFull). The walker's scratch buffer is reused per
+// worker, so a plain string(b) conversion would allocate once per
+// file entry -- the exact churn this path exists to remove. Callers
+// must not let the view escape.
+func unsafeString(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 // progressReporter throttles ProgressFunc invocations to at most one

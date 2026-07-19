@@ -622,9 +622,25 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   path-suffix >
   path-prefix > substring with the same tie-breaks. `Walk`: parallel walker (worker
   pool + LIFO queue) with exclude patterns (`Excluder`: bare pattern
-  = base name, pattern with separator = full path), symlinks indexed
+  = base name, pattern with separator = full path; Match =
+  MatchBase || MatchFull exactly, split plus HasFullPatterns for the
+  walker hot path), symlinks indexed
   but never descended, permission errors counted not fatal, throttled
-  progress callbacks. `Manager`: owns the RWMutex contract (queries
+  progress callbacks. WALK ALLOCATION DIET (2026-07, recon-measured
+  438 B / 4.26 allocs per entry before): base-name excludes are
+  checked FIRST without any join; FILE entries join their full path
+  into a per-worker reusable scratch buffer and hand MatchFull an
+  unsafe.String view (nothing down that call retains or mutates it;
+  only taken when HasFullPatterns) so no per-file path string is ever
+  allocated, while DIRECTORY entries materialize the real string once
+  and walkItem.full carries it into appendEntry -- whose signature is
+  (pid, name, dirPath, isDir), interning the caller's string instead
+  of re-joining (AddEntry joins for itself) -- and growChildren
+  presizes children[pid] to the exact batch size before the append
+  loop, so walk-built children slices end at cap == len (the
+  append-ladder's measured 1.32x overshoot and copy churn are gone;
+  pinned by TestWalkChildrenPresized, the scratch path by
+  TestWalkFullPathPatternOnFiles + TestAppendJoinDir). `Manager`: owns the RWMutex contract (queries
   RLock, mutations Lock); `BuildFromDisk` walks into a fresh store and
   swaps it in, so queries keep working during rebuilds -- and first
   recomputes the mount skip list (mounts.go: `SystemMountSkips` reads

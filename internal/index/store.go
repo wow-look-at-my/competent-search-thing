@@ -130,14 +130,21 @@ func (s *Store) AddEntry(parentDir, name string, isDir bool) (int32, error) {
 		}
 		return id, nil
 	}
-	return s.appendEntry(pid, parentDir, name, isDir), nil
+	var dirPath string
+	if isDir {
+		dirPath = joinDir(parentDir, name)
+	}
+	return s.appendEntry(pid, name, dirPath, isDir), nil
 }
 
 // appendEntry appends a brand-new entry without checking for an
 // existing (parent, name) duplicate. The walker uses it directly when
 // filling a fresh store, where os.ReadDir guarantees unique names per
-// directory; everyone else goes through AddEntry.
-func (s *Store) appendEntry(pid uint32, parentDir, name string, isDir bool) int32 {
+// directory; everyone else goes through AddEntry. dirPath is the
+// entry's OWN absolute path when isDir -- callers pass the string
+// they already built (the walker's queue copy), so the join is never
+// performed twice -- and is ignored for files.
+func (s *Store) appendEntry(pid uint32, name, dirPath string, isDir bool) int32 {
 	id := int32(len(s.parent))
 	s.names, s.nameOff = appendName(s.names, s.nameOff, name)
 	for i := 0; i < len(name); i++ {
@@ -147,12 +154,27 @@ func (s *Store) appendEntry(pid uint32, parentDir, name string, isDir bool) int3
 	var f byte
 	if isDir {
 		f = flagDir
-		s.internDir(joinDir(parentDir, name))
+		s.internDir(dirPath)
 	}
 	s.flags = append(s.flags, f)
 	s.children[pid] = append(s.children[pid], id)
 	s.live++
 	return id
+}
+
+// growChildren ensures dir id pid's children slice has capacity for n
+// more appends. The walker calls it once per directory with the exact
+// batch size before its appendEntry loop, so walk-built children
+// slices end at cap == len instead of accumulating the 1->2->4 append
+// ladder's ~1.32x measured overshoot (plus its copy churn).
+func (s *Store) growChildren(pid uint32, n int) {
+	kids := s.children[pid]
+	if n <= 0 || cap(kids)-len(kids) >= n {
+		return
+	}
+	grown := make([]int32, len(kids), len(kids)+n)
+	copy(grown, kids)
+	s.children[pid] = grown
 }
 
 // appendName appends one name plus the separator byte to a blob and

@@ -65,8 +65,8 @@ func buildSynthStore(seed int64, total int) *Store {
 	for i := 0; i < numDirs && count < total; i++ {
 		pi := rng.Intn(len(dirPaths))
 		name := fmt.Sprintf("%s_%d", synthWords[rng.Intn(len(synthWords))], i)
-		st.appendEntry(dirIDs[pi], dirPaths[pi], name, true)
 		full := joinDir(dirPaths[pi], name)
+		st.appendEntry(dirIDs[pi], name, full, true)
 		dirPaths = append(dirPaths, full)
 		dirIDs = append(dirIDs, st.dirIndex[full])
 		count++
@@ -77,7 +77,7 @@ func buildSynthStore(seed int64, total int) *Store {
 		if i%synthRareEvery == 0 {
 			name = fmt.Sprintf("zzqx_marker_%d.bin", i)
 		}
-		st.appendEntry(dirIDs[di], dirPaths[di], name, false)
+		st.appendEntry(dirIDs[di], name, "", false)
 		count++
 	}
 	return st
