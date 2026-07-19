@@ -78,11 +78,31 @@ func (m *Manager) BuildFromDisk(ctx context.Context, progress ProgressFunc) (int
 // SetFuzzyDisabled turns the fuzzy (subsequence) name-match tier off
 // or on for subsequent queries. The zero value keeps fuzzy matching on
 // (config search.fuzzyDisabled; main.go wires it right after
-// construction).
+// construction, and the config editor's live apply re-wires it).
 func (m *Manager) SetFuzzyDisabled(disabled bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.fuzzyDisabled = disabled
+}
+
+// FuzzyDisabled reports the current fuzzy-tier switch (diagnostics and
+// the config live-apply tests).
+func (m *Manager) FuzzyDisabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.fuzzyDisabled
+}
+
+// SetMaxResults swaps the default query limit subsequent queries use
+// (config maxResults; the config editor's live apply calls it). A
+// non-positive value selects DefaultMaxResults, matching NewManager.
+func (m *Manager) SetMaxResults(n int) {
+	if n <= 0 {
+		n = DefaultMaxResults
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.maxResults = n
 }
 
 // SetBlend swaps the frecency ranking blend subsequent queries use
@@ -105,13 +125,14 @@ func (m *Manager) Blend() *Blend {
 }
 
 // Query searches the live store. limit <= 0 selects the configured
-// default. Returns nil when nothing matches.
+// default (read under the lock: SetMaxResults may change it live).
+// Returns nil when nothing matches.
 func (m *Manager) Query(q string, limit int) []Result {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if limit <= 0 {
 		limit = m.maxResults
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	return m.store.QueryWith(q, limit, QueryOptions{FuzzyDisabled: m.fuzzyDisabled, Blend: m.blend})
 }
 
@@ -216,8 +237,13 @@ func (m *Manager) Roots() []string { return copyStrings(m.roots) }
 // Excludes returns a copy of the configured exclude patterns.
 func (m *Manager) Excludes() []string { return copyStrings(m.excludes) }
 
-// MaxResults returns the default query limit.
-func (m *Manager) MaxResults() int { return m.maxResults }
+// MaxResults returns the default query limit (read under the lock:
+// SetMaxResults may change it live).
+func (m *Manager) MaxResults() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.maxResults
+}
 
 func copyStrings(s []string) []string {
 	if len(s) == 0 {

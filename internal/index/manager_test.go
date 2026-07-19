@@ -198,6 +198,38 @@ func TestManagerConfigAccessors(t *testing.T) {
 	require.Nil(t, empty.Excludes())
 }
 
+func TestManagerSetMaxResultsLive(t *testing.T) {
+	m := NewManager(nil, nil, 10)
+	for i := 0; i < 5; i++ {
+		require.NoError(t, m.Add("/d", fmt.Sprintf("file-%d.txt", i), false))
+	}
+	require.Len(t, m.Query("file", 0), 5)
+
+	m.SetMaxResults(2)
+	require.Equal(t, 2, m.MaxResults())
+	require.Len(t, m.Query("file", 0), 2, "the new default limit applies to subsequent queries")
+	require.Len(t, m.Query("file", 4), 4, "an explicit limit still wins")
+
+	m.SetMaxResults(0)
+	require.Equal(t, DefaultMaxResults, m.MaxResults(), "non-positive repairs to the default, matching NewManager")
+}
+
+func TestManagerSetFuzzyDisabledLive(t *testing.T) {
+	m := NewManager(nil, nil, 10)
+	require.False(t, m.FuzzyDisabled(), "the zero value keeps fuzzy on")
+	// "fzy" matches "frenzy" only as a subsequence: present with the
+	// fuzzy tier on, gone when it is switched off live.
+	require.NoError(t, m.Add("/d", "frenzy.txt", false))
+	require.Len(t, m.Query("fzy", 0), 1)
+
+	m.SetFuzzyDisabled(true)
+	require.True(t, m.FuzzyDisabled())
+	require.Empty(t, m.Query("fzy", 0), "the fuzzy tier is off for subsequent queries")
+
+	m.SetFuzzyDisabled(false)
+	require.Len(t, m.Query("fzy", 0), 1)
+}
+
 func TestManagerBuildErrorKeepsOldStore(t *testing.T) {
 	m := NewManager([]string{t.TempDir()}, nil, 10)
 	require.NoError(t, m.Add("/pre", "existing.txt", false))
