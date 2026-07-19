@@ -13,6 +13,7 @@ require (
 	golang.design/x/hotkey v0.6.1
 	golang.org/x/image v0.41.0
 	golang.org/x/sys v0.46.0
+	golang.org/x/term v0.43.0
 	modernc.org/sqlite v1.54.0
 )
 
