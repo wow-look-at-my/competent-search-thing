@@ -178,10 +178,15 @@ func TestNormalize(t *testing.T) {
 	require.Equal(t, "light", keep.Theme, "a configured theme is preserved")
 	require.Equal(t, WatcherBackendInotify, keep.Watcher.Backend, "a valid backend is preserved")
 
+	keepFse := Config{Watcher: WatcherConfig{Backend: " FSEvents "}}
+	keepFse.Normalize()
+	require.Equal(t, WatcherBackendFSEvents, keepFse.Watcher.Backend,
+		"fsevents is a valid backend, trimmed and lowercased to its canonical spelling")
+
 	unknown := Config{Watcher: WatcherConfig{Backend: "kqueue"}}
 	unknown.Normalize()
 	require.Equal(t, WatcherBackendAuto, unknown.Watcher.Backend,
-		"an unknown watcher.backend is repaired to auto")
+		"an unknown watcher.backend is repaired to auto (kqueue is a runtime label, not a config value)")
 
 	var empty Config
 	empty.Normalize()

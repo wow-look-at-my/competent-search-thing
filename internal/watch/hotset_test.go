@@ -18,19 +18,65 @@ func TestResolveBudget(t *testing.T) {
 		name       string
 		maxWatches int
 		readMax    func() int
+		auto       func(int) int
 		want       int
 	}{
-		{"explicit positive wins", 7, fake(1 << 20), 7},
-		{"negative is unlimited", -1, fake(1 << 20), math.MaxInt},
-		{"auto: half the kernel limit", 0, fake(100000), 50000},
-		{"auto: capped at 65536", 0, fake(1 << 20), 65536},
-		{"auto: floored at 1024", 0, fake(1000), 1024},
-		{"auto: read failure is unlimited", 0, fake(0), math.MaxInt},
-		{"auto: negative read is unlimited", 0, fake(-5), math.MaxInt},
-		{"auto: nil reader is unlimited (non-linux shape)", 0, nil, math.MaxInt},
+		{"explicit positive wins", 7, fake(1 << 20), autoBudgetInotify, 7},
+		{"negative is unlimited", -1, fake(1 << 20), autoBudgetInotify, math.MaxInt},
+		{"auto: half the kernel limit", 0, fake(100000), autoBudgetInotify, 50000},
+		{"auto: capped at 65536", 0, fake(1 << 20), autoBudgetInotify, 65536},
+		{"auto: floored at 1024", 0, fake(1000), autoBudgetInotify, 1024},
+		{"auto: the darwin fd formula applies when bound", 0, fake(61440), autoBudgetDarwinFD, 3840},
+		{"auto: nil formula defaults to the inotify one", 0, fake(100000), nil, 50000},
+		{"auto: read failure is unlimited", 0, fake(0), autoBudgetInotify, math.MaxInt},
+		{"auto: read failure is unlimited on the fd formula too", 0, fake(0), autoBudgetDarwinFD, math.MaxInt},
+		{"auto: negative read is unlimited", 0, fake(-5), autoBudgetInotify, math.MaxInt},
+		{"auto: nil reader is unlimited (windows shape)", 0, nil, autoBudgetInotify, math.MaxInt},
 	}
 	for _, tc := range cases {
-		require.Equal(t, tc.want, resolveBudget(tc.maxWatches, tc.readMax), tc.name)
+		require.Equal(t, tc.want, resolveBudget(tc.maxWatches, tc.readMax, tc.auto), tc.name)
+	}
+}
+
+func TestAutoBudgetFormulas(t *testing.T) {
+	// The linux formula: half the inotify allowance, cap 65536, floor
+	// 1024.
+	require.Equal(t, 50000, autoBudgetInotify(100000))
+	require.Equal(t, 65536, autoBudgetInotify(1<<20), "capped")
+	require.Equal(t, 1024, autoBudgetInotify(100), "floored")
+
+	// The darwin formula: a sixteenth of the fd limit, cap 8192,
+	// floor 256 -- kqueue charges one fd per watched dir PLUS one per
+	// direct child file, so the dir budget must stay far below the fd
+	// limit.
+	require.Equal(t, 3840, autoBudgetDarwinFD(61440), "kern.maxfilesperproc 61440 -> 3840 dirs")
+	require.Equal(t, 640, autoBudgetDarwinFD(10240), "the legacy 10240 limit -> 640 dirs")
+	require.Equal(t, 8192, autoBudgetDarwinFD(1<<20), "capped")
+	require.Equal(t, 256, autoBudgetDarwinFD(1000), "floored")
+}
+
+func TestFormatBudget(t *testing.T) {
+	require.Equal(t, "unlimited", FormatBudget(math.MaxInt),
+		"the unlimited sentinel never prints as 9223372036854775807")
+	require.Equal(t, "7", FormatBudget(7))
+	require.Equal(t, "65536", FormatBudget(65536))
+}
+
+func TestDefaultBudgetSeams(t *testing.T) {
+	// The per-OS production bindings (budget_{linux,darwin,other}.go):
+	// this suite runs on the linux AND darwin CI jobs, so both real
+	// bindings are exercised.
+	raw := defaultReadMaxWatches()
+	switch runtime.GOOS {
+	case "linux":
+		require.Greater(t, raw, 0, "linux exposes the inotify limit under /proc")
+		require.Equal(t, autoBudgetInotify(4000), defaultAutoBudget(4000))
+	case "darwin":
+		require.Greater(t, raw, 0, "the process fd limit is always readable on darwin")
+		require.Equal(t, autoBudgetDarwinFD(4000), defaultAutoBudget(4000))
+	default:
+		require.Zero(t, raw, "no readable limit off linux/darwin: auto stays unlimited")
+		require.Equal(t, autoBudgetInotify(4000), defaultAutoBudget(4000))
 	}
 }
 
@@ -49,8 +95,12 @@ func TestHotSetAutoBudgetViaSeam(t *testing.T) {
 
 	w := newBudgetWatcher(t, m, newFakeNotifier(), 0)
 	w.readMaxWatches = func() int { return 4000 }
+	// Pin the formula: the production default is per-OS (the darwin
+	// CI job would otherwise resolve 4000/16 -> floor 256), and this
+	// test is about the seams being consulted, not the OS binding.
+	w.autoBudget = autoBudgetInotify
 	startWatcherRegistered(t, w)
-	require.Equal(t, 2000, w.Stats().Budget, "auto budget consults the seam")
+	require.Equal(t, 2000, w.Stats().Budget, "auto budget consults the seams")
 
 	w2 := newBudgetWatcher(t, m, newFakeNotifier(), 0)
 	w2.readMaxWatches = func() int { return 0 }

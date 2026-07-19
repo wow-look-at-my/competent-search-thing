@@ -79,7 +79,7 @@ func (w *Watcher) addInitialWatches(ctx context.Context) {
 		// refusal was already logged loudly by the strict selection,
 		// so nothing here may claim marks are active.
 		if name := w.Stats().Backend; name != "none" {
-			log.Printf("watch: backend %s: whole-filesystem marks active; per-directory watches not needed",
+			log.Printf("watch: backend %s: whole-filesystem coverage active; per-directory watches not needed",
 				name)
 		}
 		return
@@ -92,8 +92,8 @@ func (w *Watcher) addInitialWatches(ctx context.Context) {
 	}
 	s := w.stats
 	w.mu.Unlock()
-	log.Printf("watch: live watches on %d of %d indexed dirs (budget %d, %d dropped); unwatched dirs converge via sweeps",
-		s.WatchedDirs, total, s.Budget, s.DroppedWatches)
+	log.Printf("watch: live watches on %d of %d indexed dirs (budget %s, %d dropped); unwatched dirs converge via sweeps",
+		s.WatchedDirs, total, FormatBudget(s.Budget), s.DroppedWatches)
 }
 
 // wantEvent filters events at intake and reduces each surviving event

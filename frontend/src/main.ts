@@ -618,9 +618,10 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
     }
   });
 
-  // The one-time backend announcement: full coverage (fanotify) needs
-  // no notice; anything else keeps a persistent chip up -- "Partial
-  // file watching" for the bounded inotify hot set, "File watching
+  // The one-time backend announcement: full coverage (fanotify on
+  // Linux, fsevents on macOS) needs no notice; anything else keeps a
+  // persistent chip up -- "Partial file watching" for the bounded
+  // per-directory hot set (inotify/kqueue/windows), "File watching
   // off" for the none backend -- with the Go-side hint on hover.
   // Independent of the degraded chip: both can show.
   rt.EventsOn("watch:backend", (...data: unknown[]) => {

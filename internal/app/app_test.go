@@ -395,12 +395,17 @@ func TestStartWatchLogsTierSummary(t *testing.T) {
 	_, _, err := m.BuildFromDisk(context.Background(), nil)
 	require.NoError(t, err)
 
-	a, _ := newTestApp(t, m, Options{RescanEvery: 45 * time.Minute})
+	// Pin the per-directory backend: auto would pick a wide backend
+	// where one is available (fsevents on the darwin CI job), whose
+	// summary legitimately reads 0/0. The LABEL is per-OS honest
+	// ("inotify" linux, "kqueue" darwin), so build the expectation
+	// from the real one.
+	a, _ := newTestApp(t, m, Options{RescanEvery: 45 * time.Minute, WatchBackend: "inotify"})
 	a.startWatch() // waits for the initial registration, so the numbers are real
 	require.True(t, watchUp(a))
 	out := buf.String()
-	require.Contains(t, out, "watch: backend inotify: 1/1 dirs live-watched (budget ",
-		"the summary announces the tier with real registration numbers")
+	require.Contains(t, out, "watch: backend "+watch.PerDirBackendName()+": 1/1 dirs live-watched (budget ",
+		"the summary announces the tier with real registration numbers and the honest per-OS label")
 	require.Contains(t, out, "); sweep interval 20m0s; full rescan interval 45m0s")
 	a.Shutdown(context.Background())
 
@@ -430,6 +435,10 @@ func TestStartWatchWiresWatcherConfig(t *testing.T) {
 		WatchMaxWatches: 7,
 		SweepInterval:   45 * time.Minute,
 		WatchExcludes:   []string{"skipme"},
+		// Pin the per-directory backend so the 1/1 assertion below
+		// holds on the darwin CI job too (auto would pick the wide
+		// fsevents backend there, which watches 0/0 by design).
+		WatchBackend: "inotify",
 	})
 	a.startWatch()
 	require.True(t, watchUp(a))
@@ -555,15 +564,27 @@ func TestEmitDegradedPayload(t *testing.T) {
 func TestWatchBackendForPayloads(t *testing.T) {
 	require.Equal(t, watchBackend{Backend: "fanotify", Full: true, Hint: ""},
 		watchBackendFor("fanotify"), "full coverage carries no hint")
+	require.Equal(t, watchBackend{Backend: "fsevents", Full: true, Hint: ""},
+		watchBackendFor("fsevents"), "the darwin wide backend is full coverage too")
 	require.Equal(t, watchBackend{
 		Backend: "inotify",
 		Full:    false,
 		Hint:    "Partial file watching: changes outside the hot set appear within the sweep interval. Enable full coverage: see README (fanotify).",
 	}, watchBackendFor("inotify"))
 	require.Equal(t, watchBackend{
+		Backend: "kqueue",
+		Full:    false,
+		Hint:    "Partial file watching: changes outside the hot set appear within the sweep interval. The fsevents backend provides full coverage on macOS: check the startup log for why it is not active (watcher.backend in config.json).",
+	}, watchBackendFor("kqueue"), "the darwin per-directory fallback points at fsevents, not setcap")
+	require.Equal(t, watchBackend{
+		Backend: "windows",
+		Full:    false,
+		Hint:    hintPartialWatch,
+	}, watchBackendFor("windows"), "unknown per-directory labels take the generic partial hint")
+	require.Equal(t, watchBackend{
 		Backend: "none",
 		Full:    false,
-		Hint:    "Live file watching is off (fanotify required by config but unavailable). The index refreshes on sweeps only.",
+		Hint:    "Live file watching is off (the configured backend is required but unavailable). The index refreshes on sweeps only.",
 	}, watchBackendFor("none"))
 }
 
@@ -583,7 +604,10 @@ func TestStartWatchEmitsBackendNoticeAndGrantHint(t *testing.T) {
 
 	require.Eventually(t, func() bool { return len(r.emitted(eventWatchBackend)) == 1 },
 		20*time.Second, 10*time.Millisecond, "the backend notice is emitted once the watch layer is up")
-	require.Equal(t, watchBackend{Backend: "inotify", Full: false, Hint: hintPartialWatch},
+	// The pinned per-directory backend reports the honest per-OS
+	// label ("inotify" on the linux job, "kqueue" on the darwin one),
+	// each with its matching hint.
+	require.Equal(t, watchBackendFor(watch.PerDirBackendName()),
 		r.emitted(eventWatchBackend)[0].payload[0])
 	require.Contains(t, buf.String(),
 		"watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /test/bin/competent-search-thing",

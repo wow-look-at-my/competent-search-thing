@@ -130,6 +130,14 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 	data, err = json.Marshal(full)
 	require.NoError(t, err)
 	require.NoError(t, validateConfigJSON(sch, data))
+
+	// Every backend enum value validates (kept in lockstep with the
+	// schema's enum; "kqueue" stays a rejected runtime-only label,
+	// see TestConfigSchemaRejectsInvalid).
+	for _, b := range []string{WatcherBackendAuto, WatcherBackendFanotify, WatcherBackendInotify, WatcherBackendFSEvents} {
+		require.NoError(t, validateConfigJSON(sch, []byte(`{"watcher":{"backend":"`+b+`"}}`)),
+			"backend %q validates", b)
+	}
 }
 
 // TestConfigSchemaRejectsInvalid mirrors the Go-side validation and

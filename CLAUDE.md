@@ -166,9 +166,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   SweepDisabled = no Sweeper + one loud warning; see the
   internal/watch bullet), then announces the effective backend ONCE:
   `watchBackendFor(st.Backend)` builds the "watch:backend" payload
-  {backend "fanotify"|"inotify"|"none", full bool (fanotify only),
-  hint string (empty when full; the pinned hintPartialWatch /
-  hintWatchOff texts otherwise, hintWatchFailed when the watcher
+  {backend "fanotify"|"fsevents"|"inotify"|"kqueue"|"windows"|
+  "none", full bool (fanotify AND fsevents), hint string (empty when
+  full; the pinned hintPartialWatch (linux/windows per-dir) /
+  hintPartialWatchDarwin (kqueue -> points at fsevents, not setcap) /
+  hintWatchOff (generalized: "the configured backend is required but
+  unavailable") texts otherwise, hintWatchFailed when the watcher
   itself failed to start -> backend forced to "none")}, and when NOT
   full `logFanotifyGrant()` first logs -- once per App, linux only
   (plat.goos), the grant line BEFORE the emit (tests synchronize on
@@ -673,8 +676,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   ON, the tray.disabled convention), watchExcludes
   (json omitempty; excluder-syntax patterns never LIVE-WATCHED but
   still indexed + swept), backend (json omitempty; the
-  WatcherBackend* constants "auto"/"fanotify"/"inotify" -- fanotify =
-  STRICT, no inotify fallback; Normalize trims+lowercases and repairs
+  WatcherBackend* constants "auto"/"fanotify"/"fsevents"/"inotify" --
+  fanotify (linux) and fsevents (darwin) = STRICT, no per-dir
+  fallback, and "kqueue" is deliberately NOT a config value (runtime
+  label only); Normalize trims+lowercases and repairs
   empty/unknown to "auto", schema enum in lockstep) -- main.go copies
   all five into app.Options
   {WatchMaxWatches, SweepInterval, SweepDisabled, WatchExcludes,
@@ -1347,9 +1352,21 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   for the 750-line cap): a bounded HOT SET of fsnotify watches --
   fsnotify uniform on ALL platforms, never recursive.
   `Options.MaxWatches` (config watcher.maxWatches -> app.Options
-  .WatchMaxWatches): 0 = auto (linux min(max_user_watches/2,
-  65536), floor 1024, via the `readMaxWatches` seam; non-linux/read
-  failure = unlimited watch-everything), negative = unlimited.
+  .WatchMaxWatches): 0 = auto via TWO per-OS seams (`readMaxWatches`
+  raw limit + `autoBudget` formula, production bindings in
+  budget_{linux,darwin,other}.go; both formulas live untagged in
+  watch.go so every job tests both): linux = autoBudgetInotify
+  (min(max_user_watches/2, 65536), floor 1024), darwin =
+  autoBudgetDarwinFD over readFDLimit (fdlimit_darwin.go, read-only
+  Getrlimit -- NEVER add a Setrlimit: the Go runtime already raises
+  the soft limit at init and restores the original in exec'd
+  children; min(RLIMIT_NOFILE/16, 8192), floor 256, /16 because
+  kqueue opens one fd per watched dir PLUS one per direct child
+  file -- the unbudgeted model pinned a field machine at its fd
+  ceiling), elsewhere/read failure = unlimited watch-everything;
+  negative = unlimited. `FormatBudget` renders math.MaxInt as
+  "unlimited" in BOTH budget log lines (events.go fill summary +
+  the app summary), never the raw digits.
   `Options.WatchEx` (config watcher.watchExcludes; a SECOND
   index.Excluder distinct from the walk one): matching dirs AND
   their whole subtrees (watchExcluded walks ancestors -- the walk
@@ -1375,23 +1392,53 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   paths filtered with the SAME `index.Excluder` as the walks. The
   notifier seam (notify.go; optional `backendInfo` extension = kind()
   name + wideCoverage) keeps unit tests scripted; integration
-  tests run real inotify. BACKEND SELECTION: New binds
+  tests run real inotify/kqueue. The production per-dir `fsnotifier`
+  implements backendInfo too: kind() = (`PerDirBackendName()`, false)
+  -- the HONEST per-OS label ("inotify" linux, "kqueue" darwin+BSDs,
+  "windows" windows; also the New-time Stats default), exported for
+  app_test's per-GOOS assertions. BACKEND SELECTION: New binds
   `newBackendNotifier(Options.Backend, normalized roots)` (notify.go;
   config watcher.backend -> app.Options.WatchBackend): "inotify" =
-  plain fsnotify, no fanotify probe; "fanotify" = STRICT
-  `newStrictFanotifyNotifier` (fanotify_linux.go + the
-  fanotify_other.go always-none twin) -- constructor failure = one
-  LOUD 'backend "fanotify" required by config but unavailable ...
-  live watching DISABLED' line + the no-op `noopNotifier` (notify.go:
+  plain fsnotify on every OS, no whole-filesystem probe; "fanotify"
+  and "fsevents" = STRICT `newStrictFanotifyNotifier` /
+  `newStrictFSEventsNotifier` (per-OS: fanotify_linux.go +
+  fsevents_darwin.go carry their own-OS strict + auto selections,
+  fanotify_other.go is now `!linux && !darwin`, fsevents_other.go =
+  `!darwin`; off its OS each strict mode is the loud
+  always-unavailable noop) -- constructor failure = one LOUD
+  'backend "..." required by config but unavailable ... live
+  watching DISABLED' line + the no-op `noopNotifier` (notify.go:
   accepts everything, delivers nothing, kind ("none", wide) so
   Watched/IndexedDirs stay 0 and addInitialWatches logs no
-  marks-active line for it; sweeps converge), NEVER an inotify
-  fallback; anything else = `newAutoNotifier` (fanotify_linux.go; the
-  fanotify_other.go twin is plain fsnotify) -- try the fanotify
-  whole-filesystem notifier, ANY constructor error = one log line +
-  per-directory fsnotify fallback. The `newFanotifyFn` package var is
-  the constructor seam both selections probe (scripted in tests, no
-  CAP_SYS_ADMIN needed). fanotifyNotifier: ONE
+  coverage-active line for it; sweeps converge), NEVER a per-dir
+  fallback; anything else = `newAutoNotifier` -- linux tries
+  fanotify, darwin tries fsevents, windows/BSDs go straight to
+  per-dir fsnotify; ANY constructor error = one log line +
+  per-directory fallback. The `newFanotifyFn` / `newFSEventsFn`
+  package vars are the constructor seams the selections probe
+  (scripted in tests, no privileges needed). FSEVENTS BACKEND
+  (fsevents_darwin.{go,h,c} cgo over CoreServices +
+  fsevents_events.go, the UNTAGGED pure half unit-tested on linux
+  CI too): ONE FSEventStreamCreate over the roots'
+  EvalSymlinks-RESOLVED spellings (FileEvents|NoDefer, sinceNow,
+  latency 0.3s, callbacks on a private serial dispatch queue via
+  FSEventStreamSetDispatchQueue -- no run loop), a cgo.Handle
+  trampoline (launchmint pattern) feeds handleBatch -> `fseDecide`
+  per record: overflow flags (MustScanSubDirs/UserDropped/
+  KernelDropped/IdsWrapped) -> the fsnotify overflow sentinel
+  (degrade + sweep) AND MustScanSubDirs still emits its subtree
+  root; content/metadata-only flags dropped (the Write/Chmod
+  analogue; flags==0 KEPT, fail open); `fsePathTranslator` maps
+  resolved prefixes back to configured spellings (/tmp ->
+  /private/tmp forking guard); paths outside the roots dropped
+  (stream-on-"/" sees everything). Close ordering is load-bearing:
+  closed flag -> FSEventStreamStop/Invalidate/Release -> dispatch
+  queue DRAIN (dispatch_sync_f) -> only then cgo.Handle delete +
+  channel closes. fsevents_darwin_test.go runs REAL FSEvents
+  un-gated on the mac job (delivery incl. symlink translation,
+  watcher-level convergence, scripted selections, handleBatch
+  overflow paths -- the integration twin CI's unprivileged fanotify
+  cannot have). fanotifyNotifier: ONE
   FAN_CLASS_NOTIF|FAN_REPORT_DFID_NAME|FAN_CLOEXEC|FAN_NONBLOCK
   group; FAN_MARK_FILESYSTEM marks (mask CREATE|DELETE|MOVED_FROM|
   MOVED_TO|ONDIR; FAN_RENAME deliberately unused) on every root's
@@ -1428,7 +1475,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   overflow = lost events -> Sweeper.Request when wired, else
   Rescanner fallback; OnDegraded edge-triggered once -> app's
   "watch:degraded".
-  Stats{Backend "inotify"|"fanotify"|"none" (strict mode refused: no
+  Stats{Backend "inotify"|"kqueue"|"windows" (per-dir, per-OS honest)
+  |"fanotify"|"fsevents" (wide)|"none" (strict mode refused: no
   live watching, sweeps only), Budget, WatchedDirs,
   IndexedDirs, DroppedWatches, Evictions, Overflows, Degraded};
   `InitialRegistration()` closes when the first fill finished (the
@@ -2111,7 +2159,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   compat promise) + a real on-screen window via a compiled
   CGWindowList Swift probe, including while a big index build is
   PROVABLY in flight (the hard B-midindex-window check: progress
-  line present, completion line absent, before b1 runs) -- the step
+  line present, completion line absent, before b1 runs); scenario B
+  then WAITS OUT the big build (B-index-done, 180s bound; the B hard
+  cap is 360s to fit it) and pins the macOS watcher field fixes:
+  B-backend (the "watch: backend ..." log line must name fsevents --
+  auto-selection + honest label in one grep) and B-fd-headroom (lsof
+  row count vs kern.maxfilesperproc, threshold min(5000, limit/2) --
+  a regressed unbounded kqueue path sits AT the fd ceiling and fails
+  loudly) -- the step
   is a HARD GATE (no continue-on-error): every SMOKE id is pass/fail
   and any FAIL fails the darwin job and with it all-builds;
   screenshots are best-effort "evidence:" captures (never a SMOKE

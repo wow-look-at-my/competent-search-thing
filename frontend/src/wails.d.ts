@@ -254,10 +254,12 @@ interface WatchDegradedEvent {
 
 // Payload of the "watch:backend" event (internal/app watchBackend),
 // emitted once when the watch layer is up. full is true only for the
-// fanotify whole-filesystem backend; otherwise hint carries a short
-// user-facing explanation the status-bar chip shows on hover.
+// whole-filesystem backends (fanotify on Linux, fsevents on macOS);
+// otherwise hint carries a short user-facing explanation the
+// status-bar chip shows on hover. The per-directory model reports its
+// honest per-OS label (inotify / kqueue / windows).
 interface WatchBackendEvent {
-  backend: "fanotify" | "inotify" | "none";
+  backend: "fanotify" | "fsevents" | "inotify" | "kqueue" | "windows" | "none";
   full: boolean;
   hint: string;
 }
