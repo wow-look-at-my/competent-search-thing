@@ -395,20 +395,27 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   point (main.go calls cli.Execute(app.Version, runGUI)). Bare
   invocation = the GUI path: ipc.Listen on ipc.SocketPath(os.Getenv);
   ErrAlreadyRunning = Send "show" to the running instance and report
-  HONESTLY (showRunningInstance): "ok" -> "already running; showing
-  it" + exit 0, "err not ready" -> "already running (still starting
-  up)" + exit 0, no/garbage reply -> stderr "already running but did
-  not respond: ..." + exit 1 (cobra's own error line suppressed);
-  any other listen error = log + run the GUI with a
+  HONESTLY (showRunningInstance): Reply.OK -> "already running;
+  showing it" + exit 0, Reply.NotReady() -> "already running (still
+  starting up)" + exit 0, no/garbage reply -> stderr "already running
+  but did not respond: ..." + exit 1 (cobra's own error line
+  suppressed, garbage quoted from Reply.Raw); any other listen error
+  = log + run the GUI with a
   NIL server (degraded, no IPC -- the app must still work). toggle /
   show send their command to the running instance; when none runs
   they start the GUI in this process with ShowOnStartup=true (on an
-  ErrAlreadyRunning race they fall back to Send "show"); an "err not
-  ready" reply counts as success but prints a one-line "still
+  ErrAlreadyRunning race they fall back to Send "show"); a NotReady()
+  reply counts as success but prints a one-line "still
   starting up; it may take a moment to respond" notice (the instance
   is booting and shows itself). hide never starts the app: not
   running = plain notice on
-  stderr + exit 1 (cobra error/usage output suppressed). Convention:
+  stderr + exit 1 (cobra error/usage output suppressed). The CLI
+  branches ONLY on ipc.Reply fields (checkReply/summonReply); wire
+  parsing incl. the old-daemon legacy retry lives entirely in
+  ipc.Send, so version skew is invisible here -- user-visible
+  messages and exit codes are identical either way
+  (TestSubcommandsAgainstOldLegacyDaemon pins the skew cell against a
+  fake legacy daemon). Convention:
   ONE self-registering subcommand per file (init -> registerCommand);
   newRoot() consumes the builder registry so Execute -- and every
   test -- gets a fresh command tree. RunOptions{Server,
@@ -419,24 +426,48 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/ipc` -- the single-instance unix-socket IPC layer, pure
   and headless-tested. SocketPath: $COMPETENT_SEARCH_SOCKET override,
   else $XDG_RUNTIME_DIR/competent-search-thing.sock, else a per-uid
-  name under os.TempDir(). Line protocol, ONE request per conn (2s
-  conn deadline, 4 KiB line cap): toggle/show/hide/version/ping ->
-  "ok" | the bare version string | "err <reason>" ("err not ready"
-  until SetHandlers wires the app -- nil handler members stay not
-  ready; version/ping always answer). "ok" is written BEFORE the
-  toggle/show/hide handler runs -- ack = accepted, not completed, so
-  an app whose main thread is briefly stalled (startup indexing) can
-  never time the client out; the handler then runs on the same conn
-  goroutine, so Close still waits for in-flight handlers. Listen
+  name under os.TempDir(). ONE request per conn (2s conn deadline,
+  4 KiB line cap), one newline-terminated line each way, TWO wire
+  shapes the server picks per request by sniffing the trimmed line's
+  first byte: '{' = the JSON v2 protocol -- request
+  {"cmd":"toggle|show|hide|version|ping"} with unknown JSON fields
+  IGNORED on both sides (the documented tolerance contract), response
+  {"ok":true} (ping) / {"ok":true,"version":v} /
+  {"ok":true,"accepted":cmd} / {"ok":false,"error":"not ready"|
+  "unknown command"|"invalid request"} -- anything else = the legacy
+  v1 line protocol byte-for-byte ("ok" | the bare version string |
+  "err not ready" | "err unknown command"; pinned with string
+  literals by TestLegacyWireIsByteIdentical), so an OLD client
+  against a NEW daemon is untouched. Commands answer "not ready"
+  until SetHandlers wires the app (nil handler members stay not
+  ready; version/ping always answer), and in BOTH shapes the ack is
+  written BEFORE the toggle/show/hide handler runs -- ack = accepted,
+  not completed, so an app whose main thread is briefly stalled
+  (startup indexing) can never time the client out; the handler then
+  runs on the same conn goroutine, so Close still waits for in-flight
+  handlers. Send(path, cmd, timeout) speaks JSON and returns a parsed
+  Reply{OK, Accepted, Version, Err, Raw, Legacy} + NotReady() -- ALL
+  reply parsing lives here, callers branch on fields, never wire
+  strings: stray legacy reply lines map equivalently (middle-state
+  servers), and EXACTLY the legacy "err unknown command" string
+  answering the JSON request means an OLD pre-JSON daemon -> ONE
+  retry on a fresh conn (one request per conn) with the bare legacy
+  command line, Legacy=true -- so a NEW CLI degrades gracefully
+  against an old daemon across an upgrade
+  (TestSendFallsBackToLegacyAgainstOldDaemon + the cli-level
+  TestSubcommandsAgainstOldLegacyDaemon drive a fake legacy daemon).
+  Garbage replies come back in-band (Raw set, OK false, empty Err)
+  for callers to quote; only transport failures are errors, dial
+  failures wrapped in ErrNotRunning (test with IsNotRunning); timeout
+  is ONE absolute deadline across dial + exchange + retry. Listen
   recovers stale sockets:
   EADDRINUSE -> 500ms probe dial; an answer = ErrAlreadyRunning, a
   dead socket = os.Remove + retry ONCE; after listening the file is
   chmodded 0600 (filesystem perms are the only auth). Close is
   idempotent + nil-safe: stops the accept loop, unlinks the socket,
-  waits for in-flight conns. Send wraps every dial failure in
-  ErrNotRunning (test with IsNotRunning) so callers can branch
-  "nothing to talk to" vs a broken exchange. Handlers run on conn
-  goroutines and must be goroutine-safe.
+  waits for in-flight conns. Handlers run on conn
+  goroutines and must be goroutine-safe. Deliberately NO schema in
+  schemas/ (an internal two-party protocol, like history.json).
 - `internal/match` -- THE shared matching engine, pure (stdlib only),
   consumed by internal/index AND internal/plugin: ONE fold definition
   (FoldTable/FoldRune/FoldPattern, the per-string ASCII+rune helpers;
@@ -2072,14 +2103,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   filters). Jobs: `linux` (the original single build job + cache
   hand-offs of the linux and windows app binaries), `darwin`
   (macos-latest: darwin/arm64 cgo build + the full unit-test suite,
-  tags `desktop,production`, no screenshots/deb; then
+  tags `desktop,production`, no deb; then
   `.github/scripts/darwin-smoke.ts` (typescript action, `file:`
   input) boots the built binary on the runner's real WindowServer
-  session and asserts boot + IPC round-trips within hard deadlines +
-  a real on-screen window via a compiled CGWindowList Swift probe,
-  including while a big index build is running -- the step is
-  `continue-on-error: true` while the macOS summon work iterates,
-  flip it to a hard gate before relying on it; hands off the
+  session and asserts boot + JSON-shaped IPC round-trips within hard
+  deadlines + one legacy line-protocol exchange (a8-legacy-ipc, the
+  compat promise) + a real on-screen window via a compiled
+  CGWindowList Swift probe, including while a big index build is
+  PROVABLY in flight (the hard B-midindex-window check: progress
+  line present, completion line absent, before b1 runs) -- the step
+  is a HARD GATE (no continue-on-error): every SMOKE id is pass/fail
+  and any FAIL fails the darwin job and with it all-builds;
+  screenshots are best-effort "evidence:" captures (never a SMOKE
+  id), copied to smoke-shots/ and uploaded via actions/
+  upload-artifact@v4 as `darwin-smoke-<sha>` (`if-no-files-found:
+  ignore` -- the linux screenshots pattern), and the full app-log
+  dumps print only on failure (green runs get the
+  hotkey:/index:/watch:/panic summary lines); hands off the
   darwin/arm64 app binary the same way) and `publish` (needs: [linux,
   darwin];
   publishes ONE buildhost release per push -- see "Binary publishing"

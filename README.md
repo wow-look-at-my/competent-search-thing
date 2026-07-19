@@ -2156,6 +2156,33 @@ Any keybinding mechanism that can run a command can therefore summon
 the bar. That is the whole Wayland story in one line: bind a key to
 `competent-search-thing toggle`.
 
+### The IPC protocol (for scripts)
+
+The socket speaks newline-delimited JSON, one request per
+connection: write one object like `{"cmd":"toggle"}` (commands
+`toggle`, `show`, `hide`, `version`, `ping`) and read one object
+back -- `{"ok":true,"accepted":"toggle"}` for an accepted command
+(written before the action runs: "ok" means accepted, not
+completed), `{"ok":true,"version":"..."}` for `version`,
+`{"ok":true}` for `ping`, and `{"ok":false,"error":"not ready"}` /
+`{"ok":false,"error":"unknown command"}` otherwise. Unknown JSON
+fields are ignored in requests, and scripts should extend the same
+tolerance to responses. For example:
+
+    printf '{"cmd":"toggle"}\n' | nc -U "$XDG_RUNTIME_DIR/competent-search-thing.sock"
+
+A request whose first non-space byte is not `{` takes the original
+v1 line protocol instead (`toggle` in, `ok` / `err not ready` /
+`err unknown command` / the bare version string out), answered
+byte-for-byte as before.
+
+Mixed versions across an upgrade keep working in both directions
+for one release: an old CLI keeps speaking v1 lines to a new daemon
+(the legacy path above), and a new CLI talking to a still-running
+old daemon recognizes the v1 `err unknown command` answer to its
+JSON request and retries once with the v1 line on a fresh
+connection.
+
 ### GNOME (Wayland)
 
 On GNOME Wayland sessions whose portal lacks GlobalShortcuts (GNOME
@@ -2329,10 +2356,11 @@ These are Wayland design constraints, not bugs:
   app's first window (Wails' WindowSetPosition is relative to the
   window's current screen and cannot target another display); it falls
   back to centering. The global hotkey (Carbon RegisterEventHotKey)
-  needs no Accessibility permission. CI compiles darwin/arm64 and
-  runs the unit-test suite on a macOS runner, but the GUI has had no
-  human acceptance testing on real hardware; treat it as best-effort
-  until then.
+  needs no Accessibility permission. CI compiles darwin/arm64, runs
+  the unit-test suite, and hard-gates on a GUI smoke (boot, IPC
+  round-trips during a large index build, a real on-screen window)
+  on a macOS runner, but the GUI has had no human acceptance testing
+  on real hardware; treat it as best-effort until then.
 - **Windows**: hotkey via RegisterHotKey and monitors via user32; the
   bar positions against the current monitor's work area. CI
   cross-compiles and publishes the Windows binary (pure Go) but never
