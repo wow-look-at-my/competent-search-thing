@@ -5,7 +5,8 @@
 // The Go side embeds the built frontend (frontend/dist) and hosts the
 // Wails runtime; the bound application object lives in internal/app and
 // owns the index engine (internal/index), the live-update layer
-// (internal/watch: fsnotify watcher + periodic rescanner), and the
+// (internal/watch: fanotify/inotify watcher + reconcile sweeps +
+// periodic rescanner), and the
 // platform layer (internal/platform: global hotkey, cursor-display
 // positioning, open/reveal). Argument handling lives in internal/cli: a
 // bare invocation boots the GUI as a single instance (internal/ipc unix
@@ -64,6 +65,11 @@ func runGUI(opts cli.RunOptions) error {
 	width, height, _ := app.PreviewWindowSize()
 	a := app.New(mgr, app.Options{
 		RescanEvery:            time.Duration(cfg.RescanIntervalMinutes) * time.Minute,
+		WatchMaxWatches:        cfg.Watcher.MaxWatches,
+		SweepInterval:          time.Duration(cfg.Watcher.SweepMinutes) * time.Minute,
+		SweepDisabled:          cfg.Watcher.SweepDisabled,
+		WatchExcludes:          cfg.Watcher.WatchExcludes,
+		WatchBackend:           cfg.Watcher.Backend,
 		Hotkey:                 cfg.Hotkey,
 		IPC:                    opts.Server,
 		ShowOnStartup:          opts.ShowOnStartup,

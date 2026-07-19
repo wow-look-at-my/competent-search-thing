@@ -72,7 +72,7 @@ func TestBuildIndexRendersProgressAndStartupSummary(t *testing.T) {
 
 	out := buf.String()
 	require.Contains(t, out, "index: 2 entries in", "the completion log is kept verbatim")
-	watchAt := strings.Index(out, "watch: live index updates started")
+	watchAt := strings.Index(out, "watch: backend ")
 	require.GreaterOrEqual(t, watchAt, 0, "the watch layer start is logged")
 	sumRe := regexp.MustCompile(`(?m)^.*index: startup complete: \d+ entries in .+, .+ ram$`)
 	loc := sumRe.FindStringIndex(out)

@@ -78,6 +78,105 @@ func TestManagerForEachLiveDir(t *testing.T) {
 	require.Equal(t, []string{"/w/docs"}, first)
 }
 
+func TestManagerLiveDirsPage(t *testing.T) {
+	m := NewManager(nil, nil, 0)
+	require.NoError(t, m.Add("/w", "docs", true))
+	require.NoError(t, m.Add("/w", "readme.txt", false))
+	require.NoError(t, m.Add("/w/docs", "img", true))
+	require.NoError(t, m.Add("/w", "gone", true))
+	m.Remove("/w/gone")
+
+	// A single full page matches ForEachLiveDir's enumeration.
+	var want []string
+	m.ForEachLiveDir(func(path string) bool {
+		want = append(want, path)
+		return true
+	})
+	require.Equal(t, []string{"/w/docs", "/w/docs/img"}, want)
+	dirs, next := m.LiveDirsPage(0, 0)
+	require.Equal(t, want, dirs)
+	require.Equal(t, int32(-1), next)
+
+	// Paging one dir at a time reaches the same list.
+	var paged []string
+	for start := int32(0); start != -1; {
+		var page []string
+		page, start = m.LiveDirsPage(start, 1)
+		paged = append(paged, page...)
+	}
+	require.Equal(t, want, paged)
+}
+
+// TestManagerLiveDirsPageConcurrent pages and lists children while
+// queries and writes run on other goroutines, exercising the RWMutex
+// contract (run under the race detector when the toolchain enables
+// it).
+func TestManagerLiveDirsPageConcurrent(t *testing.T) {
+	m := NewManager(nil, nil, 20)
+	const seed = 40
+	for i := 0; i < seed; i++ {
+		require.NoError(t, m.Add("/cc", fmt.Sprintf("dir%02d", i), true))
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for r := 0; r < 2; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_ = m.Query("dir", 10)
+				_ = m.ChildrenOf("/cc")
+			}
+		}()
+	}
+
+	for pass := 0; pass < 50; pass++ {
+		seen := 0
+		for start := int32(0); start != -1; {
+			var page []string
+			page, start = m.LiveDirsPage(start, 8)
+			seen += len(page)
+		}
+		// Writes only ever add dirs, so every pass sees at least the
+		// seed set (ids are stable; later appends land on later pages).
+		require.GreaterOrEqual(t, seen, seed)
+		require.NoError(t, m.Add("/cc", fmt.Sprintf("extra%03d", pass), true))
+	}
+	close(stop)
+	wg.Wait()
+}
+
+func TestManagerChildrenOf(t *testing.T) {
+	// The wrapper answers exactly like a Store built with the same
+	// mutation sequence.
+	m := NewManager(nil, nil, 0)
+	s := NewStore()
+	add := func(parent, name string, isDir bool) {
+		require.NoError(t, m.Add(parent, name, isDir))
+		mustAdd(t, s, parent, name, isDir)
+	}
+	add("/w", "docs", true)
+	add("/w", "readme.txt", false)
+	add("/w/docs", "img", true)
+	add("/w/docs", "note.md", false)
+	require.Equal(t, 1, m.Remove("/w/docs/note.md"))
+	require.Equal(t, 1, s.RemoveByPath("/w/docs/note.md"))
+
+	for _, dir := range []string{"/w", "/w/docs", "/w/docs/img", "/missing"} {
+		require.Equal(t, s.ChildrenOf(dir), m.ChildrenOf(dir), "dir %s", dir)
+	}
+	require.ElementsMatch(t, []ChildInfo{
+		{Name: "img", IsDir: true},
+	}, m.ChildrenOf("/w/docs"))
+	require.Nil(t, m.ChildrenOf("/missing"))
+}
+
 func TestManagerConfigAccessors(t *testing.T) {
 	roots := []string{"/data"}
 	excludes := []string{".git"}

@@ -134,8 +134,12 @@ A whole-system walk needs guardrails, and they are on by default:
 - **System excludes.** Fresh configs exclude the virtual and volatile
   trees `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/var/tmp` (full-path
   patterns) and `lost+found` (by name), on top of the long-standing
-  `.git`, `node_modules`, `.cache` name patterns. On Windows only the
-  three name patterns apply (it has no such virtual trees).
+  `.git`, `node_modules`, `.cache` name patterns and the high-churn
+  noise directories (`.hg`, `.svn`, `__pycache__`, `.mypy_cache`,
+  `.pytest_cache`, `.ruff_cache`, `.tox`, `.nox`, `.venv` -- see
+  [File watching and freshness](#file-watching-and-freshness)). On
+  Windows only the name patterns apply (it has no such virtual
+  trees).
 - **Mount skipping.** At every index build and rescan the app reads
   `/proc/self/mounts` (Linux) and skips mountpoints under the roots
   whose filesystem type is kernel-virtual (`proc`, `sysfs`, `tmpfs`,
@@ -158,22 +162,29 @@ To narrow the scope, edit `roots` in config.json (see
 ```json
 {
   "roots": ["/home/me", "/etc"],
-  "rootsVersion": 2
+  "rootsVersion": 3
 }
 ```
 
-**Upgrading from an older version:** configs written before
-whole-filesystem indexing carry no `rootsVersion` stamp. On first load
-the app migrates them once -- if `roots` is still the old default
-(your home directory), it becomes the whole-filesystem default and the
-missing system excludes are appended (patterns you added yourself are
-never touched); if you customized `roots`, nothing changes. Either way
-`"rootsVersion": 2` is written back so the check never re-runs. The
-migration is loud -- watch for these startup log lines:
+**Upgrading from an older version:** the `rootsVersion` stamp records
+which defaults generation wrote the config, and on first load the app
+migrates older files once, loudly. Configs from before
+whole-filesystem indexing (no stamp) get the v2 step: if `roots` is
+still the old default (your home directory) it becomes the
+whole-filesystem default and the missing system excludes are appended;
+customized `roots` are never touched. Configs stamped below 3
+additionally get the v3 step: if your `excludes` still contain all
+three stock patterns (`.git`, `node_modules`, `.cache`), the missing
+high-churn noise patterns are appended (see
+[File watching and freshness](#file-watching-and-freshness)); a
+curated or emptied list is left exactly as you wrote it. Either way
+`"rootsVersion": 3` is written back so the check never re-runs. Watch
+for these startup log lines:
 
 ```
 config: index roots upgraded to the whole-filesystem default (/); edit roots in config.json to revert -- the first rescan will re-walk everything
 config: system exclude patterns added for whole-filesystem indexing: /proc, /sys, /dev, /run, /tmp, /var/tmp, lost+found
+config: high-churn exclude patterns added for the watch layer: .hg, .svn, __pycache__, .mypy_cache, .pytest_cache, .ruff_cache, .tox, .nox, .venv; remove any of them in config.json to index those trees
 ```
 
 To revert, set `roots` back to what you want (e.g. `["/home/me"]`) and
@@ -206,6 +217,131 @@ reports the whole time-to-ready:
 index: startup complete: 12449259 entries in 41.3s, 384.2MB ram
 ```
 
+## File watching and freshness
+
+After the initial walk, three cooperating tiers keep the index live.
+They share one contract: **every tier converges to the same final
+index state** -- they differ only in how quickly a change shows up.
+
+| Tier | Coverage | Change latency | When active |
+|------|----------|----------------|-------------|
+| fanotify whole-filesystem marks | every directory on the roots' filesystems, one kernel mark per filesystem, no per-directory watches | ~1 second (debounced) | Linux, automatic, when the binary holds `CAP_SYS_ADMIN` (see below) |
+| inotify hot set | a bounded budget of per-directory watches: the roots first, then your home subtree, then the rest, rotated LRU-style toward recently active directories | ~1 second (debounced) for watched directories | whenever fanotify is not available; the only live tier on macOS and Windows |
+| reconcile sweeps | every indexed directory, every pass | one sweep interval (default 20 minutes) | always (unless `watcher.sweepDisabled`) |
+
+### Enable full-filesystem watching (recommended)
+
+The fanotify tier is the one you want to be on: a handful of kernel
+marks cover every directory of the roots' filesystems, registration
+is near-instant, `max_user_watches` stops mattering, and freshness no
+longer depends on which directories happen to be in a watch budget.
+Linux gates it behind capabilities -- `CAP_SYS_ADMIN` for the marks,
+`CAP_DAC_READ_SEARCH` for resolving event paths -- so an unprivileged
+launch physically cannot use it. Grant both on the installed binary:
+
+```
+sudo setcap cap_sys_admin,cap_dac_read_search+ep /usr/local/bin/competent-search-thing
+```
+
+The app logs this exact command, with the real installed path filled
+in, at every startup that runs without fanotify. Re-run it after any
+upgrade that replaces the file (file capabilities live on the inode).
+
+With the grant, a change anywhere under your roots reaches search
+results in about a second. Without it, the watcher falls back to the
+bounded inotify hot set: the final index state is identical, but only
+hot-set directories get ~1s latency -- everything else waits for a
+sweep (see the tier table above). Running without fanotify is never
+silent:
+
+- the status bar keeps a persistent **"Partial file watching"** chip
+  up (hover it for what that means), or **"File watching off"** when
+  strict mode disabled the fallback (next paragraph);
+- the startup log names the effective backend and prints the setcap
+  command above.
+
+If a quiet inotify fallback is not acceptable, pin the backend:
+`"watcher": { "backend": "fanotify" }` in config.json is STRICT --
+when fanotify cannot start, live watching is disabled outright rather
+than falling back (the index still converges through sweeps), the log
+announces it loudly, and the bar shows "File watching off".
+`"backend": "inotify"` skips the fanotify probe entirely (debugging);
+the default `"auto"` tries fanotify and falls back.
+
+**Understand what the grant means before running it.** File
+capabilities apply process-wide to every run of that binary:
+`CAP_SYS_ADMIN` is root-equivalent for most practical purposes, and
+`CAP_DAC_READ_SEARCH` bypasses file permission checks when reading --
+anyone who can execute the binary gets both. Only do this on a
+single-user machine whose binary you trust.
+
+### How changes converge
+
+The consistency model in practice:
+
+- A change under live coverage (a fanotify mark or a hot-set watch)
+  reaches search results about a second after it happens: events are
+  debounced (~250ms quiet / 1s max) and applied by re-checking the
+  disk, so duplicated, merged, or reordered events all converge.
+- A change anywhere else -- a directory outside the hot-set budget, a
+  watch the OS refused, events lost to a kernel queue overflow --
+  appears within one sweep interval: each pass walks every indexed
+  directory, `lstat`s it, and re-lists the ones whose mtime moved
+  past the previous pass. A queue overflow requests an immediate
+  sweep instead of waiting for the cadence.
+- The one documented blind spot: mtime-BACKDATED changes (e.g.
+  `tar --preserve` into an existing directory) hide from the sweep's
+  mtime check and converge at the next full rescan (`!rescan`, or the
+  `rescanIntervalMinutes` timer if you set one).
+
+Startup announces the active tier and its numbers in the log -- the
+second form means fanotify is on; the first is always followed by the
+ready-to-paste grant command:
+
+```
+watch: backend inotify: 41230/612009 dirs live-watched (budget 65536); sweep interval 20m0s; full rescan interval off
+watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /usr/local/bin/competent-search-thing
+watch: backend fanotify: whole-filesystem marks active; per-directory watches not needed
+```
+
+The same state is visible in the app itself: whenever the backend is
+not fanotify, the status bar keeps the "Partial file watching" /
+"File watching off" chip up (see
+[Enable full-filesystem watching](#enable-full-filesystem-watching-recommended)).
+
+### Watcher configuration
+
+The `watcher` section of config.json tunes the layer (see
+[Configuration](#configuration) for the file itself):
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `watcher.backend` | `"auto"` | Backend selection. `"auto"` uses fanotify when the binary can (see [Enable full-filesystem watching](#enable-full-filesystem-watching-recommended)) and falls back to the inotify hot set. `"fanotify"` is STRICT: when fanotify cannot start, live watching is disabled outright -- no inotify fallback; sweeps keep the index converging -- announced loudly in-app and in the log. `"inotify"` skips the fanotify probe (debugging). Empty or unknown values are repaired to `"auto"`. |
+| `watcher.maxWatches` | `0` | The hot-set budget. `0` = automatic: half of `fs.inotify.max_user_watches`, capped at 65536. Any negative value = explicitly unlimited (watch every indexed directory). Positive = exactly that many. Irrelevant while fanotify is active. |
+| `watcher.sweepMinutes` | `0` | Minutes between reconcile sweeps; `0` = the built-in 20 minutes. |
+| `watcher.sweepDisabled` | `false` | `true` turns the sweep tier off. Directories without a live watch then converge only at full rescans, and the app logs a loud warning at startup saying exactly that. |
+| `watcher.watchExcludes` | `[]` | Patterns (same syntax as `excludes`) applied to live watching ONLY: a matching directory -- and everything beneath it -- never holds a watch but stays fully indexed and swept, so its freshness bound becomes the sweep interval. Use it to keep high-churn trees you still want searchable from consuming watch budget. |
+
+### Default excludes for high-churn directories
+
+Some directory names are almost pure event noise: version-control
+internals and tool caches that churn constantly and are rarely worth
+searching. Fresh configs exclude these from indexing altogether, on
+top of the long-standing `.git`, `node_modules`, `.cache`:
+
+```
+.hg .svn __pycache__ .mypy_cache .pytest_cache .ruff_cache .tox .nox .venv
+```
+
+They are ordinary `excludes` entries -- delete any of them from
+config.json to index (and watch) those trees again. Existing configs
+are migrated once, loudly: a list still carrying all three of the
+stock patterns gets the missing ones appended (each addition logged at
+startup), while a curated or emptied list is left exactly as you wrote
+it, with one informational log line instead. If you only want such a
+tree out of the WATCH layer but still searchable, use
+`watcher.watchExcludes` instead of `excludes`.
+
 ## Status
 
 Feature-complete for v1; every CI run publishes installable builds to
@@ -217,9 +353,11 @@ buildhost (see [Install](#install)):
 - [x] Path-aware search: a separator in the query switches to
       full-path matching (`/etc/hosts`, `etc/ho`; see
       [Search by path](#search-by-path))
-- [x] Live index updates: per-directory fsnotify watchers, event
-      debouncing, graceful watch-limit/overflow degradation, optional
-      periodic rescans
+- [x] Live index updates: fanotify whole-filesystem marks where
+      granted, a bounded inotify hot set elsewhere, always-on
+      reconcile sweeps, event debouncing, graceful
+      watch-limit/overflow degradation, optional periodic rescans
+      (see [File watching and freshness](#file-watching-and-freshness))
 - [x] Global hotkey (default Alt+Space) to summon/dismiss the bar
       (XGrabKey on Linux/X11; on Wayland a portal global shortcut,
       an automatic GNOME keybinding, or one manual binding -- see
@@ -489,8 +627,8 @@ The file is created with defaults on first run:
 ```json
 {
   "roots": ["/"],
-  "rootsVersion": 2,
-  "excludes": [".git", "node_modules", ".cache", "/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"],
+  "rootsVersion": 3,
+  "excludes": [".git", "node_modules", ".cache", ".hg", ".svn", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox", ".venv", "/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"],
   "hotkey": "alt+space",
   "rescanIntervalMinutes": 0,
   "maxResults": 50,
@@ -506,6 +644,7 @@ The file is created with defaults on first run:
       "tierJumpCount": 3
     }
   },
+  "watcher": { "maxWatches": 0, "sweepMinutes": 0, "sweepDisabled": false, "watchExcludes": [] },
   "theme": "dark",
   "plugins": { "disabled": false, "entries": {} },
   "bangs": { "sigils": ["!", "/", "@"], "aliases": {} },
@@ -556,21 +695,22 @@ Field reference:
   filesystem mountpoints under a root are skipped automatically; list
   such a mountpoint here explicitly to index it anyway.
 - `rootsVersion` -- the roots-defaults version stamp the app writes
-  (currently `2`). `0` or absent marks a config from before
-  whole-filesystem indexing and triggers the one-time migration
+  (currently `3`). Older stamps trigger the one-time migrations
   described under [Indexing scope](#indexing-scope). Not a knob --
   leave it alone unless you want the migration to run again.
 - `excludes` -- patterns pruned from indexing (default `.git`,
-  `node_modules`, `.cache` plus, on Linux/macOS, the system entries
-  `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/var/tmp` and
-  `lost+found`). A pattern without a path separator is
+  `node_modules`, `.cache`, the high-churn noise directories `.hg`,
+  `.svn`, `__pycache__`, `.mypy_cache`, `.pytest_cache`,
+  `.ruff_cache`, `.tox`, `.nox`, `.venv`, plus, on Linux/macOS, the
+  system entries `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/var/tmp`
+  and `lost+found`). A pattern without a path separator is
   matched against each entry's base name (`node_modules`, `*.tmp`):
   matching directories are pruned, matching files skipped. A pattern
   containing a separator is matched against the full path
   (`/home/*/secret`). `*` never crosses a separator and there is no
   `**`. An explicitly empty list means "exclude nothing". The same
-  exclude semantics apply to the initial walk, to live
-  filesystem events, and to rescans.
+  exclude semantics apply to the initial walk, to live filesystem
+  events, to sweeps, and to rescans.
 - `hotkey` -- the global summon shortcut (default `alt+space`):
   "+"-separated, case- and whitespace-insensitive; modifiers
   `ctrl`/`control`, `shift`, `alt`/`option`, `super`/`win`/`cmd`/`meta`;
@@ -581,10 +721,11 @@ Field reference:
   Holding the hotkey down does not flicker the bar: OS key autorepeat
   re-fires the shortcut, so toggles are rate-limited to one per ~250ms.
 - `rescanIntervalMinutes` -- optional periodic full re-index, a safety
-  net on top of the live fsnotify updates; `0` (the default) disables
-  the timer. Independent of this timer, a reconcile rescan runs
-  automatically when the kernel event queue overflows (see the watcher
-  degradation caveat below).
+  net on top of the live watch layer and the reconcile sweeps; `0`
+  (the default) disables the timer. It is the convergence path for
+  the sweep's one blind spot (mtime-backdated writes) and -- with
+  `watcher.sweepDisabled` -- for everything the hot set misses; see
+  [File watching and freshness](#file-watching-and-freshness).
 - `maxResults` -- the maximum number of results one query returns
   (default 50; zero or negative values are reset to the default).
 - `search` -- search engine behavior. `fuzzyDisabled` (default
@@ -600,6 +741,14 @@ Field reference:
   `tierJumpCount` (default 3) is the decayed-open-count threshold for
   competing one match tier up. For every frecency number, `0` means
   "use the default" and a NEGATIVE value turns that one signal off.
+- `watcher` -- the live-watch layer: `backend` (`auto` | `fanotify` =
+  strict, no inotify fallback | `inotify`; unset means `auto`),
+  `maxWatches` (hot-set budget; 0 =
+  auto), `sweepMinutes` (sweep cadence; 0 = 20 minutes),
+  `sweepDisabled` (kills the sweep tier, loudly) and `watchExcludes`
+  (patterns never live-watched but still indexed and swept). The full
+  table lives under
+  [File watching and freshness](#file-watching-and-freshness).
 - `theme` -- the UI theme (default `dark`): a builtin (`dark`,
   `light`) or the name of a user theme file at
   `<configDir>/themes/<name>.json`. An unknown or invalid theme is
@@ -2189,18 +2338,28 @@ These are Wayland design constraints, not bugs:
   cross-compiles and publishes the Windows binary (pure Go) but never
   runs it -- only the Linux build is exercised (the screenshot tests);
   treat it as best-effort until exercised on a real Windows machine.
-- **Watch limits / event overflow**: every live indexed directory
-  holds one fsnotify watch (inotify on Linux), so very large trees can
-  exhaust `fs.inotify.max_user_watches`. Degradation is graceful and
-  never fatal: a refused watch is counted, logged once, and skipped
-  (that directory simply stops receiving live updates), and a kernel
-  event-queue overflow (lost events) automatically requests a full
-  reconcile rescan (requests are coalesced and spaced >= 30s apart, so
-  an overflow storm cannot cause back-to-back walks). Either condition
-  raises the staleness warning chip in the UI. If it happens
-  routinely, raise the limit (e.g.
-  `sudo sysctl fs.inotify.max_user_watches=524288`) and/or set
-  `rescanIntervalMinutes` as a periodic safety net.
+- **Watch limits / event overflow**: unless the fanotify tier is
+  granted (see
+  [File watching and freshness](#file-watching-and-freshness)), live
+  watching runs on a bounded HOT SET of fsnotify watches (inotify on
+  Linux) -- by default half of `fs.inotify.max_user_watches`, capped
+  at 65536, tunable via `watcher.maxWatches` -- filled with the roots
+  first, then the home directory's subtree, then everything else, and
+  rotated LRU-style toward recently active directories. Directories
+  outside the hot set are NOT stale-forever: an always-on background
+  sweep (every ~20 minutes; `watcher.sweepMinutes`) re-checks every
+  indexed directory's mtime and reconciles the ones that changed, so
+  cold directories converge within one sweep interval instead of
+  never. Degradation is graceful and never fatal: a watch the OS
+  refuses is counted, logged once, and skipped, and a kernel
+  event-queue overflow (lost events) automatically requests a
+  reconcile sweep (requests are coalesced and spaced apart, so an
+  overflow storm cannot cause back-to-back passes). Either condition
+  raises the staleness warning chip in the UI; hot-set evictions do
+  not (they are normal operation). `rescanIntervalMinutes` remains
+  the optional deep safety net -- it also covers the sweep's one
+  documented blind spot, mtime-backdated writes (e.g.
+  `tar --preserve` into an existing directory).
 - **Reveal on Linux**: prefers the freedesktop `FileManager1` D-Bus
   interface (the call waits for the reply) and falls back to opening
   the parent directory with xdg-open when `dbus-send` is missing,

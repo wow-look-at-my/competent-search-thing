@@ -28,6 +28,7 @@ type fakeNotifier struct {
 	mu      sync.Mutex
 	watched map[string]bool
 	removed []string
+	adds    int
 	closed  bool
 }
 
@@ -45,6 +46,7 @@ func (f *fakeNotifier) Add(path string) error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.adds++
 	if f.closed {
 		return fsnotify.ErrClosed
 	}
@@ -55,6 +57,15 @@ func (f *fakeNotifier) Add(path string) error {
 	}
 	f.watched[path] = true
 	return nil
+}
+
+// addAttempts reports how many Add calls the watcher issued, including
+// refused ones -- the budget tests assert that beyond-budget dirs
+// never cost a syscall.
+func (f *fakeNotifier) addAttempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.adds
 }
 
 func (f *fakeNotifier) Remove(path string) error {
@@ -131,11 +142,65 @@ func newTestWatcher(t *testing.T, m *index.Manager, n notifier) *Watcher {
 	return w
 }
 
+// newBudgetWatcher is newTestWatcher with an explicit watch budget.
+func newBudgetWatcher(t *testing.T, m *index.Manager, n notifier, maxWatches int) *Watcher {
+	t.Helper()
+	ex, err := index.NewExcluder(m.Excludes())
+	require.NoError(t, err)
+	opt := fastOptions()
+	opt.MaxWatches = maxWatches
+	w := New(m, m.Roots(), ex, opt)
+	if n != nil {
+		w.newNotifier = func() (notifier, error) { return n, nil }
+	}
+	return w
+}
+
 // startWatcher starts w and registers its Stop as cleanup.
 func startWatcher(t *testing.T, w *Watcher) {
 	t.Helper()
 	require.NoError(t, w.Start())
 	t.Cleanup(w.Stop)
+}
+
+// startWatcherRegistered starts w and waits for the initial
+// registration pass, so the watched set and stats are settled.
+func startWatcherRegistered(t *testing.T, w *Watcher) {
+	t.Helper()
+	startWatcher(t, w)
+	<-w.InitialRegistration()
+}
+
+// newTestSweeper builds a Sweeper whose mount seam is hermetic (no
+// /proc reads) unless the options script one, with test-friendly
+// spacing defaults that individual options may override.
+func newTestSweeper(t *testing.T, m *index.Manager, w *Watcher, opt SweepOptions) *Sweeper {
+	t.Helper()
+	if opt.Interval == 0 {
+		opt.Interval = time.Hour // request-driven unless a test wants the ticker
+	}
+	if opt.MinGap == 0 {
+		opt.MinGap = time.Millisecond
+	}
+	if opt.mounts == nil {
+		opt.mounts = func() []string { return nil }
+	}
+	return NewSweeper(m, w, opt)
+}
+
+// startSweeper starts s and registers its Stop as cleanup.
+func startSweeper(t *testing.T, s *Sweeper) {
+	t.Helper()
+	require.NoError(t, s.Start())
+	t.Cleanup(s.Stop)
+}
+
+// sweepOnce requests one sweep pass and waits for it to complete.
+func sweepOnce(t *testing.T, s *Sweeper) {
+	t.Helper()
+	before := s.Stats().Completed
+	s.Request()
+	waitFor(t, func() bool { return s.Stats().Completed >= before+1 }, "requested sweep pass completes")
 }
 
 // waitFor polls cond with a CI-generous deadline.
@@ -157,10 +222,11 @@ func hasPath(m *index.Manager, path string) bool {
 
 // settle proves the watcher has drained everything sent so far: it
 // creates a unique marker file in dir and waits for it to reach the
-// index. Events apply in order, so once the marker is visible every
-// earlier event has been applied too. With a fake notifier the marker
-// event is pushed through it; with f == nil the real notifier is
-// expected to pick the file up on its own.
+// index. Dirty paths reconcile in first-arrival order and the marker's
+// path is unique (never already pending), so once the marker is
+// visible every earlier event has been applied too. With a fake
+// notifier the marker event is pushed through it; with f == nil the
+// real notifier is expected to pick the file up on its own.
 func settle(t *testing.T, m *index.Manager, f *fakeNotifier, dir string) {
 	t.Helper()
 	p := filepath.Join(dir, fmt.Sprintf("marker-%d.settle", time.Now().UnixNano()))

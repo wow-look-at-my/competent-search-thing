@@ -253,6 +253,74 @@ func (s *Store) ForEachLive(fn func(id int32) bool) {
 	}
 }
 
+// DefaultLiveDirsPage is the page size LiveDirsPage uses when the
+// caller passes a non-positive max.
+const DefaultLiveDirsPage = 4096
+
+// LiveDirsPage visits entry ids in [start, Len()) in id order,
+// collecting the absolute path of every live directory entry, and
+// stops once max paths are collected (max <= 0 selects
+// DefaultLiveDirsPage) or the id space ends. next is the id after the
+// last id examined, or -1 when every id through Len()-1 has been
+// examined (the id space is exhausted). A negative start is treated
+// as 0. Entry ids are stable across mutations -- removals only set
+// tombstone bits and resurrection reuses the id -- so pages taken
+// across separate calls never skip or repeat an existing entry; the
+// watch layer's sweeper uses that to enumerate directories chunk by
+// chunk instead of holding the Manager's read lock across a full
+// ForEachLive scan.
+func (s *Store) LiveDirsPage(start int32, max int) (dirs []string, next int32) {
+	if max <= 0 {
+		max = DefaultLiveDirsPage
+	}
+	if start < 0 {
+		start = 0
+	}
+	n := int32(s.Len())
+	id := start
+	for ; id < n; id++ {
+		if s.flags[id]&flagTombstone != 0 || !s.IsDir(id) {
+			continue
+		}
+		dirs = append(dirs, s.EntryPath(id))
+		if len(dirs) == max {
+			id++
+			break
+		}
+	}
+	if id >= n {
+		return dirs, -1
+	}
+	return dirs, id
+}
+
+// ChildInfo describes one direct child of a directory: its name in
+// the original case and whether the child is itself a directory.
+type ChildInfo struct {
+	Name  string
+	IsDir bool
+}
+
+// ChildrenOf returns the live direct children of dir (an absolute
+// path, cleaned like RemoveByPath's argument), or nil when dir is not
+// an interned directory or has no live children. Order is
+// unspecified. The watch layer's reconcile pass diffs the result
+// against a fresh readdir of the same directory.
+func (s *Store) ChildrenOf(dir string) []ChildInfo {
+	pid, ok := s.dirIndex[filepath.Clean(dir)]
+	if !ok {
+		return nil
+	}
+	var out []ChildInfo
+	for _, id := range s.children[pid] {
+		if s.flags[id]&flagTombstone != 0 {
+			continue
+		}
+		out = append(out, ChildInfo{Name: s.Name(id), IsDir: s.IsDir(id)})
+	}
+	return out
+}
+
 // joinDir joins a clean absolute directory path and a child name. Only
 // a filesystem root ("/", or a drive root on Windows) keeps a trailing
 // separator after filepath.Clean, so the separator is inserted unless

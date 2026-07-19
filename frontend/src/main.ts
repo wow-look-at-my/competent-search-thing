@@ -6,12 +6,12 @@
 // (CheatSheet, rendered unselected), the query history (the bar
 // summons empty; Up/Down recall committed queries -- see the history
 // section below), and the runtime events the Go side emits
-// (app:shown, index:progress, watch:degraded, theme:changed,
-// stats:update -- the system stats row at the bottom edge). Rendering
-// lives in render.ts (results) and stats.ts (the stats row's
-// formatting); theme token/custom-css application lives in theme.ts;
-// the opt-in preview pane lives in preview.ts (wired below through
-// GetPreviewConfig + the selection/query hooks).
+// (app:shown, index:progress, watch:degraded, watch:backend,
+// theme:changed, stats:update -- the system stats row at the bottom
+// edge). Rendering lives in render.ts (results) and stats.ts (the
+// stats row's formatting); theme token/custom-css application lives in
+// theme.ts; the opt-in preview pane lives in preview.ts (wired below
+// through GetPreviewConfig + the selection/query hooks).
 
 import {
   initPreview,
@@ -45,6 +45,9 @@ const emptyEl = document.getElementById("empty") as HTMLDivElement;
 const statusTextEl = document.getElementById("status-text") as HTMLSpanElement;
 const degradedChipEl = document.getElementById(
   "degraded-chip",
+) as HTMLSpanElement;
+const backendChipEl = document.getElementById(
+  "backend-chip",
 ) as HTMLSpanElement;
 const statsEl = document.getElementById("stats") as HTMLDivElement;
 const statsNodes: StatsNodes = {
@@ -613,6 +616,22 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
         ", event overflows: " +
         d.overflows;
     }
+  });
+
+  // The one-time backend announcement: full coverage (fanotify) needs
+  // no notice; anything else keeps a persistent chip up -- "Partial
+  // file watching" for the bounded inotify hot set, "File watching
+  // off" for the none backend -- with the Go-side hint on hover.
+  // Independent of the degraded chip: both can show.
+  rt.EventsOn("watch:backend", (...data: unknown[]) => {
+    const b = data[0] as WatchBackendEvent | undefined;
+    if (b === undefined || b.full) {
+      return;
+    }
+    backendChipEl.textContent =
+      b.backend === "none" ? "File watching off" : "Partial file watching";
+    backendChipEl.title = b.hint;
+    backendChipEl.hidden = false;
   });
 
   rt.EventsOn("plugin:results", (...data: unknown[]) => {

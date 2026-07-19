@@ -46,6 +46,23 @@ const (
 // OpenTabsConfig).
 const DefaultFirefoxTabsMaxResults = 6
 
+// Watcher backend selection values (WatcherConfig.Backend).
+const (
+	// WatcherBackendAuto (the default) uses fanotify whole-filesystem
+	// marks when the kernel, privileges, and filesystems allow, and
+	// falls back to the per-directory inotify hot set otherwise.
+	WatcherBackendAuto = "auto"
+	// WatcherBackendFanotify is STRICT: fanotify or nothing. When the
+	// fanotify backend cannot start, live watching is disabled
+	// outright -- never a silent inotify fallback -- and the index
+	// converges through sweeps only, announced loudly in-app and in
+	// the log.
+	WatcherBackendFanotify = "fanotify"
+	// WatcherBackendInotify skips the fanotify probe and uses the
+	// per-directory inotify hot set directly (mainly for debugging).
+	WatcherBackendInotify = "inotify"
+)
+
 // Frecency ranking defaults (see FrecencyConfig). The weights share
 // one scale: at 1.0 each, one recently recorded open, a
 // just-touched file's full recency score, a direct child of the
@@ -102,6 +119,9 @@ type Config struct {
 	MaxResults int `json:"maxResults"`
 	// Search configures the search engine behavior.
 	Search SearchConfig `json:"search"`
+	// Watcher configures the live-watch layer that keeps the index
+	// fresh between rescans (see internal/watch).
+	Watcher WatcherConfig `json:"watcher"`
 	// Theme names the UI theme: a builtin ("dark", "light") or a user
 	// theme file at <configDir>/themes/<name>.json (see internal/theme).
 	// Unknown or invalid themes fall back to dark at resolve time.
@@ -223,6 +243,53 @@ type FrecencyConfig struct {
 	// TierJumpCount is the decayed-open-count threshold past which a
 	// result competes one match tier up (default 3.0).
 	TierJumpCount float64 `json:"tierJumpCount"`
+}
+
+// WatcherConfig configures the live-watch layer (see internal/watch):
+// the bounded hot set of per-directory watches and the always-on
+// reconcile sweeps that converge everything the hot set does not
+// cover. The zero value means all defaults -- automatic watch budget,
+// the built-in sweep cadence, nothing watch-excluded -- matching the
+// tray.disabled convention.
+type WatcherConfig struct {
+	// MaxWatches bounds the hot set of live per-directory watches.
+	// 0 (the default) resolves the budget automatically: half of the
+	// kernel's per-user inotify watch allowance, capped at 65536.
+	// Negative means explicitly unlimited (watch every indexed
+	// directory, the pre-budget behavior); positive values are taken
+	// as-is. Irrelevant while the fanotify whole-filesystem backend is
+	// active (it needs no per-directory watches).
+	MaxWatches int `json:"maxWatches"`
+	// SweepMinutes is the interval between reconcile sweep passes --
+	// the convergence bound for directories without a live watch.
+	// 0 (the default) selects the built-in 20-minute cadence;
+	// negative values are repaired to 0 by Normalize.
+	SweepMinutes int `json:"sweepMinutes"`
+	// SweepDisabled true turns the sweep tier off entirely. The zero
+	// value -- the default -- keeps sweeps on (the tray.disabled
+	// convention). With sweeps off, directories without a live watch
+	// converge only at full rescans (!rescan or
+	// rescanIntervalMinutes); the app logs a loud warning saying so.
+	SweepDisabled bool `json:"sweepDisabled"`
+	// WatchExcludes are exclude patterns (the excludes syntax, see
+	// internal/index.Excluder) applied ONLY to live watching: matching
+	// directories never get a per-directory watch, but they are still
+	// indexed and still swept, so changes inside them appear within
+	// one sweep interval instead of ~1s. Use it to keep high-churn
+	// trees you still want searchable from consuming watch budget.
+	WatchExcludes []string `json:"watchExcludes,omitempty"`
+	// Backend selects the notification backend (the WatcherBackend*
+	// constants): "auto" (the default; fanotify whole-filesystem marks
+	// when the binary can use them, else the per-directory inotify hot
+	// set), "fanotify" (STRICT: when fanotify cannot start, live
+	// watching is DISABLED -- never a silent inotify fallback -- and
+	// sweeps keep the index converging), or "inotify" (skip the
+	// fanotify probe; for debugging). Normalize lowercases the value
+	// and repairs empty or unknown values to "auto" -- no migration
+	// note is recorded for that repair because the effective backend is
+	// never silent: the watch layer logs it at startup and the frontend
+	// shows a notice chip whenever coverage is not full.
+	Backend string `json:"backend,omitempty"`
 }
 
 // BangsConfig configures the bang system.
@@ -489,9 +556,10 @@ func Path() (string, error) {
 }
 
 // Load reads the config file. A missing file is created with defaults
-// (mkdir -p included). A pre-v2 file is migrated to the current roots
-// defaults (see migrateRoots) and rewritten once, with the changes
-// reported in the returned Config's MigrationNotes. On any error --
+// (mkdir -p included). A file stamped with an older rootsVersion is
+// migrated to the current defaults (see migrateRoots) and rewritten
+// once, with the changes reported in the returned Config's
+// MigrationNotes. On any error --
 // unresolvable path, unreadable or corrupt file, failed default write
 // or migration rewrite -- Load still returns a usable config alongside
 // the error; callers log the error and keep going, they never crash.
@@ -543,135 +611,4 @@ func Save(c Config) error {
 		return fmt.Errorf("config: writing %s: %w", p, err)
 	}
 	return nil
-}
-
-// Normalize repairs missing or nonsensical fields in place: empty roots
-// fall back to the default root, relative roots are absolutized,
-// zero/negative knobs get their defaults (the firefox.frequentSites,
-// firefox.openTabs and preview numbers included, plus an empty
-// preview.openai.model; the search.frecency numbers repair only
-// exact zeros -- negatives are the documented per-signal off switch
-// there), the window size gets its
-// defaults when unset and is clamped up to the minimum floors when set
-// too small, an empty theme name gets the
-// default theme, nil
-// plugin entries and bang aliases become empty maps, and an empty
-// sigil list gets the default sigils. The preview API keys are passed
-// through verbatim, untouched. Excludes are left as the user
-// wrote them (an explicitly empty list means "exclude nothing").
-func (c *Config) Normalize() {
-	if len(c.Roots) == 0 {
-		c.Roots = Default().Roots
-	}
-	roots := c.Roots[:0]
-	for _, r := range c.Roots {
-		if r == "" {
-			continue
-		}
-		if abs, err := filepath.Abs(r); err == nil {
-			r = abs
-		}
-		roots = append(roots, r)
-	}
-	if len(roots) == 0 {
-		roots = Default().Roots
-	}
-	c.Roots = roots
-	if c.Hotkey == "" {
-		c.Hotkey = DefaultHotkey
-	}
-	if c.RescanIntervalMinutes < 0 {
-		c.RescanIntervalMinutes = 0
-	}
-	if c.MaxResults <= 0 {
-		c.MaxResults = DefaultMaxResults
-	}
-	if c.Theme == "" {
-		c.Theme = DefaultTheme
-	}
-	if c.Plugins.Entries == nil {
-		c.Plugins.Entries = map[string]PluginEntry{}
-	}
-	if len(c.Bangs.Sigils) == 0 {
-		c.Bangs.Sigils = DefaultBangSigils()
-	}
-	if c.Bangs.Aliases == nil {
-		c.Bangs.Aliases = map[string]string{}
-	}
-	fs := &c.Firefox.FrequentSites
-	if fs.MinVisitsMonth <= 0 {
-		fs.MinVisitsMonth = DefaultFirefoxMinVisitsMonth
-	}
-	if fs.MinVisitsWeek <= 0 {
-		fs.MinVisitsWeek = DefaultFirefoxMinVisitsWeek
-	}
-	if fs.RefreshMinutes <= 0 {
-		fs.RefreshMinutes = DefaultFirefoxRefreshMinutes
-	}
-	if fs.MaxResults <= 0 {
-		fs.MaxResults = DefaultFirefoxMaxResults
-	}
-	if c.Firefox.OpenTabs.MaxResults <= 0 {
-		c.Firefox.OpenTabs.MaxResults = DefaultFirefoxTabsMaxResults
-	}
-	fr := &c.Search.Frecency
-	if fr.HalfLifeDays <= 0 {
-		fr.HalfLifeDays = DefaultFrecencyHalfLifeDays
-	}
-	// Weights and the tier-jump threshold repair only the EXACT zero
-	// value (absent from the JSON): negative values are the
-	// documented per-signal off switch and pass through.
-	if fr.WeightFrecency == 0 {
-		fr.WeightFrecency = DefaultFrecencyWeight
-	}
-	if fr.WeightRecency == 0 {
-		fr.WeightRecency = DefaultFrecencyWeight
-	}
-	if fr.WeightCwd == 0 {
-		fr.WeightCwd = DefaultFrecencyWeight
-	}
-	if fr.WeightNoise == 0 {
-		fr.WeightNoise = DefaultFrecencyWeight
-	}
-	if fr.TierJumpCount == 0 {
-		fr.TierJumpCount = DefaultFrecencyTierJump
-	}
-	w := &c.Window
-	switch {
-	case w.Width <= 0:
-		w.Width = DefaultWindowWidth
-	case w.Width < MinWindowWidth:
-		w.Width = MinWindowWidth
-	}
-	switch {
-	case w.Height <= 0:
-		w.Height = DefaultWindowHeight
-	case w.Height < MinWindowHeight:
-		w.Height = MinWindowHeight
-	}
-	pv := &c.Preview
-	if pv.WindowWidth <= 0 {
-		pv.WindowWidth = DefaultPreviewWindowWidth
-	}
-	if pv.WindowHeight <= 0 {
-		pv.WindowHeight = DefaultPreviewWindowHeight
-	}
-	if pv.TextMaxKB <= 0 {
-		pv.TextMaxKB = DefaultPreviewTextMaxKB
-	}
-	if pv.ImageMaxEdge <= 0 {
-		pv.ImageMaxEdge = DefaultPreviewImageMaxEdge
-	}
-	if pv.DirMaxEntries <= 0 {
-		pv.DirMaxEntries = DefaultPreviewDirMax
-	}
-	if pv.Kagi.MaxResults <= 0 {
-		pv.Kagi.MaxResults = DefaultPreviewKagiMax
-	}
-	if pv.OpenAI.Model == "" {
-		pv.OpenAI.Model = DefaultPreviewOpenAIModel
-	}
-	if pv.OpenAI.MaxOutputTokens <= 0 {
-		pv.OpenAI.MaxOutputTokens = DefaultPreviewOpenAITokens
-	}
 }

@@ -64,7 +64,11 @@ func eventuallySites(t *testing.T, c *Cache) []Site {
 // settleCacheRefresh waits until no refresh goroutine is in flight
 // (settleTabRefresh's sibling): a counter observed inside the fetch
 // seam says nothing about the refresh's locked bookkeeping, which is
-// what the next kick and the next clock advance depend on.
+// what the next kick and the next clock advance depend on. Waiting on
+// the calls counter alone is not enough: it increments when a fetch
+// STARTS, while the outcome (sites/lastErr/nextAttempt) is stored
+// only after it returns -- a fail-flag flip, clock advance or Sites
+// kick issued in that window races the store.
 func settleCacheRefresh(t *testing.T, c *Cache) {
 	t.Helper()
 	require.Eventually(t, func() bool {
@@ -176,7 +180,10 @@ func TestCacheFailureKeepsDataAndLogsOnce(t *testing.T) {
 	// ...after it the retry runs, and the identical error stays quiet.
 	// (The settle discipline above guarantees no refresh is in flight
 	// here, so a lone Sites() kick cannot be swallowed by the
-	// single-flight latch.)
+	// single-flight latch.) Settling before the flag flips keeps them
+	// strictly ordered after the fetch that must not see them, and
+	// pins the refresh's completion-time nextAttempt before the next
+	// clock advance.
 	clock.advance(failureRetryGap)
 	c.Sites()
 	require.Eventually(t, func() bool { return calls.Load() == 3 }, 3*time.Second, 5*time.Millisecond)
