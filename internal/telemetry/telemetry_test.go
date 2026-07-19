@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,25 +108,31 @@ func TestAppendPreservesExplicitVersionAndTS(t *testing.T) {
 }
 
 func TestAppendRotatesAtCap(t *testing.T) {
-	s, path := testStore(t, 1) // 1 KiB cap; each record is a few hundred bytes
-	long := strings.Repeat("x", 400)
-	require.NoError(t, s.Append(fileRecord("q1", "/home/u/"+long)))
-	require.NoError(t, s.Append(fileRecord("q2", "/home/u/"+long)))
-	// The third append would cross 1024 bytes: the live file rotates.
-	require.NoError(t, s.Append(fileRecord("q3", "/home/u/"+long)))
-
+	s, path := testStore(t, 1) // 1 KiB cap; every record below is the same size
+	appended := 0
+	rotateAt := -1
+	for i := 0; i < 50 && rotateAt < 0; i++ {
+		require.NoError(t, s.Append(fileRecord(fmt.Sprintf("q%02d", i), "/home/u/report.md")))
+		appended++
+		if _, err := os.Stat(path + ".1"); err == nil {
+			rotateAt = i
+		}
+	}
+	require.Positive(t, rotateAt, "the cap must eventually rotate")
 	live := readLines(t, path)
-	require.Len(t, live, 1)
-	require.Equal(t, "q3", live[0]["query"])
+	require.Len(t, live, 1, "the rotating append starts the fresh generation")
+	require.Equal(t, fmt.Sprintf("q%02d", rotateAt), live[0]["query"])
 	old := readLines(t, path+".1")
-	require.Len(t, old, 2)
-	require.Equal(t, "q1", old[0]["query"])
+	require.Len(t, old, appended-1, "no record is lost across the rotation")
+	require.Equal(t, "q00", old[0]["query"])
 
-	// The next rotation REPLACES the .1 generation: at most two files.
-	require.NoError(t, s.Append(fileRecord("q4", "/home/u/"+long)))
-	require.NoError(t, s.Append(fileRecord("q5", "/home/u/"+long)))
+	// Drive further rotations: the .1 generation is REPLACED in
+	// place -- never a .2, so the disk cap stays two generations.
+	for i := 0; i < 50; i++ {
+		require.NoError(t, s.Append(fileRecord(fmt.Sprintf("r%02d", i), "/home/u/report.md")))
+	}
 	old = readLines(t, path+".1")
-	require.Equal(t, "q3", old[0]["query"], "rotation clobbers the previous .1")
+	require.NotEqual(t, "q00", old[0]["query"], "rotation clobbers the previous .1")
 	require.NoFileExists(t, path+".2")
 }
 

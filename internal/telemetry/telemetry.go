@@ -185,9 +185,9 @@ type PickedRow struct {
 // own query ring, so a compromised or buggy frontend cannot forge
 // signal data into the log).
 type PickReport struct {
-	Query  string      `json:"query"`
-	Shown  []ShownRef  `json:"shown"`
-	Picked PickedRef   `json:"picked"`
+	Query  string     `json:"query"`
+	Shown  []ShownRef `json:"shown"`
+	Picked PickedRef  `json:"picked"`
 }
 
 // ShownRef is one delivered row's identity as the frontend reports

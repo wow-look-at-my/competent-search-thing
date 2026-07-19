@@ -78,10 +78,10 @@ func TestTraceDoesNotChangeResults(t *testing.T) {
 // component zero (nothing else participated).
 func TestTraceInactiveFillsBasics(t *testing.T) {
 	s := NewStore()
-	mustAdd(t, s, "/a", "report", false)          // exact
-	mustAdd(t, s, "/a", "reports.txt", false)     // prefix
-	mustAdd(t, s, "/a", "big_report.txt", false)  // substring
-	mustAdd(t, s, "/a", "re_port.txt", false)     // fuzzy subsequence
+	mustAdd(t, s, "/a", "report", false)         // exact
+	mustAdd(t, s, "/a", "reports.txt", false)    // prefix
+	mustAdd(t, s, "/a", "big_report.txt", false) // substring
+	mustAdd(t, s, "/a", "re_port.txt", false)    // fuzzy subsequence
 
 	var trace []ResultSignals
 	res := s.QueryWith("report", 10, QueryOptions{Trace: &trace})
