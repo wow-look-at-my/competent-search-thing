@@ -142,7 +142,7 @@ type App struct {
 	// (see logFanotifyGrant).
 	grantOnce sync.Once
 
-	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, pendingConfig, history, launchCtx, launchCancel, progress
+	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, hkGen, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, pendingConfig, history, launchCtx, launchCancel, progress, winW, winH, resultsW
 	ctx        context.Context
 	visible    bool
 	lastToggle time.Time
@@ -162,11 +162,22 @@ type App struct {
 	launchOnce sync.Once
 	// hotkeyCancel aborts the async portal/gsettings backend chain;
 	// portalHK is the active portal shortcut (nil otherwise);
-	// hotkeyDesc describes the effective summon trigger (see
-	// hotkey.go).
+	// hotkeyDesc describes the effective summon trigger; hkGen is the
+	// registration generation -- teardownHotkey bumps it, and a chain
+	// completing under a stale generation discards its result instead
+	// of storing it over a re-registration's (see hotkey.go).
 	hotkeyCancel context.CancelFunc
 	portalHK     portalHandle
 	hotkeyDesc   string
+	hkGen        int
+	// winW/winH are the LIVE effective bar window size the positioning
+	// math uses (seeded from Options.WindowWidth/Height, swapped by the
+	// config window-size applier); resultsW is the live window.width
+	// GetPreviewConfig reports as the preview pane's results-column
+	// width. Zero values fall back to the config defaults in the
+	// accessors, keeping bare-Options tests wiring-free.
+	winW, winH int
+	resultsW   int
 	// Tray icon (see tray.go in this package): the running handle and
 	// the cancel func aborting a Start still waiting on the bus.
 	// newTray is a seam over buildTray so unit tests never dial a
@@ -210,6 +221,18 @@ type App struct {
 	themeW       *themeWatcher
 	buildCancel  context.CancelFunc // cancels the initial build's walk
 	shuttingDown bool
+	// watchCfg is the LIVE watch-layer configuration startWatch
+	// consumes (seeded from Options in New, swapped by the config
+	// index-layer applier so a watch rebuild picks the new knobs up).
+	// buildFinished flips when the initial build ended (success or
+	// failure) -- with the trio down it distinguishes "still walking"
+	// (store the new values, the completion path picks them up) from
+	// "failed" (kick a fresh build). rescanOnWatchUp asks the next
+	// startWatch to request one rescan: the in-flight initial walk
+	// latched the previous roots/excludes. All under watchMu.
+	watchCfg        watchConfig
+	buildFinished   bool
+	rescanOnWatchUp bool
 
 	// Plugin layer (see plugins.go). pluginGen is the current query
 	// generation; emissions from older generations are dropped.
@@ -254,13 +277,16 @@ type App struct {
 
 	// Preview pane layer (see preview.go in this package): the
 	// dispatcher (nil while the pane is disabled), the cancel func for
-	// its parent context (Shutdown), and the generation gate mirroring
-	// the plugin layer's pluginGen.
+	// its parent context (Shutdown), the generation gate mirroring
+	// the plugin layer's pluginGen, and the LIVE preview configuration
+	// (seeded from Options in New, swapped by the config preview
+	// applier; GetPreviewConfig and the dispatcher builds read it).
 	previewOnce   sync.Once
 	previewGen    atomic.Int64
-	previewMu     sync.Mutex // guards previewDisp, previewCancel
+	previewMu     sync.Mutex // guards previewDisp, previewCancel, previewCfg
 	previewDisp   *preview.Dispatcher
 	previewCancel context.CancelFunc
+	previewCfg    config.PreviewConfig
 
 	// Query history (see history.go): built once at Startup, nil
 	// before that -- the bound methods degrade to no-ops, which keeps
@@ -279,6 +305,11 @@ type App struct {
 	cfgMu        sync.Mutex // guards cfgCurrent, lastSavedSum
 	cfgCurrent   *config.Config
 	lastSavedSum [32]byte
+	// applyMu serializes whole applyConfig passes (a GUI save racing an
+	// external edit runs one after the other), so individual appliers
+	// need no cross-pass locking of their own. Never taken by anything
+	// an applier calls.
+	applyMu sync.Mutex
 
 	// Frecency ranking (see frecency.go): the open-count store and
 	// the blend the Manager serves, built once at Startup; nil/zero
@@ -314,6 +345,20 @@ func New(m *index.Manager, opt Options) *App {
 		rt:      defaultRuntimeSeams(),
 		plat:    defaultPlatformSeams(),
 	}
+	// Seed the live-mutable configuration state from the boot Options;
+	// the config appliers swap these at runtime (the Options themselves
+	// stay boot-frozen).
+	a.watchCfg = watchConfig{
+		rescanEvery:   opt.RescanEvery,
+		maxWatches:    opt.WatchMaxWatches,
+		sweepInterval: opt.SweepInterval,
+		sweepDisabled: opt.SweepDisabled,
+		watchExcludes: opt.WatchExcludes,
+		backend:       opt.WatchBackend,
+	}
+	a.winW, a.winH = opt.WindowWidth, opt.WindowHeight
+	a.resultsW = opt.ResultsWidth
+	a.previewCfg = opt.Preview
 	a.newRegistry = a.buildRegistry
 	a.newTray = a.buildTray
 	a.newStats = a.buildStats
@@ -467,6 +512,14 @@ func (a *App) buildIndex(ctx context.Context) {
 	// or error log line, so none of them can collide with a
 	// still-rendered progress row.
 	pr.Done()
+	// The build ended either way; the config index-layer applier uses
+	// the flag to tell "still walking" from "failed" (see
+	// restartIndexLayer).
+	defer func() {
+		a.watchMu.Lock()
+		a.buildFinished = true
+		a.watchMu.Unlock()
+	}()
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			log.Printf("index: initial build cancelled")
@@ -516,12 +569,6 @@ func (a *App) Shutdown(_ context.Context) {
 	}
 
 	a.mu.Lock()
-	hkStop := a.hotkeyStop
-	a.hotkeyStop = nil
-	hkCancel := a.hotkeyCancel
-	a.hotkeyCancel = nil
-	ph := a.portalHK
-	a.portalHK = nil
 	th := a.trayH
 	a.trayH = nil
 	trayCancel := a.trayCancel
@@ -542,17 +589,9 @@ func (a *App) Shutdown(_ context.Context) {
 	if launchCancel != nil {
 		launchCancel()
 	}
-	if hkCancel != nil {
-		hkCancel()
-	}
-	if hkStop != nil {
-		hkStop()
-	}
-	if ph != nil {
-		if err := ph.Close(); err != nil {
-			log.Printf("hotkey: closing the portal shortcut: %v", err)
-		}
-	}
+	// The hotkey teardown (native stop, chain cancel, portal close)
+	// is shared with the config live-apply's re-registration path.
+	a.teardownHotkey()
 	if trayCancel != nil {
 		trayCancel()
 	}

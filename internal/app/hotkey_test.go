@@ -163,7 +163,7 @@ func TestPortalUnavailableFallsBackToGnomeBinding(t *testing.T) {
 		return nil, fmt.Errorf("probe: %w", portal.ErrNoGlobalShortcuts)
 	}
 	cmdCh := make(chan string, 1)
-	a.plat.ensureGnomeBinding = func(_ context.Context, hk platform.Hotkey, command string) (gsettings.Applied, error) {
+	a.plat.ensureGnomeBinding = func(_ context.Context, hk platform.Hotkey, command string, _ bool) (gsettings.Applied, error) {
 		cmdCh <- command
 		return verifiedApplied(gsettings.Applied{
 			Binding:   "<Control><Alt>space",
@@ -214,7 +214,7 @@ func TestGnomeBindingFailureEndsInManualInstructions(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{Hotkey: "alt+space"})
 	a.plat.detectSession = func() platform.Session { return waylandGNOME() }
 	called := make(chan struct{})
-	a.plat.ensureGnomeBinding = func(context.Context, platform.Hotkey, string) (gsettings.Applied, error) {
+	a.plat.ensureGnomeBinding = func(context.Context, platform.Hotkey, string, bool) (gsettings.Applied, error) {
 		close(called)
 		return gsettings.Applied{}, fmt.Errorf("%w (tried a, b, c)", gsettings.ErrAllTaken)
 	}
@@ -232,7 +232,7 @@ func TestGnomeBindingFailureEndsInManualInstructions(t *testing.T) {
 func TestExistingGnomeBindingBecomesDescription(t *testing.T) {
 	a, _ := newTestApp(t, nil, Options{Hotkey: "alt+space"})
 	a.plat.detectSession = func() platform.Session { return waylandGNOME() }
-	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string) (gsettings.Applied, error) {
+	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string, _ bool) (gsettings.Applied, error) {
 		return verifiedApplied(gsettings.Applied{Binding: "<Shift><Super>t", Requested: "<Alt>space", Existing: true}, command), nil
 	}
 	a.Startup(context.Background())
@@ -247,7 +247,7 @@ func TestUnverifiedGnomeBindingClaimsNoHotkey(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{Hotkey: "alt+space"})
 	a.plat.detectSession = func() platform.Session { return waylandGNOME() }
 	called := make(chan struct{})
-	a.plat.ensureGnomeBinding = func(context.Context, platform.Hotkey, string) (gsettings.Applied, error) {
+	a.plat.ensureGnomeBinding = func(context.Context, platform.Hotkey, string, bool) (gsettings.Applied, error) {
 		close(called)
 		return gsettings.Applied{
 			Binding:    "<Control><Alt>space",
@@ -276,7 +276,7 @@ func TestMissingMediaKeysDaemonClaimsNoHotkey(t *testing.T) {
 	// instead of claiming an active hotkey.
 	a, r := newTestApp(t, nil, Options{Hotkey: "alt+space"})
 	a.plat.detectSession = func() platform.Session { return waylandGNOME() }
-	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string) (gsettings.Applied, error) {
+	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string, _ bool) (gsettings.Applied, error) {
 		return verifiedApplied(gsettings.Applied{Binding: "<Control><Alt>space", Requested: "<Alt>space", Changed: true, FellBack: true}, command), nil
 	}
 	a.plat.mediaKeysDaemon = func(context.Context) (bool, error) {
@@ -295,7 +295,7 @@ func TestDaemonProbeErrorIsIgnored(t *testing.T) {
 	// skipped -- a verified binding is still reported as active.
 	a, _ := newTestApp(t, nil, Options{Hotkey: "alt+space"})
 	a.plat.detectSession = func() platform.Session { return waylandGNOME() }
-	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string) (gsettings.Applied, error) {
+	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string, _ bool) (gsettings.Applied, error) {
 		return verifiedApplied(gsettings.Applied{Binding: "<Control><Alt>space", Requested: "<Alt>space", Changed: true}, command), nil
 	}
 	a.plat.mediaKeysDaemon = func(context.Context) (bool, error) {
@@ -314,7 +314,7 @@ func TestRelativeExecutableIsResolvedForGnomeBinding(t *testing.T) {
 	a.plat.detectSession = func() platform.Session { return waylandGNOME() }
 	a.plat.executable = func() (string, error) { return "rel/competent-search-thing", nil }
 	cmdCh := make(chan string, 1)
-	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string) (gsettings.Applied, error) {
+	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string, _ bool) (gsettings.Applied, error) {
 		cmdCh <- command
 		return verifiedApplied(gsettings.Applied{Binding: "<Control><Alt>space", Requested: "<Alt>space", Changed: true}, command), nil
 	}
@@ -354,7 +354,7 @@ func brewFixture(t *testing.T) (exe, shim string) {
 func gnomeBindingCommand(t *testing.T, a *App) string {
 	t.Helper()
 	cmdCh := make(chan string, 1)
-	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string) (gsettings.Applied, error) {
+	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string, _ bool) (gsettings.Applied, error) {
 		cmdCh <- command
 		return verifiedApplied(gsettings.Applied{Binding: "<Control><Alt>space", Requested: "<Alt>space", Changed: true}, command), nil
 	}
@@ -440,7 +440,7 @@ func TestGnomeBindingRepairIsLoggedLoudly(t *testing.T) {
 	// summary with the accelerator untouched.
 	a, _ := newTestApp(t, nil, Options{Hotkey: "alt+space"})
 	a.plat.detectSession = func() platform.Session { return waylandGNOME() }
-	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string) (gsettings.Applied, error) {
+	a.plat.ensureGnomeBinding = func(_ context.Context, _ platform.Hotkey, command string, _ bool) (gsettings.Applied, error) {
 		return verifiedApplied(gsettings.Applied{
 			Binding:         "<Control><Alt>space",
 			Requested:       "<Alt>space",

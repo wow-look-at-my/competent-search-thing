@@ -118,6 +118,28 @@ cs_find_toplevel(void)
 	return best;
 }
 
+/* cs_set_window_size resizes the bar window to w x h, moving the
+ * non-resizable window's fixed-size floor with it. For
+ * resizable=FALSE windows, GTK3 pins the geometry hints to
+ * min = max = MAX(default size, configure request) on every
+ * move-resize (gtk_window_update_fixed_size, gtk-3-24 gtkwindow.c),
+ * so a bare gtk_window_resize -- what the Wails runtime's
+ * WindowSetSize issues -- can grow the window but never shrink it
+ * below the construction-time default. Updating the default FIRST
+ * moves that floor; the resize then lands exactly. GTK main thread
+ * only (the Go wrapper dispatches). Returns 1 when a toplevel was
+ * found and asked to resize. */
+int
+cs_set_window_size(int w, int h)
+{
+	GtkWindow *top = cs_find_toplevel();
+	if (top == NULL)
+		return 0;
+	gtk_window_set_default_size(top, w, h);
+	gtk_window_resize(top, w, h);
+	return 1;
+}
+
 /* cs_mint_app_info builds the GAppInfo the mint describes the launch
  * with: the resolved handler's desktop entry when we have one, else a
  * synthesized commandline entry flagged SUPPORTS_STARTUP_NOTIFICATION.

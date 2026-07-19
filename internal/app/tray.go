@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 
+	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/tray"
 )
 
@@ -29,6 +30,18 @@ func (a *App) startTray() {
 		log.Printf("tray: disabled in config")
 		return
 	}
+	a.startTrayIcon()
+}
+
+// startTrayIcon is the kill-switch-free half of startTray: build the
+// handle through the newTray seam and run Start under a fresh context.
+// The config live-apply path reuses it to re-enable the tray at
+// runtime (the boot Options' TrayDisabled must not gate a later
+// enable).
+func (a *App) startTrayIcon() {
+	if a.plat.goos != "linux" {
+		return
+	}
 	if a.newTray == nil {
 		return
 	}
@@ -46,6 +59,35 @@ func (a *App) startTray() {
 			log.Printf("tray: %v (running without a tray icon)", err)
 		}
 	}()
+}
+
+// applyTray is the config live-apply path for tray.disabled: close the
+// running icon either way (Shutdown's teardown pair: cancel a Start
+// still waiting on the bus, then the nil-safe idempotent Close), then
+// rebuild it when the section is enabled. The tooltip getter reads
+// hotkeyDescription() live, so a rebuilt tray stays correct after a
+// hotkey re-registration too.
+func (a *App) applyTray(next *config.Config) error {
+	a.mu.Lock()
+	th := a.trayH
+	a.trayH = nil
+	cancel := a.trayCancel
+	a.trayCancel = nil
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if th != nil {
+		if err := th.Close(); err != nil {
+			log.Printf("tray: close: %v", err)
+		}
+	}
+	if next.Tray.Disabled {
+		log.Printf("tray: disabled in config")
+		return nil
+	}
+	a.startTrayIcon()
+	return nil
 }
 
 // buildTray is the production value behind the newTray seam.

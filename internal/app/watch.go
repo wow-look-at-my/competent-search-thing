@@ -1,10 +1,12 @@
 package app
 
 import (
+	"context"
 	"log"
 	"path/filepath"
 	"time"
 
+	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/index"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/watch"
@@ -81,6 +83,32 @@ func watchBackendFor(backend string) watchBackend {
 // used when watcher.sweepMinutes is 0.
 const defaultSweepInterval = 20 * time.Minute
 
+// watchConfig is the live watch-layer configuration startWatch
+// consumes: seeded from the boot Options in New, swapped (under
+// watchMu) by the config index-layer applier so a live rebuild picks
+// the new knobs up. The boot Options themselves stay frozen.
+type watchConfig struct {
+	rescanEvery   time.Duration
+	maxWatches    int
+	sweepInterval time.Duration
+	sweepDisabled bool
+	watchExcludes []string
+	backend       string
+}
+
+// watchConfigFrom maps the watcher-relevant config sections to a
+// watchConfig, exactly the wiring main.go performs at boot.
+func watchConfigFrom(cfg *config.Config) watchConfig {
+	return watchConfig{
+		rescanEvery:   time.Duration(cfg.RescanIntervalMinutes) * time.Minute,
+		maxWatches:    cfg.Watcher.MaxWatches,
+		sweepInterval: time.Duration(cfg.Watcher.SweepMinutes) * time.Minute,
+		sweepDisabled: cfg.Watcher.SweepDisabled,
+		watchExcludes: cfg.Watcher.WatchExcludes,
+		backend:       cfg.Watcher.Backend,
+	}
+}
+
 // startWatch starts the live-update layer: the Watcher over the
 // manager's roots (fanotify or the bounded inotify hot set; filtering
 // events through the same Excluder semantics the walks use, honoring
@@ -98,6 +126,9 @@ const defaultSweepInterval = 20 * time.Minute
 // with the setcap grant command logged whenever coverage is not full.
 // It is skipped when Shutdown already ran.
 func (a *App) startWatch() {
+	a.watchMu.Lock()
+	cfg := a.watchCfg
+	a.watchMu.Unlock()
 	watermark := time.Now()
 	ex, err := index.NewExcluder(a.manager.Excludes())
 	if err != nil {
@@ -107,7 +138,7 @@ func (a *App) startWatch() {
 		log.Printf("watch: bad exclude patterns: %v", err)
 		ex = nil
 	}
-	watchEx, err := index.NewExcluder(a.opt.WatchExcludes)
+	watchEx, err := index.NewExcluder(cfg.watchExcludes)
 	if err != nil {
 		// Same stance: a bad watch-only pattern costs the feature, not
 		// the watch layer (nil excludes nothing from watching).
@@ -115,18 +146,18 @@ func (a *App) startWatch() {
 		watchEx = nil
 	}
 	w := watch.New(a.manager, a.manager.Roots(), ex, watch.Options{
-		MaxWatches: a.opt.WatchMaxWatches,
+		MaxWatches: cfg.maxWatches,
 		WatchEx:    watchEx,
 		OnDegraded: a.emitDegraded,
-		Backend:    a.opt.WatchBackend,
+		Backend:    cfg.backend,
 	})
-	r := watch.NewRescanner(a.manager, w, watch.RescanOptions{Interval: a.opt.RescanEvery})
-	sweepEvery := a.opt.SweepInterval
+	r := watch.NewRescanner(a.manager, w, watch.RescanOptions{Interval: cfg.rescanEvery})
+	sweepEvery := cfg.sweepInterval
 	if sweepEvery <= 0 {
 		sweepEvery = defaultSweepInterval
 	}
 	var s *watch.Sweeper
-	if a.opt.SweepDisabled {
+	if cfg.sweepDisabled {
 		log.Printf("watch: sweeps disabled in config; directories without live watches converge only at full rescans (!rescan or rescanIntervalMinutes)")
 	} else {
 		s = watch.NewSweeper(a.manager, w, watch.SweepOptions{
@@ -153,7 +184,14 @@ func (a *App) startWatch() {
 		}
 	}
 	a.watcher, a.rescanner, a.sweeper = w, r, s
+	kick := a.rescanOnWatchUp
+	a.rescanOnWatchUp = false
 	a.watchMu.Unlock()
+	if kick {
+		// The just-finished initial walk latched roots/excludes from
+		// before a config change: converge in the background.
+		r.Request()
+	}
 
 	if wErr == nil {
 		// The summary numbers are only real once the initial
@@ -167,8 +205,8 @@ func (a *App) startWatch() {
 		sweepDesc = sweepEvery.String()
 	}
 	rescanDesc := "off"
-	if a.opt.RescanEvery > 0 {
-		rescanDesc = a.opt.RescanEvery.String()
+	if cfg.rescanEvery > 0 {
+		rescanDesc = cfg.rescanEvery.String()
 	}
 	log.Printf("watch: backend %s: %d/%d dirs live-watched (budget %d); sweep interval %s; full rescan interval %s",
 		st.Backend, st.WatchedDirs, st.IndexedDirs, st.Budget, sweepDesc, rescanDesc)
@@ -231,4 +269,78 @@ func (a *App) emitDegraded(s watch.Stats) {
 		Dropped:   s.DroppedWatches,
 		Overflows: s.Overflows,
 	})
+}
+
+// restartIndexLayer is the config live-apply path for everything
+// index-shaped (roots, excludes, watcher.*, rescanIntervalMinutes):
+// swap the Manager's roots/excludes and the live watch configuration,
+// then rebuild the watch trio through the exact startWatch path --
+// stopping in Shutdown's order first -- and kick a background rescan
+// so the index converges to the new scope while queries keep serving
+// the previous store. Serialized by the applyConfig pass (one apply at
+// a time), idempotent, nil-manager-safe.
+//
+// The not-yet-up states are handled without double-building: while the
+// initial walk is still running, the new values are just stored (the
+// walk's completion path starts the watch layer with them; one rescan
+// is requested then, because the walk latched the previous scope), and
+// before Startup nothing more than the stores is needed. A FAILED
+// initial build (the trio never came up) is revived with a fresh
+// background build under the new configuration -- fixing a broken
+// exclude pattern in the editor must bring the index back without a
+// restart.
+func (a *App) restartIndexLayer(next *config.Config) error {
+	if a.manager == nil {
+		return nil
+	}
+	a.manager.SetRoots(next.Roots)
+	a.manager.SetExcludes(next.Excludes)
+
+	a.watchMu.Lock()
+	a.watchCfg = watchConfigFrom(next)
+	if a.shuttingDown {
+		a.watchMu.Unlock()
+		return nil
+	}
+	w, r, s := a.watcher, a.rescanner, a.sweeper
+	a.watcher, a.rescanner, a.sweeper = nil, nil, nil
+	if w == nil && r == nil {
+		switch {
+		case a.buildCancel != nil && !a.buildFinished:
+			// The initial walk is in flight with the previous scope:
+			// its completion path starts the watch layer (reading the
+			// new configuration) and then converges via one rescan.
+			a.rescanOnWatchUp = true
+			a.watchMu.Unlock()
+			log.Printf("config: index scope updated; the running initial build finishes first, then a rescan converges the index")
+		case a.buildFinished:
+			// The initial build ended WITHOUT bringing the trio up: it
+			// failed. Run a fresh one under the new configuration.
+			ctx, cancel := context.WithCancel(context.Background())
+			a.buildCancel = cancel
+			a.buildFinished = false
+			a.watchMu.Unlock()
+			log.Printf("config: index scope updated; retrying the initial build")
+			go a.buildIndex(ctx)
+		default:
+			// Pre-Startup: the stored values are all Startup needs.
+			a.watchMu.Unlock()
+		}
+		return nil
+	}
+	a.watchMu.Unlock()
+
+	// Shutdown's stop order: rescanner (may call back into the
+	// watcher), sweeper (reconciles through the watcher), watcher.
+	if r != nil {
+		r.Stop()
+	}
+	if s != nil {
+		s.Stop()
+	}
+	if w != nil {
+		w.Stop()
+	}
+	a.startWatch()
+	return a.requestRescan()
 }

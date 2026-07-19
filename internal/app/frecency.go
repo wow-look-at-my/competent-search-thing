@@ -39,12 +39,31 @@ import (
 const frecencyFileName = "frecency.json"
 
 // startFrecency builds the store, probe, and initial blend once at
-// Startup and kicks the async state load. Best-effort throughout: an
-// unresolvable config dir degrades to a memory-only store, a corrupt
-// state file logs ONE line and starts empty.
+// Startup (from the boot Options) and kicks the async state load.
 func (a *App) startFrecency() {
-	fc := a.opt.Frecency
+	a.applyFrecencyConfig(a.opt.Frecency)
+}
+
+// applyFrecencyConfig (re)builds the frecency layer for one
+// configuration: Startup feeds it the boot Options, the config
+// live-apply path the just-saved section. Disabled clears everything
+// -- store and blend dropped, the Manager back on the byte-identical
+// pre-blend ranking -- while enabled builds a fresh store over the
+// SAME frecency.json (the on-disk learning always survives a config
+// change; the async Load re-reads it) and swaps a fresh immutable
+// Blend into the Manager. Best-effort throughout: an unresolvable
+// config dir degrades to a memory-only store, a corrupt state file
+// logs ONE line and starts empty. Idempotent; a re-apply of the same
+// values just rebuilds the same state.
+func (a *App) applyFrecencyConfig(fc config.FrecencyConfig) {
 	if fc.Disabled {
+		a.frecMu.Lock()
+		a.frecStore = nil
+		a.frecBlend = index.Blend{}
+		a.frecMu.Unlock()
+		if a.manager != nil {
+			a.manager.SetBlend(nil)
+		}
 		return
 	}
 	opts := frecency.Options{

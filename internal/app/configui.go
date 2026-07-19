@@ -36,8 +36,11 @@ type configChangedEvent struct {
 	// Applied lists the sections applied live by this reload.
 	Applied []string `json:"applied"`
 	// Pending lists changed sections whose live applier has not
-	// landed yet.
+	// landed yet (empty today: the applier table is total).
 	Pending []string `json:"pending"`
+	// NextLaunch lists the ruled next-launch knobs that changed --
+	// today only "window.translucent" (see configapply.go).
+	NextLaunch []string `json:"nextLaunch,omitempty"`
 	// Error carries the reload failure when the edited file could not
 	// be loaded (the previous config stays applied).
 	Error string `json:"error,omitempty"`
@@ -70,12 +73,17 @@ type SaveResult struct {
 	// Error is the save failure (decode or write); empty on success.
 	Error string `json:"error,omitempty"`
 	// Applied and Pending mirror ApplyResult for the pass that ran
-	// after a successful save.
+	// after a successful save (Pending is empty today: the applier
+	// table is total).
 	Applied []string `json:"applied"`
 	Pending []string `json:"pending"`
 	// ApplyErrors carries per-section apply failures (the save itself
 	// still succeeded; the config is on disk).
 	ApplyErrors []string `json:"applyErrors,omitempty"`
+	// NextLaunch lists the ruled next-launch knobs the save changed --
+	// today only "window.translucent" (see configapply.go); the editor
+	// surfaces it honestly, by name.
+	NextLaunch []string `json:"nextLaunch,omitempty"`
 }
 
 // GetConfigSchema returns the embedded config.schema.json document;
@@ -154,7 +162,7 @@ func (a *App) SaveConfig(raw string) SaveResult {
 		a.setLastSavedSum(sha256.Sum256(data))
 	}
 	res := a.applyConfig(&next, "gui-save")
-	return SaveResult{OK: true, Applied: res.Applied, Pending: res.Pending, ApplyErrors: res.Errors}
+	return SaveResult{OK: true, Applied: res.Applied, Pending: res.Pending, ApplyErrors: res.Errors, NextLaunch: res.NextLaunch}
 }
 
 // OpenConfigFile opens config.json itself with the operating system's

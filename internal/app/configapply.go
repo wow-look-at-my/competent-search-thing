@@ -3,12 +3,16 @@ package app
 // The config live-apply engine: one pass diffs the incoming
 // configuration against the currently applied one per section and
 // runs each changed section's applier. Appliers are IDEMPOTENT (a
-// re-apply of the same value is harmless) and cheap; sections whose
-// live path has not landed yet carry a nil applier and are reported
-// in ApplyResult.Pending -- the table is meant to become total, one
-// applier at a time, until every knob applies without a restart.
-// Phase-B slots: add a sectionApplier.apply (or a shared group) and
-// the section moves from Pending to Applied; nothing else changes.
+// re-apply of the same value is harmless); a section whose live path
+// has not landed carries a nil applier and is reported in
+// ApplyResult.Pending -- the table is TOTAL today (every section
+// applies live, Pending stays empty), with exactly ONE ruled
+// exception: window.translucent is a construction-time Wails property
+// (the RGBA visual and zero-alpha background exist only at window
+// creation, compositor-gated at startup; verified during PR #18), so
+// a translucent change is reported in NextLaunch -- honestly, by
+// name, never as a generic "restart required" mechanism. No other
+// knob may use NextLaunch without an explicit ruling.
 
 import (
 	"crypto/sha256"
@@ -25,10 +29,15 @@ type ApplyResult struct {
 	Applied []string `json:"applied"`
 	// Pending lists the changed sections that have no live applier
 	// yet (they take effect on the next launch until their applier
-	// lands).
+	// lands). Empty today: the table is total.
 	Pending []string `json:"pending"`
 	// Errors lists per-section apply failures ("<section>: <error>").
 	Errors []string `json:"errors,omitempty"`
+	// NextLaunch lists the changed knobs that take effect at the next
+	// launch by DESIGN -- today exactly "window.translucent" (the
+	// window visual is set at creation), never anything else without
+	// an explicit ruling.
+	NextLaunch []string `json:"nextLaunch,omitempty"`
 }
 
 // sectionApplier is one row of the live-apply table: a section name
@@ -51,18 +60,30 @@ type sectionApplier struct {
 }
 
 // Shared applier group names.
-const groupRegistry = "registry"
+const (
+	groupRegistry = "registry"
+	// groupIndexLayer covers everything index-shaped -- roots,
+	// excludes, watcher.*, rescanIntervalMinutes -- with ONE watch-trio
+	// rebuild plus background rescan per pass (restartIndexLayer).
+	groupIndexLayer = "index-layer"
+	// groupWindowSize covers the effective bar window size -- the
+	// window row and the preview row both feed it, because
+	// preview.enabled widens the window (applyWindowSize).
+	groupWindowSize = "window-size"
+)
 
 // applyGroups maps a group name to its shared applier. The registry
 // group covers every section buildRegistry re-reads from disk on a
 // reload (plugins, bangs, rewrites, firefox, and search.fuzzyDisabled
 // for the plugin engine's ranking): one reload per pass applies them
-// all.
+// all. The other groups follow the same one-run-per-pass contract.
 var applyGroups = map[string]func(a *App, next *config.Config) error{
 	groupRegistry: func(a *App, _ *config.Config) error {
 		a.reloadRegistry()
 		return nil
 	},
+	groupIndexLayer: (*App).restartIndexLayer,
+	groupWindowSize: (*App).applyWindowSize,
 }
 
 // sectionAppliers is the live-apply table, in report order. Phase-B
@@ -74,23 +95,22 @@ var sectionAppliers = []sectionApplier{
 	{
 		name:    "roots",
 		changed: func(o, n *config.Config) bool { return !reflect.DeepEqual(o.Roots, n.Roots) },
-		// Pending: needs Manager root swapping + a rescan (Phase B).
+		group:   groupIndexLayer,
 	},
 	{
 		name:    "excludes",
 		changed: func(o, n *config.Config) bool { return !reflect.DeepEqual(o.Excludes, n.Excludes) },
-		// Pending: needs Manager exclude swapping + a rescan (Phase B).
+		group:   groupIndexLayer,
 	},
 	{
 		name:    "hotkey",
 		changed: func(o, n *config.Config) bool { return o.Hotkey != n.Hotkey },
-		// Pending: needs hotkey re-registration across the native/
-		// portal/gsettings backends (Phase B).
+		apply:   (*App).applyHotkey,
 	},
 	{
 		name:    "rescanIntervalMinutes",
 		changed: func(o, n *config.Config) bool { return o.RescanIntervalMinutes != n.RescanIntervalMinutes },
-		// Pending: needs the rescanner ticker rebuilt (Phase B).
+		group:   groupIndexLayer,
 	},
 	{
 		name:    "maxResults",
@@ -118,12 +138,15 @@ var sectionAppliers = []sectionApplier{
 	{
 		name:    "search.frecency",
 		changed: func(o, n *config.Config) bool { return !reflect.DeepEqual(o.Search.Frecency, n.Search.Frecency) },
-		// Pending: needs the frecency store/blend rebuilt (Phase B).
+		apply: func(a *App, n *config.Config) error {
+			a.applyFrecencyConfig(n.Search.Frecency)
+			return nil
+		},
 	},
 	{
 		name:    "watcher",
 		changed: func(o, n *config.Config) bool { return !reflect.DeepEqual(o.Watcher, n.Watcher) },
-		// Pending: needs the watch layer rebuilt (Phase B).
+		group:   groupIndexLayer,
 	},
 	{
 		name:    "theme",
@@ -147,23 +170,28 @@ var sectionAppliers = []sectionApplier{
 	{
 		name:    "tray",
 		changed: func(o, n *config.Config) bool { return o.Tray != n.Tray },
-		// Pending: needs tray start/stop on flip (Phase B).
+		apply:   (*App).applyTray,
 	},
 	{
 		name:    "history",
 		changed: func(o, n *config.Config) bool { return o.History != n.History },
-		// Pending: needs the history store rebuilt (Phase B).
+		apply:   (*App).applyHistory,
 	},
 	{
 		name:    "stats",
 		changed: func(o, n *config.Config) bool { return o.Stats != n.Stats },
-		// Pending: needs the stats sampler start/stop (Phase B).
+		apply:   (*App).applyStats,
 	},
 	{
-		name:    "window",
-		changed: func(o, n *config.Config) bool { return o.Window != n.Window },
-		// Pending: window size/translucency are creation-time Wails
-		// properties; the live path is under investigation (Phase B).
+		// The size half of the window section; translucent is the ONE
+		// ruled next-launch knob, handled by applyConfig's NextLaunch
+		// report (see the package comment), so it deliberately has no
+		// row.
+		name: "window",
+		changed: func(o, n *config.Config) bool {
+			return o.Window.Width != n.Window.Width || o.Window.Height != n.Window.Height
+		},
+		group: groupWindowSize,
 	},
 	{
 		name:    "firefox",
@@ -176,10 +204,12 @@ var sectionAppliers = []sectionApplier{
 		group:   groupRegistry,
 	},
 	{
+		// The dispatcher rebuild plus -- via the shared group -- the
+		// window resize a preview.enabled flip implies.
 		name:    "preview",
 		changed: func(o, n *config.Config) bool { return !reflect.DeepEqual(o.Preview, n.Preview) },
-		// Pending: needs the preview dispatcher rebuilt (window size
-		// half rides the window investigation) (Phase B).
+		apply:   (*App).applyPreview,
+		group:   groupWindowSize,
 	},
 }
 
@@ -188,9 +218,23 @@ var sectionAppliers = []sectionApplier{
 // pass), then makes next the applied baseline. origin labels the log
 // lines ("gui-save", "external-edit"). A nil baseline (a pass before
 // Startup seeded it) applies every section -- appliers are idempotent,
-// so over-applying is safe. Returns what was applied, what is still
-// pending a live path, and any per-section failures.
+// so over-applying is safe -- but never reports NextLaunch (a
+// baseline-free pass cannot know translucent changed). Whole passes
+// are serialized (applyMu): a save racing an external edit applies one
+// after the other, so no applier needs its own cross-pass locking.
+// Returns what was applied, what is still pending a live path, any
+// per-section failures, and the ruled next-launch knobs.
 func (a *App) applyConfig(next *config.Config, origin string) ApplyResult {
+	a.applyMu.Lock()
+	defer a.applyMu.Unlock()
+
+	a.watchMu.Lock()
+	down := a.shuttingDown
+	a.watchMu.Unlock()
+	if down {
+		return ApplyResult{}
+	}
+
 	a.cfgMu.Lock()
 	old := a.cfgCurrent
 	a.cfgMu.Unlock()
@@ -227,6 +271,15 @@ func (a *App) applyConfig(next *config.Config, origin string) ApplyResult {
 	if len(res.Pending) > 0 {
 		log.Printf("config: %d section(s) await a live applier (origin=%s): %v", len(res.Pending), origin, res.Pending)
 	}
+	// The ONE ruled next-launch knob: the translucent window visual is
+	// set at window creation (Wails v2 linux RGBA visual +
+	// app_paintable; verified during PR #18), so the change is reported
+	// honestly instead of pretending a live path exists. Nothing else
+	// may join this list without an explicit ruling.
+	if old != nil && old.Window.Translucent != next.Window.Translucent {
+		res.NextLaunch = append(res.NextLaunch, "window.translucent")
+		log.Printf("config: window.translucent takes effect at next launch (window visual is set at creation)")
+	}
 
 	a.cfgMu.Lock()
 	a.cfgCurrent = next
@@ -255,5 +308,5 @@ func (a *App) handleConfigFileChange() {
 		return
 	}
 	res := a.applyConfig(&cfg, "external-edit")
-	a.emitEvent(eventConfigChanged, configChangedEvent{Applied: res.Applied, Pending: res.Pending})
+	a.emitEvent(eventConfigChanged, configChangedEvent{Applied: res.Applied, Pending: res.Pending, NextLaunch: res.NextLaunch})
 }

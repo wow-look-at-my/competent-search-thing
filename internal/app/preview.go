@@ -47,20 +47,55 @@ const aiCacheFileName = "aicache.json"
 // startPreview brings the preview layer up once, at Startup: nothing
 // at all while the pane is disabled (every bound method degrades to a
 // no-op on the nil dispatcher), otherwise a preview.Dispatcher whose
-// parent context Shutdown cancels. The provider API keys resolve here
-// -- config value first, else the environment variable through the
-// getenv seam -- exactly the resolution GetPreviewConfig reports, and
-// the OpenAI base URL resolves the same way (preview.openai.baseUrl,
-// else OPENAI_BASE_URL; the Kagi base is config-only). The resolved
-// keys and base URLs flow only into the dispatcher options and are
-// never logged (a base URL may carry userinfo); the dispatcher trims
-// one trailing "/" and turns an invalid base into a terse fetch-path
-// error instead of a broken client.
+// parent context Shutdown cancels. The provider API keys resolve in
+// buildPreviewDispatcher -- config value first, else the environment
+// variable through the getenv seam -- exactly the resolution
+// GetPreviewConfig reports, and the OpenAI base URL resolves the same
+// way (preview.openai.baseUrl, else OPENAI_BASE_URL; the Kagi base is
+// config-only). The resolved keys and base URLs flow only into the
+// dispatcher options and are never logged (a base URL may carry
+// userinfo); the dispatcher trims one trailing "/" and turns an
+// invalid base into a terse fetch-path error instead of a broken
+// client.
 func (a *App) startPreview() {
-	if !a.opt.Preview.Enabled {
+	if !a.previewConfig().Enabled {
 		return
 	}
-	p := a.opt.Preview
+	a.buildPreviewDispatcher()
+}
+
+// previewConfig returns the live preview configuration (seeded from
+// Options in New, swapped by applyPreview).
+func (a *App) previewConfig() config.PreviewConfig {
+	a.previewMu.Lock()
+	defer a.previewMu.Unlock()
+	return a.previewCfg
+}
+
+// applyPreview is the config live-apply path for the preview section:
+// store the new configuration, tear the old dispatcher down
+// (shutdownPreview cancels its parent context, aborting an in-flight
+// request; the bound methods are nil-dispatcher-safe throughout), and
+// build a fresh one when the pane is enabled. The frontend refetches
+// GetPreviewConfig on config:changed and mounts/unmounts the pane;
+// the window-size half of a preview flip rides the shared window-size
+// group.
+func (a *App) applyPreview(next *config.Config) error {
+	a.previewMu.Lock()
+	a.previewCfg = next.Preview
+	a.previewMu.Unlock()
+	a.shutdownPreview()
+	if next.Preview.Enabled {
+		a.buildPreviewDispatcher()
+	}
+	return nil
+}
+
+// buildPreviewDispatcher builds and installs one preview.Dispatcher
+// from the live preview configuration (see startPreview for the key
+// and base-URL resolution contract).
+func (a *App) buildPreviewDispatcher() {
+	p := a.previewConfig()
 	kagiKey := p.Kagi.APIKey
 	if kagiKey == "" {
 		kagiKey = a.plat.getenv(envKagiAPIKey)
@@ -138,21 +173,18 @@ func (a *App) QueryPreview(target preview.Target, gen int) {
 // GetPreviewConfig reports the preview pane's frontend-relevant
 // configuration. "Configured" means a non-empty API key in the config
 // or the matching environment variable; the key values themselves are
-// never exposed (or logged). ResultsWidth is Options.ResultsWidth
-// (main.go wires config window.width, already Normalize-repaired),
-// falling back to the flag-off default so a zero value never produces
-// a collapsed column.
+// never exposed (or logged). ResultsWidth is the live window.width
+// (seeded from Options.ResultsWidth, swapped by the window-size
+// applier), falling back to the flag-off default so a zero value never
+// produces a collapsed column. The whole answer follows the LIVE
+// configuration -- the frontend refetches it on config:changed.
 func (a *App) GetPreviewConfig() PreviewConfigInfo {
-	p := a.opt.Preview
-	rw := a.opt.ResultsWidth
-	if rw <= 0 {
-		rw = config.DefaultWindowWidth
-	}
+	p := a.previewConfig()
 	return PreviewConfigInfo{
 		Enabled:          p.Enabled,
 		KagiConfigured:   p.Kagi.APIKey != "" || a.plat.getenv(envKagiAPIKey) != "",
 		OpenAIConfigured: p.OpenAI.APIKey != "" || a.plat.getenv(envOpenAIAPIKey) != "",
-		ResultsWidth:     rw,
+		ResultsWidth:     a.resultsWidth(),
 	}
 }
 

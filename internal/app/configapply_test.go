@@ -74,7 +74,10 @@ func TestApplyConfigFuzzyTouchesManagerAndRegistry(t *testing.T) {
 	require.Equal(t, []string{"search.fuzzyDisabled"}, res.Applied)
 }
 
-func TestApplyConfigPendingSections(t *testing.T) {
+func TestApplyConfigTableIsTotal(t *testing.T) {
+	// The Phase-B contract: every section has a live applier, so a pass
+	// changing sections across the groups reports them all applied --
+	// Pending stays empty, in table order, with no errors.
 	a, _ := newTestApp(t, nil, Options{})
 	seedBaseline(a, config.Default())
 
@@ -84,9 +87,24 @@ func TestApplyConfigPendingSections(t *testing.T) {
 	next.Watcher.MaxWatches = 5
 	next.Stats.Disabled = true
 	res := a.applyConfig(&next, "test")
-	require.Empty(t, res.Applied)
-	require.Equal(t, []string{"roots", "hotkey", "watcher", "stats"}, res.Pending,
-		"sections without a live applier yet are reported pending, in table order")
+	require.Empty(t, res.Pending, "the applier table is total; nothing awaits a restart")
+	require.Empty(t, res.Errors)
+	require.Equal(t, []string{"roots", "hotkey", "watcher", "stats"}, res.Applied,
+		"every changed section applies live, in table order")
+}
+
+func TestApplyConfigEverySectionHasAnApplier(t *testing.T) {
+	// The table-shape guard behind the live-apply promise: no row may
+	// carry neither an apply func nor a group (that row would land in
+	// Pending, which Phase B emptied for good).
+	for _, s := range sectionAppliers {
+		require.True(t, s.apply != nil || s.group != "",
+			"section %q has neither an applier nor a group", s.name)
+		if s.group != "" {
+			require.Contains(t, applyGroups, s.group,
+				"section %q names an unregistered group", s.name)
+		}
+	}
 }
 
 func TestApplyConfigThemeCountsApplied(t *testing.T) {
@@ -110,8 +128,13 @@ func TestApplyConfigNilBaselineAppliesEverything(t *testing.T) {
 	res := a.applyConfig(&cfg, "test")
 	require.Contains(t, res.Applied, "maxResults")
 	require.Contains(t, res.Applied, "theme")
-	require.Contains(t, res.Pending, "watcher")
+	require.Contains(t, res.Applied, "watcher")
+	require.Empty(t, res.Pending)
+	require.Empty(t, res.NextLaunch,
+		"a baseline-free pass cannot know translucent changed, so it never claims it")
 	require.Equal(t, 11, mgr.MaxResults())
+	require.Equal(t, config.Default().Roots, mgr.Roots(),
+		"the index-layer applier stored the roots even pre-Startup")
 }
 
 func TestStartupSeedsBaselineFromDisk(t *testing.T) {

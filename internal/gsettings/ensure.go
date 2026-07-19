@@ -82,6 +82,20 @@ type Applied struct {
 	// PreviousCommand is the stored command a repair replaced ("" when
 	// Repaired is false).
 	PreviousCommand string
+	// Rebound is true when BindingOptions.ForceBinding rewrote an
+	// existing entry's accelerator to the (conflict-checked) requested
+	// one -- the config-editor path, where the user changed the hotkey
+	// value on purpose. Never true on the default sticky path.
+	Rebound bool
+	// PreviousBinding is the accelerator a forced rebind replaced (""
+	// when Rebound is false).
+	PreviousBinding string
+	// RebindSkipped explains, in one human-readable clause, why a
+	// requested forced rebind kept the existing accelerator instead
+	// (every candidate taken); "" when no rebind was requested or it
+	// went through. The existing binding still works -- this is a
+	// notice, not a failure.
+	RebindSkipped string
 
 	// The read-back verification: after the writes (or the sticky
 	// no-op), the parent list and the entry's binding/command are
@@ -142,6 +156,23 @@ type Applied struct {
 // verification (see the Applied fields): every conclusion offered to
 // the caller was re-read from disk, never inferred from write success.
 func EnsureBinding(ctx context.Context, run Runner, hk platform.Hotkey, command string) (Applied, error) {
+	return EnsureBindingWith(ctx, run, hk, command, BindingOptions{})
+}
+
+// BindingOptions tunes EnsureBindingWith beyond the sticky default.
+type BindingOptions struct {
+	// ForceBinding rewrites an existing entry's accelerator to the
+	// requested hotkey (conflict-checked, with the usual fallbacks) --
+	// wired ONLY from the config live-apply path, where the user just
+	// changed the configured hotkey and expects the key to follow. The
+	// default (false) keeps the historical sticky behavior: an existing
+	// entry's binding -- possibly edited in GNOME Settings -- is never
+	// touched.
+	ForceBinding bool
+}
+
+// EnsureBindingWith is EnsureBinding with options; see BindingOptions.
+func EnsureBindingWith(ctx context.Context, run Runner, hk platform.Hotkey, command string, o BindingOptions) (Applied, error) {
 	requested, err := ConvertHotkey(hk)
 	if err != nil {
 		return Applied{}, err
@@ -161,6 +192,12 @@ func EnsureBinding(ctx context.Context, run Runner, hk platform.Hotkey, command 
 		applied, expected, err := ensureExisting(ctx, run, applied, command)
 		if err != nil {
 			return applied, err
+		}
+		if o.ForceBinding && !sameAccel(applied.Binding, requested) {
+			applied, err = rebindExisting(ctx, run, applied, paths, requested)
+			if err != nil {
+				return applied, err
+			}
 		}
 		return verifyOnDisk(ctx, run, applied, expected), nil
 	}
@@ -242,6 +279,44 @@ func verifyOnDisk(ctx context.Context, run Runner, applied Applied, command stri
 	}
 	applied.Verified = true
 	return applied
+}
+
+// rebindExisting is the ForceBinding half of the existing-entry path:
+// the configured hotkey changed, so the stored accelerator is
+// rewritten to the first conflict-free candidate (the fresh path's
+// exact ladder: requested, then the fallbacks). When every candidate
+// is taken the EXISTING (working) binding is kept and the skip is
+// reported via RebindSkipped -- never an error, because a working key
+// remains bound.
+func rebindExisting(ctx context.Context, run Runner, applied Applied, paths []string, requested string) (Applied, error) {
+	taken := collectTaken(ctx, run, paths)
+	chosen := ""
+	for _, candidate := range candidates(requested) {
+		if !taken[normalizeAccel(candidate)] {
+			chosen = candidate
+			break
+		}
+	}
+	if chosen == "" {
+		applied.RebindSkipped = fmt.Sprintf("every candidate accelerator is already taken (tried %s); keeping %s",
+			strings.Join(candidates(requested), ", "), applied.Binding)
+		return applied, nil
+	}
+	if sameAccel(chosen, applied.Binding) {
+		// The ladder landed on the accelerator already installed (the
+		// requested one is taken and the entry already holds the
+		// fallback): nothing to write.
+		return applied, nil
+	}
+	if _, err := run(ctx, "set", customKeybindingSchema+":"+OurPath, "binding", quoteVariantString(chosen)); err != nil {
+		return applied, fmt.Errorf("gsettings: rebinding to %s: %w", chosen, err)
+	}
+	applied.Changed = true
+	applied.Rebound = true
+	applied.PreviousBinding = applied.Binding
+	applied.Binding = chosen
+	applied.FellBack = !sameAccel(chosen, requested)
+	return applied, nil
 }
 
 // ensureExisting handles an entry the app created earlier: the binding

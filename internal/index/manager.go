@@ -59,13 +59,15 @@ func NewManager(roots, excludes []string, maxResults int) *Manager {
 func (m *Manager) BuildFromDisk(ctx context.Context, progress ProgressFunc) (int, time.Duration, error) {
 	start := time.Now()
 	fresh := NewStore()
-	excludes := m.excludes
-	if skips := mountSkips(m.roots); len(skips) > 0 {
+	// Roots and excludes are mutable now (SetRoots/SetExcludes); latch
+	// one consistent copy for the whole walk.
+	roots, excludes := m.Roots(), m.Excludes()
+	if skips := mountSkips(roots); len(skips) > 0 {
 		log.Printf("index: skipping %d mounted filesystems (network/virtual): %s",
 			len(skips), strings.Join(skips, ", "))
-		excludes = append(copyStrings(m.excludes), skips...)
+		excludes = append(excludes, skips...)
 	}
-	stats, err := Walk(ctx, fresh, m.roots, excludes, progress)
+	stats, err := Walk(ctx, fresh, roots, excludes, progress)
 	if err != nil {
 		return 0, time.Since(start), err
 	}
@@ -231,11 +233,40 @@ func (m *Manager) Footprint() Footprint {
 	return m.store.Footprint()
 }
 
-// Roots returns a copy of the configured walk roots.
-func (m *Manager) Roots() []string { return copyStrings(m.roots) }
+// Roots returns a copy of the configured walk roots (read under the
+// lock: SetRoots may change them live).
+func (m *Manager) Roots() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return copyStrings(m.roots)
+}
 
-// Excludes returns a copy of the configured exclude patterns.
-func (m *Manager) Excludes() []string { return copyStrings(m.excludes) }
+// SetRoots swaps the walk roots subsequent rebuilds use (config roots;
+// the config editor's live apply calls it, then requests a rescan so
+// the index converges to the new scope). The live store is untouched
+// -- only a rebuild re-reads the roots.
+func (m *Manager) SetRoots(roots []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.roots = copyStrings(roots)
+}
+
+// Excludes returns a copy of the configured exclude patterns (read
+// under the lock: SetExcludes may change them live).
+func (m *Manager) Excludes() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return copyStrings(m.excludes)
+}
+
+// SetExcludes swaps the exclude patterns subsequent rebuilds use
+// (config excludes; the config editor's live apply calls it, like
+// SetRoots). The live store is untouched until the next rebuild.
+func (m *Manager) SetExcludes(excludes []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.excludes = copyStrings(excludes)
+}
 
 // MaxResults returns the default query limit (read under the lock:
 // SetMaxResults may change it live).

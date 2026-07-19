@@ -9,6 +9,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 
+	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/gsettings"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/portal"
@@ -92,16 +93,73 @@ func hotkeyPlan(sess platform.Session, override string) (plan []hotkeyBackend, u
 	return []hotkeyBackend{backendX11}, unknownOverride
 }
 
-// registerHotkey parses the configured hotkey and brings up the first
-// working backend of the session's plan. Any failure -- bad spec, no X
-// server, no portal, every key combination taken -- is logged once and
-// the app runs on without a global hotkey (the IPC summon commands
-// always keep working). The native path registers synchronously,
-// exactly as it always has; the portal/gsettings chain runs on one
-// goroutine because the portal may block on an interactive approval
-// dialog, and is aborted by Shutdown.
+// registerHotkey brings up the configured hotkey once, at Startup (the
+// initial registration; the config live-apply path re-registers via
+// applyHotkey with force semantics).
 func (a *App) registerHotkey() {
-	spec := strings.TrimSpace(a.opt.Hotkey)
+	a.startHotkeyBackends(a.opt.Hotkey, false)
+}
+
+// applyHotkey is the config live-apply path (configapply.go): tear the
+// active summon backend down (bounded, never waiting out an in-flight
+// portal approval -- its context is cancelled) and register the new
+// spec through the same backend plan Startup used. force reaches the
+// gsettings backend, whose sticky binding is rewritten ONLY on this
+// path -- the user changed the configured hotkey, so the installed key
+// follows. An empty spec releases the hotkey and registers nothing
+// (the IPC summon commands keep working).
+func (a *App) applyHotkey(next *config.Config) error {
+	a.teardownHotkey()
+	if strings.TrimSpace(next.Hotkey) == "" {
+		log.Printf("hotkey: removed from config; global hotkey released ('competent-search-thing toggle' still summons the bar)")
+		return nil
+	}
+	a.startHotkeyBackends(next.Hotkey, true)
+	return nil
+}
+
+// teardownHotkey releases whatever summon backend is active: the
+// native stop func, the async portal/gsettings chain's context, and an
+// active portal shortcut handle. Bumping hkGen invalidates any
+// still-in-flight chain: a stale chain that completes later finds the
+// generation moved and discards (closing) its result instead of
+// storing it over the replacement's. Idempotent; Shutdown and
+// applyHotkey share it.
+func (a *App) teardownHotkey() {
+	a.mu.Lock()
+	a.hkGen++
+	hkStop := a.hotkeyStop
+	a.hotkeyStop = nil
+	hkCancel := a.hotkeyCancel
+	a.hotkeyCancel = nil
+	ph := a.portalHK
+	a.portalHK = nil
+	a.hotkeyDesc = ""
+	a.mu.Unlock()
+	if hkCancel != nil {
+		hkCancel()
+	}
+	if hkStop != nil {
+		hkStop()
+	}
+	if ph != nil {
+		if err := ph.Close(); err != nil {
+			log.Printf("hotkey: closing the portal shortcut: %v", err)
+		}
+	}
+}
+
+// startHotkeyBackends parses spec and brings up the first working
+// backend of the session's plan. Any failure -- bad spec, no X server,
+// no portal, every key combination taken -- is logged once and the app
+// runs on without a global hotkey (the IPC summon commands always keep
+// working). The native path registers synchronously, exactly as it
+// always has; the portal/gsettings chain runs on one goroutine because
+// the portal may block on an interactive approval dialog, and is
+// aborted by Shutdown (or a later applyHotkey). force carries the
+// config-changed intent to the gsettings backend.
+func (a *App) startHotkeyBackends(spec string, force bool) {
+	spec = strings.TrimSpace(spec)
 	if spec == "" {
 		return
 	}
@@ -123,20 +181,27 @@ func (a *App) registerHotkey() {
 		return
 	}
 	if plan[0] == backendX11 {
-		a.startNativeHotkey(hk)
+		a.mu.Lock()
+		gen := a.hkGen
+		a.mu.Unlock()
+		a.startNativeHotkey(gen, hk)
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.mu.Lock()
 	a.hotkeyCancel = cancel
+	gen := a.hkGen
 	a.mu.Unlock()
-	go a.runHotkeyPlan(ctx, plan, hk)
+	go a.runHotkeyPlan(ctx, gen, plan, hk, force)
 }
 
 // startNativeHotkey is the pre-Wayland registration path,
 // byte-identical in behavior: start the OS listener with toggle as the
-// callback, log the outcome, keep the stop func for Shutdown.
-func (a *App) startNativeHotkey(hk platform.Hotkey) {
+// callback, log the outcome, keep the stop func for Shutdown. gen is
+// the registration generation the result belongs to; a teardown racing
+// this call moves it, and the stale listener is stopped instead of
+// stored.
+func (a *App) startNativeHotkey(gen int, hk platform.Hotkey) {
 	if a.plat.startHotkey == nil {
 		return
 	}
@@ -147,6 +212,11 @@ func (a *App) startNativeHotkey(hk platform.Hotkey) {
 	}
 	log.Printf("hotkey: %s summons the searchbar", hk)
 	a.mu.Lock()
+	if a.hkGen != gen {
+		a.mu.Unlock()
+		stop()
+		return
+	}
 	a.hotkeyStop = stop
 	a.hotkeyDesc = hk.String()
 	a.mu.Unlock()
@@ -155,18 +225,18 @@ func (a *App) startNativeHotkey(hk platform.Hotkey) {
 // runHotkeyPlan tries the remaining backends in order until one
 // succeeds or declares the chain finished. It only ever receives
 // portal/gsettings/manual entries: an x11-first plan is handled
-// synchronously by registerHotkey.
-func (a *App) runHotkeyPlan(ctx context.Context, plan []hotkeyBackend, hk platform.Hotkey) {
+// synchronously by startHotkeyBackends.
+func (a *App) runHotkeyPlan(ctx context.Context, gen int, plan []hotkeyBackend, hk platform.Hotkey, force bool) {
 	for _, b := range plan {
 		if ctx.Err() != nil {
-			return // shutting down
+			return // shutting down (or superseded by a re-registration)
 		}
 		done := false
 		switch b {
 		case backendPortal:
-			done = a.startPortalHotkey(ctx, hk)
+			done = a.startPortalHotkey(ctx, gen, hk)
 		case backendGsettings:
-			done = a.startGnomeBinding(ctx, hk)
+			done = a.startGnomeBinding(ctx, gen, hk, force)
 		case backendManual:
 			done = true
 			a.logManualHotkey()
@@ -181,7 +251,7 @@ func (a *App) runHotkeyPlan(ctx context.Context, plan []hotkeyBackend, hk platfo
 // startPortalHotkey tries the portal backend; true means the chain is
 // finished (success, the user declined, or shutdown), false means the
 // next backend should run.
-func (a *App) startPortalHotkey(ctx context.Context, hk platform.Hotkey) bool {
+func (a *App) startPortalHotkey(ctx context.Context, gen int, hk platform.Hotkey) bool {
 	if a.plat.startPortal == nil {
 		return false
 	}
@@ -210,8 +280,9 @@ func (a *App) startPortalHotkey(ctx context.Context, hk platform.Hotkey) bool {
 		}
 	}
 	a.mu.Lock()
-	if a.hotkeyCancel == nil {
-		// Shutdown already ran and cannot see this handle any more.
+	if a.hkGen != gen || a.hotkeyCancel == nil {
+		// A teardown (Shutdown, or a re-registration) already ran and
+		// cannot see this handle any more: close it here.
 		a.mu.Unlock()
 		_ = h.Close()
 		return true
@@ -230,8 +301,11 @@ func (a *App) startPortalHotkey(ctx context.Context, hk platform.Hotkey) bool {
 // verified the entry on disk AND gsd-media-keys (the process that
 // turns the entry into a compositor grab) is reachable; a gsettings
 // write returning success proves neither, and claiming a hotkey that
-// cannot fire is worse than saying so.
-func (a *App) startGnomeBinding(ctx context.Context, hk platform.Hotkey) bool {
+// cannot fire is worse than saying so. force (the config live-apply
+// path only) rewrites an existing entry's accelerator to the new
+// config value -- the one case where sticky would mean "the setting
+// the user just changed does nothing".
+func (a *App) startGnomeBinding(ctx context.Context, gen int, hk platform.Hotkey, force bool) bool {
 	if a.plat.ensureGnomeBinding == nil || a.plat.executable == nil {
 		return false
 	}
@@ -276,7 +350,7 @@ func (a *App) startGnomeBinding(ctx context.Context, hk platform.Hotkey) bool {
 		exe = stable
 	}
 	command := gsettings.ToggleCommand(exe)
-	applied, err := a.plat.ensureGnomeBinding(ctx, hk, command)
+	applied, err := a.plat.ensureGnomeBinding(ctx, hk, command, force)
 	if err != nil {
 		if ctx.Err() != nil {
 			return true
@@ -292,6 +366,16 @@ func (a *App) startGnomeBinding(ctx context.Context, hk platform.Hotkey) bool {
 		// its command was rewritten -- the accelerator is untouched.
 		log.Printf("hotkey: repaired the GNOME keybinding command: %q -> %q (the stored command no longer launched this binary)",
 			applied.PreviousCommand, command)
+	}
+	if applied.Rebound {
+		// The config hotkey changed and the installed accelerator
+		// followed it (the ONE path allowed to rewrite the sticky
+		// binding).
+		log.Printf("hotkey: GNOME keybinding rebound: %s -> %s (config hotkey changed)",
+			applied.PreviousBinding, applied.Binding)
+	}
+	if applied.RebindSkipped != "" {
+		log.Printf("hotkey: config hotkey changed but %s (edit in GNOME Settings > Keyboard to override)", applied.RebindSkipped)
 	}
 
 	// The evidence line: exactly what the read-back found on disk.
@@ -314,7 +398,7 @@ func (a *App) startGnomeBinding(ctx context.Context, hk platform.Hotkey) bool {
 	}
 
 	switch {
-	case applied.Existing:
+	case applied.Existing && !applied.Rebound:
 		log.Printf("hotkey: using existing GNOME keybinding %s (edit in GNOME Settings > Keyboard)", applied.Binding)
 	case applied.FellBack:
 		log.Printf("hotkey: GNOME keybinding active: %s (requested %s is taken by GNOME; using fallback)", applied.Binding, applied.Requested)
@@ -322,7 +406,9 @@ func (a *App) startGnomeBinding(ctx context.Context, hk platform.Hotkey) bool {
 		log.Printf("hotkey: GNOME keybinding active: %s", applied.Binding)
 	}
 	a.mu.Lock()
-	a.hotkeyDesc = applied.Binding
+	if a.hkGen == gen {
+		a.hotkeyDesc = applied.Binding
+	}
 	a.mu.Unlock()
 	return true
 }
