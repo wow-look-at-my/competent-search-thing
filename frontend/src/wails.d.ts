@@ -252,6 +252,16 @@ interface WatchDegradedEvent {
   overflows: number;
 }
 
+// Payload of the "watch:backend" event (internal/app watchBackend),
+// emitted once when the watch layer is up. full is true only for the
+// fanotify whole-filesystem backend; otherwise hint carries a short
+// user-facing explanation the status-bar chip shows on hover.
+interface WatchBackendEvent {
+  backend: "fanotify" | "inotify" | "none";
+  full: boolean;
+  hint: string;
+}
+
 // Payload of the "stats:update" event AND the GetStats return
 // (internal/sysstats Snapshot; keep field names in lockstep with its
 // json tags). enabled false means the feature is off (stats.disabled):

@@ -23,8 +23,8 @@
     "rootsVersion": {
       "type": "integer",
       "minimum": 0,
-      "default": 2,
-      "description": "Roots-defaults version stamp, written by the app. 0 (or absent) marks a config from before whole-filesystem indexing: on load the app upgrades roots still set to the old default (the home directory) to the whole-filesystem default, appends the missing system excludes, logs exactly what changed, sets this to 2, and rewrites the file. Customized roots are never touched by the migration. Do not edit by hand unless you want the migration to run again."
+      "default": 3,
+      "description": "Roots-defaults version stamp, written by the app. 0 (or absent) marks a config from before whole-filesystem indexing: on load the app upgrades roots still set to the old default (the home directory) to the whole-filesystem default and appends the missing system excludes. Configs stamped below 3 additionally get the high-churn noise exclude patterns (.hg, .svn, __pycache__, ...) appended -- but only when the exclude list still carries all three base patterns (.git, node_modules, .cache); curated or emptied lists are stamped only. Every change is logged loudly, the stamp advances to 3, and the file is rewritten once. Customized roots are never touched by the migration. Do not edit by hand unless you want the migration to run again."
     },
     "excludes": {
       "type": "array",
@@ -36,6 +36,15 @@
         ".git",
         "node_modules",
         ".cache",
+        ".hg",
+        ".svn",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".nox",
+        ".venv",
         "/proc",
         "/sys",
         "/dev",
@@ -44,7 +53,7 @@
         "/var/tmp",
         "lost+found"
       ],
-      "description": "Patterns pruned from indexing. A pattern WITHOUT a path separator matches each entry's base name ('node_modules', '*.tmp'): matching directories are pruned, matching files skipped. A pattern WITH a separator matches the full path ('/home/*/secret'). '*' never crosses a separator and there is no '**'. An explicitly empty list means 'exclude nothing'. The same semantics apply to the initial walk, live filesystem events, and rescans. The default adds the Linux/macOS system entries (/proc, /sys, /dev, /run, /tmp, /var/tmp, lost+found) so a whole-filesystem walk skips virtual and volatile trees; on Windows the default is just the three base-name patterns."
+      "description": "Patterns pruned from indexing. A pattern WITHOUT a path separator matches each entry's base name ('node_modules', '*.tmp'): matching directories are pruned, matching files skipped. A pattern WITH a separator matches the full path ('/home/*/secret'). '*' never crosses a separator and there is no '**'. An explicitly empty list means 'exclude nothing'. The same semantics apply to the initial walk, live filesystem events, sweeps, and rescans. The default combines the base name patterns (.git, node_modules, .cache), the high-churn noise patterns (.hg, .svn, __pycache__, .mypy_cache, .pytest_cache, .ruff_cache, .tox, .nox, .venv -- VCS internals and tool caches with heavy event traffic and near-zero search value; remove any of them to index those trees), and, on Linux/macOS, the system entries (/proc, /sys, /dev, /run, /tmp, /var/tmp, lost+found) so a whole-filesystem walk skips virtual and volatile trees; Windows gets the name patterns only."
     },
     "hotkey": {
       "type": "string",
@@ -71,6 +80,7 @@
       "description": "The UI theme: a builtin ('dark', 'light') or the name of a user theme file at <configDir>/themes/<name>.json (see theme.schema.json). An unknown or invalid theme is logged and falls back to 'dark'. An empty value means the default."
     },
     "search": { "$ref": "#/$defs/searchConfig" },
+    "watcher": { "$ref": "#/$defs/watcherConfig" },
     "plugins": { "$ref": "#/$defs/pluginsConfig" },
     "bangs": { "$ref": "#/$defs/bangsConfig" },
     "tray": { "$ref": "#/$defs/trayConfig" },
@@ -159,6 +169,42 @@
           },
           "default": 3.0,
           "description": "Decayed-open-count threshold past which a result competes one match tier up. Negative disables tier jumping."
+        }
+      },
+      "additionalProperties": false
+    },
+    "watcherConfig": {
+      "title": "Live-watch layer configuration",
+      "description": "The layer that keeps the index fresh between rescans: a bounded hot set of per-directory watches (or fanotify whole-filesystem marks where available) plus always-on reconcile sweeps that converge everything the hot set does not cover. See the README's 'File watching and freshness'.",
+      "type": "object",
+      "properties": {
+        "maxWatches": {
+          "type": "integer",
+          "default": 0,
+          "description": "Bounds the hot set of live per-directory watches. 0 (the default) resolves the budget automatically: half of the kernel's per-user inotify watch allowance, capped at 65536. Negative means explicitly unlimited (watch every indexed directory); positive values are taken as-is. Irrelevant while the fanotify whole-filesystem backend is active."
+        },
+        "sweepMinutes": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Minutes between reconcile sweep passes -- the convergence bound for directories without a live watch. 0 (the default) selects the built-in 20-minute cadence. Negative values are repaired to 0 by the app; this schema rejects them."
+        },
+        "sweepDisabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "true turns the sweep tier off entirely. The default keeps sweeps on. With sweeps off, directories without a live watch converge only at full rescans (!rescan or rescanIntervalMinutes); the app logs a loud warning saying so."
+        },
+        "watchExcludes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "description": "Exclude patterns (same syntax as 'excludes') applied ONLY to live watching: matching directories never get a per-directory watch, but they are still indexed and still swept, so changes inside them appear within one sweep interval instead of ~1s. Use it to keep high-churn trees you still want searchable from consuming watch budget."
+        },
+        "backend": {
+          "type": "string",
+          "enum": ["auto", "fanotify", "inotify"],
+          "default": "auto",
+          "description": "Notification backend selection. 'auto' (the default) uses fanotify whole-filesystem marks when the binary can (needs CAP_SYS_ADMIN; see the README's 'Enable full-filesystem watching') and falls back to the per-directory inotify hot set otherwise. 'fanotify' is STRICT: when fanotify cannot start, live watching is disabled outright -- no inotify fallback; reconcile sweeps keep the index converging -- announced loudly in-app and in the log. 'inotify' skips the fanotify probe entirely (debugging). The app repairs an empty or unknown value to 'auto'."
         }
       },
       "additionalProperties": false
@@ -508,11 +554,20 @@
       "roots": [
         "/"
       ],
-      "rootsVersion": 2,
+      "rootsVersion": 3,
       "excludes": [
         ".git",
         "node_modules",
         ".cache",
+        ".hg",
+        ".svn",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".nox",
+        ".venv",
         "/proc",
         "/sys",
         "/dev",
@@ -535,6 +590,13 @@
           "weightNoise": 1.0,
           "tierJumpCount": 3.0
         }
+      },
+      "watcher": {
+        "maxWatches": 0,
+        "sweepMinutes": 0,
+        "sweepDisabled": false,
+        "watchExcludes": [],
+        "backend": "auto"
       },
       "theme": "dark",
       "plugins": {

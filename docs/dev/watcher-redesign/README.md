@@ -1,0 +1,1 @@
+Working notes for the watcher-scale redesign (PR body carries the distilled version). These are session research artifacts, committed for durability; expect them to be pruned or folded into the PR/README before merge.

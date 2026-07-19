@@ -103,6 +103,66 @@ func TestUnescapeMountPath(t *testing.T) {
 	}
 }
 
+func TestParseMountpoints(t *testing.T) {
+	mounts := strings.Join([]string{
+		"/dev/sda1 / ext4 rw,relatime 0 0",
+		"proc /proc proc rw,nosuid 0 0",
+		"tmpfs /run tmpfs rw,nosuid 0 0",
+		"server:/export /mnt/nfs nfs rw,vers=4.2 0 0",
+		"user@host:/ /mnt/ssh fuse.sshfs rw,nosuid 0 0",
+		"/dev/sdb1 /data ext4 rw 0 0",
+		"/dev/loop3 /snap/tool/42 squashfs ro 0 0",
+		"/dev/sdc1 /mnt/with\\040space btrfs rw 0 0",
+		"overlay / overlay rw,lowerdir=/a 0 0",
+		"weird relative-mountpoint ext4 rw 0 0",
+		"malformed-line-with-two f",
+	}, "\n")
+	cases := []struct {
+		name  string
+		roots []string
+		want  []string
+	}{
+		{
+			name:  "whole filesystem root",
+			roots: []string{"/"},
+			want:  []string{"/", "/data", "/snap/tool/42", "/mnt/with space", "/"},
+		},
+		{
+			name:  "scoped roots keep only mounts at or under them",
+			roots: []string{"/data", "/mnt"},
+			want:  []string{"/data", "/mnt/with space"},
+		},
+		{
+			name:  "root equal to a mountpoint is included",
+			roots: []string{"/snap/tool/42"},
+			want:  []string{"/snap/tool/42"},
+		},
+		{
+			name:  "no roots means nothing is under them",
+			roots: nil,
+			want:  nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ParseMountpoints(strings.NewReader(mounts), tc.roots)
+			require.Equal(t, tc.want, got,
+				"real filesystems only (virtual/network/FUSE dropped), under-roots only, escapes decoded, relative and malformed lines ignored")
+		})
+	}
+}
+
+func TestRealMountpointsRealTable(t *testing.T) {
+	// Machine-dependent content, so only invariants are asserted: every
+	// mountpoint absolute and of a walkable type ("/" itself is a
+	// legitimate entry here, unlike the skip list). On non-linux this
+	// returns nil, which the loop trivially satisfies.
+	for _, mp := range RealMountpoints([]string{"/"}) {
+		require.True(t, filepath.IsAbs(mp), mp)
+	}
+	require.Empty(t, RealMountpoints(nil), "no roots means nothing is under them")
+}
+
 func TestSystemMountSkipsRealTable(t *testing.T) {
 	// Machine-dependent content, so only invariants are asserted: never
 	// "/", always absolute, always under the root. On non-linux this

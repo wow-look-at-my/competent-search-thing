@@ -28,9 +28,6 @@ const (
 	// eventIndexProgress reports index build progress; payload
 	// indexProgress.
 	eventIndexProgress = "index:progress"
-	// eventWatchDegraded reports that live updates became incomplete;
-	// payload watchDegraded.
-	eventWatchDegraded = "watch:degraded"
 	// eventShown fires after the bar was shown; no payload.
 	eventShown = "app:shown"
 )
@@ -40,13 +37,6 @@ type indexProgress struct {
 	Indexed int     `json:"indexed"`
 	Done    bool    `json:"done"`
 	Seconds float64 `json:"seconds"`
-}
-
-// watchDegraded is the eventWatchDegraded payload.
-type watchDegraded struct {
-	Watched   int `json:"watched"`
-	Dropped   int `json:"dropped"`
-	Overflows int `json:"overflows"`
 }
 
 // Result is a single search hit sent to the frontend. It is the index
@@ -59,6 +49,31 @@ type Options struct {
 	// RescanEvery > 0 enables periodic full rescans at that interval
 	// (wire config.RescanIntervalMinutes here); 0 disables them.
 	RescanEvery time.Duration
+	// WatchMaxWatches bounds the live-watch hot set (wire config's
+	// watcher.maxWatches here): 0 = automatic budget, negative =
+	// explicitly unlimited, positive taken as-is. See
+	// watch.Options.MaxWatches.
+	WatchMaxWatches int
+	// SweepInterval is the reconcile-sweep cadence (wire config's
+	// watcher.sweepMinutes here, as a Duration); 0 selects the watch
+	// layer's default (20 minutes).
+	SweepInterval time.Duration
+	// SweepDisabled turns the sweep tier off entirely (wire config's
+	// watcher.sweepDisabled here). startWatch then logs a loud
+	// warning: without sweeps, directories without a live watch
+	// converge only at full rescans.
+	SweepDisabled bool
+	// WatchExcludes are exclude patterns applied to live watching
+	// only (wire config's watcher.watchExcludes here): matching
+	// directories and their subtrees stay indexed and swept but never
+	// hold a watch. See watch.Options.WatchEx.
+	WatchExcludes []string
+	// WatchBackend selects the notification backend (wire config's
+	// watcher.backend here): "auto"/"" = automatic detection,
+	// "fanotify" = strict fanotify-or-nothing, "inotify" = skip the
+	// fanotify probe. See watch.Options.Backend; the effective backend
+	// is announced to the frontend via eventWatchBackend either way.
+	WatchBackend string
 	// Hotkey is the config hotkey string ("alt+space"); empty disables
 	// the global hotkey.
 	Hotkey string
@@ -117,6 +132,9 @@ type App struct {
 	buildOnce sync.Once
 	hkOnce    sync.Once
 	notesOnce sync.Once
+	// grantOnce guards the one-time fanotify capability-grant log line
+	// (see logFanotifyGrant).
+	grantOnce sync.Once
 
 	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, history, launchCtx, launchCancel
 	ctx        context.Context
@@ -171,6 +189,7 @@ type App struct {
 	watchMu      sync.Mutex
 	watcher      *watch.Watcher
 	rescanner    *watch.Rescanner
+	sweeper      *watch.Sweeper
 	themeW       *themeWatcher
 	buildCancel  context.CancelFunc // cancels the initial build's walk
 	shuttingDown bool
@@ -363,48 +382,6 @@ func (a *App) buildIndex(ctx context.Context) {
 	a.startWatch()
 }
 
-// startWatch starts the fsnotify Watcher over the manager's roots --
-// filtering events through the same Excluder semantics the walks use,
-// reporting degradation to the frontend -- and the Rescanner for
-// periodic and degradation-triggered rebuilds. It is skipped when
-// Shutdown already ran.
-func (a *App) startWatch() {
-	ex, err := index.NewExcluder(a.manager.Excludes())
-	if err != nil {
-		// The initial build would have failed on the same patterns and
-		// returned before reaching here; a nil Excluder (matches
-		// nothing) still keeps this path safe.
-		log.Printf("watch: bad exclude patterns: %v", err)
-		ex = nil
-	}
-	w := watch.New(a.manager, a.manager.Roots(), ex, watch.Options{OnDegraded: a.emitDegraded})
-	r := watch.NewRescanner(a.manager, w, watch.RescanOptions{Interval: a.opt.RescanEvery})
-
-	a.watchMu.Lock()
-	defer a.watchMu.Unlock()
-	if a.shuttingDown {
-		return
-	}
-	if err := w.Start(); err != nil {
-		log.Printf("watch: live updates unavailable (rescans still work): %v", err)
-	}
-	if err := r.Start(); err != nil {
-		log.Printf("watch: rescanner failed to start: %v", err)
-	}
-	a.watcher, a.rescanner = w, r
-	log.Printf("watch: live index updates started (periodic rescan every %v; 0s means off)", a.opt.RescanEvery)
-}
-
-// emitDegraded forwards watcher degradation to the frontend (the
-// watcher calls it at most once, when it first degrades).
-func (a *App) emitDegraded(s watch.Stats) {
-	a.emitEvent(eventWatchDegraded, watchDegraded{
-		Watched:   s.WatchedDirs,
-		Dropped:   s.DroppedWatches,
-		Overflows: s.Overflows,
-	})
-}
-
 // Shutdown is wired to the Wails OnShutdown hook. It closes the
 // single-instance IPC server first (no new summons during teardown;
 // closing also unlinks the socket), releases the global hotkey
@@ -420,12 +397,13 @@ func (a *App) emitDegraded(s watch.Stats) {
 // still-running initial build (its walk aborts
 // and logs "index: initial build cancelled"), and stops the rescanner
 // first (it may be mid-rescan and calls back into the watcher to
-// resync watches), then the watcher, then the theme hot-reload
-// watcher. Every step is bounded: an in-flight rescan or watch resync
-// is cancelled, never waited out, so quit stays fast even mid-walk on
-// a huge index. Safe to call at any point, even before the watch layer
-// came up; the shuttingDown flag keeps a racing startWatch from
-// starting it afterwards.
+// resync watches), then the sweeper (its passes reconcile through the
+// watcher too, so it must stop before it), then the watcher, then the
+// theme hot-reload watcher. Every step is bounded: an in-flight
+// rescan, sweep pass, or watch resync is cancelled, never waited out,
+// so quit stays fast even mid-walk on a huge index. Safe to call at
+// any point, even before the watch layer came up; the shuttingDown
+// flag keeps a racing startWatch from starting it afterwards.
 func (a *App) Shutdown(_ context.Context) {
 	if a.opt.IPC != nil {
 		if err := a.opt.IPC.Close(); err != nil {
@@ -507,14 +485,17 @@ func (a *App) Shutdown(_ context.Context) {
 	a.shuttingDown = true
 	buildCancel := a.buildCancel
 	a.buildCancel = nil
-	w, r, tw := a.watcher, a.rescanner, a.themeW
-	a.watcher, a.rescanner, a.themeW = nil, nil, nil
+	w, r, sw, tw := a.watcher, a.rescanner, a.sweeper, a.themeW
+	a.watcher, a.rescanner, a.sweeper, a.themeW = nil, nil, nil, nil
 	a.watchMu.Unlock()
 	if buildCancel != nil {
 		buildCancel()
 	}
 	if r != nil {
 		r.Stop()
+	}
+	if sw != nil {
+		sw.Stop()
 	}
 	if w != nil {
 		w.Stop()

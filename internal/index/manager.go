@@ -174,6 +174,34 @@ func (m *Manager) ForEachLiveDir(fn func(path string) bool) {
 	})
 }
 
+// LiveDirsPage returns, under the read lock, one page of live
+// directory entry paths: entry ids in [start, Len()) are visited in id
+// order, max <= 0 selects DefaultLiveDirsPage, and next is the start
+// for the following page, or -1 when the id space is exhausted (see
+// Store.LiveDirsPage). Callers iterate page by page and MUST tolerate
+// mutations between pages: ids are stable for existing entries
+// (tombstoning keeps them, resurrection reuses them), entries appended
+// after a page began are picked up by later pages, and a store swap
+// (BuildFromDisk) restarts the id space from scratch -- so treat
+// next == -1 as the end of one pass and periodically restart full
+// passes anyway (the sweeper does).
+func (m *Manager) LiveDirsPage(start int32, max int) ([]string, int32) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.store.LiveDirsPage(start, max)
+}
+
+// ChildrenOf returns, under the read lock, the live direct children of
+// dir: nil when the directory is unknown to the index or has no live
+// children, order unspecified (see Store.ChildrenOf). The result is a
+// fresh slice of fresh strings (Name copies out of the name blob), so
+// it stays valid after the lock is released.
+func (m *Manager) ChildrenOf(dir string) []ChildInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.store.ChildrenOf(dir)
+}
+
 // Footprint returns the live store's memory accounting under the read
 // lock (diagnostics; see Store.Footprint).
 func (m *Manager) Footprint() Footprint {

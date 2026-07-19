@@ -143,7 +143,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   events debounced 300ms into "theme:changed"; any failure = log +
   run on without live reload), and kicks the initial disk walk in a
   goroutine (under a cancellable context); when the walk finishes,
-  `startWatch` brings up a `watch.Watcher` + `watch.Rescanner` pair;
+  `startWatch` brings up the `watch.Watcher` + `watch.Rescanner` +
+  `watch.Sweeper` trio honoring the Options watcher knobs
+  (WatchMaxWatches, WatchExcludes -> a second watch-only Excluder,
+  WatchBackend -> watch.Options.Backend, SweepInterval,
+  SweepDisabled = no Sweeper + one loud warning; see the
+  internal/watch bullet), then announces the effective backend ONCE:
+  `watchBackendFor(st.Backend)` builds the "watch:backend" payload
+  {backend "fanotify"|"inotify"|"none", full bool (fanotify only),
+  hint string (empty when full; the pinned hintPartialWatch /
+  hintWatchOff texts otherwise, hintWatchFailed when the watcher
+  itself failed to start -> backend forced to "none")}, and when NOT
+  full `logFanotifyGrant()` first logs -- once per App, linux only
+  (plat.goos), the grant line BEFORE the emit (tests synchronize on
+  the recorded event, then read the log) -- "watch: enable
+  full-filesystem watching with: sudo setcap
+  cap_sys_admin,cap_dac_read_search+ep <path>" with the path through
+  platform.StableExecutable(exe, args0), mirroring hotkey.go;
   `Shutdown` (wired to Wails OnShutdown) closes the IPC server first
   (when present), releases the hotkey (native stop func, cancel of
   the async portal/gsettings chain, idempotent+nil-safe close of the
@@ -157,7 +173,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   chunks), cancels a still-running
   initial build (its walk aborts promptly, logs "index: initial
   build cancelled", discards the partial store, and never starts the
-  watch layer), and stops rescanner+watcher plus the theme watcher
+  watch layer), and stops rescanner+sweeper+watcher (in that order;
+  sweeper nil-tolerated when disabled) plus the theme watcher
   cleanly -- every step bounded, so quit never waits out a disk
   walk. Summons that arrive before
   the frontend can render are deferred: `DomReady` (wired to Wails
@@ -274,7 +291,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   native.ActivateWindow); everything else hides the bar on success. Events
   emitted (all guarded so a nil ctx no-ops): "index:progress"
   {indexed,done,seconds}, "watch:degraded"
-  {watched,dropped,overflows}, "app:shown", "theme:changed" (no
+  {watched,dropped,overflows}, "watch:backend" {backend,full,hint}
+  (once, from startWatch; see above), "app:shown", "theme:changed" (no
   payload; frontend refetches GetTheme/GetCustomCSS),
   "plugin:results" (payload plugin.Emission
   {plugin,name,gen,results}), "stats:update" (payload
@@ -536,8 +554,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   capped at 256, a mountpoint equal to a configured root never
   skipped = the index-it-anyway escape hatch), appending it to the
   excludes as full-path patterns and logging the list; the `mountSkips`
-  package var is the test seam. `Add`/`Remove`
-  are the watcher-phase entry points. `Store.Footprint()` /
+  package var is the test seam; `RealMountpoints(roots)` / pure
+  `ParseMountpoints` are the inverse view -- mountpoints of WALKABLE
+  (non-virtual/network/FUSE) filesystems under (or equal to) the
+  given roots, linux-only/nil elsewhere -- consumed by the watch
+  sweeper's mount-diff and the fanotify notifier's extra-mount marks.
+  `Add`/`Remove` are the watcher-phase entry points;
+  `LiveDirsPage(start, max)` pages through the live (non-tombstoned)
+  indexed directories releasing the read lock between pages
+  (DefaultLiveDirsPage = 4096), and `ChildrenOf(dir)` returns a
+  directory's direct children as Name/IsDir pairs -- the watch
+  layer's shallow-reconcile and sweep enumeration surface. `Store.Footprint()` /
   `Manager.Footprint()` (footprint.go): exact byte accounting of every
   column/blob (len-based; 16B string headers) plus documented
   approximations for the dirIndex and children maps, and
@@ -571,6 +598,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (halfLifeDays repairs <= 0), a NEGATIVE value is the documented
   per-signal off switch and passes through, and the schema rejects
   the ambiguous literal 0},
+  watcher {maxWatches 0 = auto-budget / negative = unlimited,
+  sweepMinutes 0 = the 20m default, sweepDisabled (zero value = sweeps
+  ON, the tray.disabled convention), watchExcludes
+  (json omitempty; excluder-syntax patterns never LIVE-WATCHED but
+  still indexed + swept), backend (json omitempty; the
+  WatcherBackend* constants "auto"/"fanotify"/"inotify" -- fanotify =
+  STRICT, no inotify fallback; Normalize trims+lowercases and repairs
+  empty/unknown to "auto", schema enum in lockstep) -- main.go copies
+  all five into app.Options
+  {WatchMaxWatches, SweepInterval, SweepDisabled, WatchExcludes,
+  WatchBackend}},
   theme, plugins {disabled, entries
   {<id>: {disabled, settings}}}, bangs {sigils, aliases}, rewrites
   [{name, pattern, replacement, title?, icon?, disabled?}] (the regex
@@ -611,14 +649,22 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   roots are the WHOLE FILESYSTEM (migrate.go: defaultRootsFor -- "/"
   on linux/darwin, %SystemDrive% with C:\ fallback on windows; goos +
   getenv are parameters so tests cover the windows shape headlessly)
-  and default excludes add the system trees (/proc /sys /dev /run
-  /tmp /var/tmp full-path + lost+found by name; unix-likes only --
-  windows keeps just .git/node_modules/.cache). rootsVersion (0 =
-  legacy) drives the one-shot Load migration: pre-v2 configs whose
-  roots are exactly the legacy home default (or empty) get the new
-  default roots + the missing system excludes appended (user patterns
-  untouched); customized roots are stamped only; either way version 2
-  is Saved back, and every user-visible change lands in the
+  and default excludes = baseExcludes (.git node_modules .cache --
+  FROZEN as the v2-era set migrations compare against, new defaults
+  never go there) + noiseExcludes (.hg .svn __pycache__ .mypy_cache
+  .pytest_cache .ruff_cache .tox .nox .venv, the v3 high-churn set) +
+  the system trees (/proc /sys /dev /run /tmp /var/tmp full-path +
+  lost+found by name; unix-likes only -- windows gets the name
+  patterns without system trees). rootsVersion (0 = legacy, current
+  3) drives the one-shot Load migration, each missing step applied in
+  order: the v2 step moves configs whose roots are exactly the legacy
+  home default (or empty) to the new default roots + appends the
+  missing system excludes (user patterns untouched; customized roots
+  stamped only); the v3 step appends the MISSING noiseExcludes -- but
+  ONLY when the exclude list still contains ALL of baseExcludes
+  (default-shaped); a curated-away or explicitly empty list is
+  stamped only, with an informational note. Either way version 3 is
+  Saved back, and every user-visible change lands in the
   non-serialized MigrationNotes (json:"-") that internal/app logs
   loudly at startup -- the scope never changes silently. `Load` never crashes: missing file -> defaults
   written, corrupt file -> current defaults + error returned for
@@ -627,7 +673,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   entries/bang aliases -> empty maps, empty sigils -> the ! / @
   defaults; history needs nothing -- its zero value means persistence
   ON, the tray.disabled convention; non-positive firefox.frequentSites
-  and firefox.openTabs numbers -> their defaults); entry settings are
+  and firefox.openTabs numbers -> their defaults; negative
+  watcher.sweepMinutes -> 0, while watcher.maxWatches keeps its sign
+  and watchExcludes stays as written); entry settings are
   opaque json.RawMessage forwarded verbatim to that plugin.
 - `internal/history` -- the query-history store behind the frontend's
   Up/Down recall, pure and exhaustively unit-tested. `New(path,
@@ -1191,47 +1239,160 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   every goroutine. Consumed by
   internal/app's firefox.go + the plugin registry's firefox-frequent
   and firefox-tabs builtins.
-- `internal/watch` -- keeps the index live after the initial walk.
-  `Watcher` (watch.go + events.go): one fsnotify watch per live indexed
-  directory plus the roots -- fsnotify is used uniformly on ALL
-  platforms and a watch is never recursive anywhere, so directories
-  gain/lose watches as they appear/vanish. Events are debounced
-  (debounce.go: flush after a quiet window, ~250ms, or when the oldest
-  pending event hits ~1s, or at 4096 pending; thresholds injectable via
-  `Options` for tests) and applied to the Manager as one ORDERED batch,
-  so create-then-delete ends deleted and delete-then-create ends live.
-  Event mapping: Create -> Lstat, `Manager.Add` (symlinks indexed as
-  non-dirs, never followed), new dirs get a watch + subtree scan via
-  `Manager.Add` (dedup-safe); Remove/Rename(old name) ->
-  `Manager.Remove` (subtree tombstone) + watches under the path
-  dropped; Write/Chmod ignored. Excluded paths are filtered with the
-  SAME `index.Excluder` the walks use, before they touch the index.
-  The fsnotify interaction sits behind the tiny `notifier` seam
-  (notify.go), so unit tests inject scripted Add failures, overflow
-  errors, and synthetic event sequences; integration tests run the
-  real inotify backend. Degradation model (never crash, never spin): a
-  refused watch (inotify max_user_watches) is counted, logged once,
-  and skipped; an event-queue overflow means lost events, so the
-  watcher asks the Rescanner for a reconcile rescan; `Degraded()` /
-  `Stats()` (watched/dropped/overflow counts) expose the state for the
-  UI, and `Options.OnDegraded` (edge-triggered, called at most once --
-  the flag is sticky) pushes the first transition to the app, which
-  forwards it as the "watch:degraded" event. `Rescanner` (rescan.go):
-  serialized full rebuilds --
-  `Manager.BuildFromDisk` (fresh-store swap; queries never block) then
-  `syncWatches` to re-add/drop watches -- triggered by an optional
-  interval ticker (config `rescanIntervalMinutes`) and by one-shot
-  degradation requests (`Request`), coalesced through a 1-slot channel
-  and spaced by `MinGap` (default 30s) so overflow storms cannot cause
-  back-to-back walks. Stop cancels promptly at ANY point of the cycle
-  (fast quit): an in-flight rebuild aborts mid-walk (partial store
-  discarded, previous kept, logged "watch: rescan cancelled"), an
-  in-flight `syncWatches` stops between directories (it takes the
-  rescan loop's ctx; the swapped-in rebuilt store stays), a MinGap
-  wait is cut short, and still-queued requests are dropped. Both
-  loops share the lifecycle.go Start/Stop
-  plumbing: idempotent Stop, safe before/during Start, no goroutine
-  leaks.
+- `internal/watch` -- keeps the index live after the initial walk;
+  three cooperating tiers whose CONTRACT is identical final index
+  state, differing only in latency (pinned by TestTierEquivalence*).
+  Event model (2026-07 redesign): an event is only a DIRTY PATH -- op
+  codes are advisory (consulted once at intake to drop Write/Chmod)
+  and lstat at apply time decides: gone -> `Manager.Remove` (subtree
+  tombstone) + watches under the path dropped; file -> `Manager.Add`
+  (a dir->file flip first tombstones the old subtree -- AddEntry only
+  flips the bit); dir -> Add + `reconcileDir` = shallow readdir diff
+  vs `Manager.ChildrenOf`, recursing (scanNewDir) ONLY into
+  index-unknown children, kind flips tombstoned+re-added, missing
+  children removed -- so application is order-independent by
+  construction (fanotify-style merged events plug in) and the sweeper
+  feeds the same reconcile with paths that never had events. `Watcher`
+  (watch.go = types/lifecycle/state helpers, events.go = the run loop
+  + reconcile engine, hotset.go = the hot-set bookkeeping split out
+  for the 750-line cap): a bounded HOT SET of fsnotify watches --
+  fsnotify uniform on ALL platforms, never recursive.
+  `Options.MaxWatches` (config watcher.maxWatches -> app.Options
+  .WatchMaxWatches): 0 = auto (linux min(max_user_watches/2,
+  65536), floor 1024, via the `readMaxWatches` seam; non-linux/read
+  failure = unlimited watch-everything), negative = unlimited.
+  `Options.WatchEx` (config watcher.watchExcludes; a SECOND
+  index.Excluder distinct from the walk one): matching dirs AND
+  their whole subtrees (watchExcluded walks ancestors -- the walk
+  excluder gets subtree coverage from pruning, watch-excluded trees
+  stay indexed so it must be reproduced) are skipped at every
+  watch-issuing point (fill, event/sweep promotion, cold refill,
+  resync want-set, root pinning) and leave Stats.IndexedDirs, but
+  stay fully indexed + swept -- staleness bound = the sweep
+  interval; nil = one nil-check on the hot path. Fill
+  priority (addInitialWatches + budget-aware syncWatches refill):
+  roots first (pinned, always watched, never evicted), then dirs
+  under the `homeDir` seam (os.UserHomeDir) to 75% of budget, then
+  the rest; fills use cold adds (at budget: NO syscalls issued --
+  beyond-budget dirs stay cold for sweeps, no failing-syscall storm).
+  Recency is a container/list LRU: touches = addWatch/refreshWatch on
+  a watched dir, reconcile touching a watched parent (map hit only --
+  file events never promote cold parents), and `promote(dir)` = watch
+  with eviction (reconcileDir's refreshWatch promotes sweep-found
+  dirs); at budget a new hot dir evicts the least-recently-touched
+  (Stats.Evictions -- NOT degradation; DroppedWatches stays strictly
+  "the OS refused"). Events are debounced (debounce.go: dirty-path
+  set, quiet ~250ms / oldest ~1s / 4096 cap; injectable). Excluded
+  paths filtered with the SAME `index.Excluder` as the walks. The
+  notifier seam (notify.go; optional `backendInfo` extension = kind()
+  name + wideCoverage) keeps unit tests scripted; integration
+  tests run real inotify. BACKEND SELECTION: New binds
+  `newBackendNotifier(Options.Backend, normalized roots)` (notify.go;
+  config watcher.backend -> app.Options.WatchBackend): "inotify" =
+  plain fsnotify, no fanotify probe; "fanotify" = STRICT
+  `newStrictFanotifyNotifier` (fanotify_linux.go + the
+  fanotify_other.go always-none twin) -- constructor failure = one
+  LOUD 'backend "fanotify" required by config but unavailable ...
+  live watching DISABLED' line + the no-op `noopNotifier` (notify.go:
+  accepts everything, delivers nothing, kind ("none", wide) so
+  Watched/IndexedDirs stay 0 and addInitialWatches logs no
+  marks-active line for it; sweeps converge), NEVER an inotify
+  fallback; anything else = `newAutoNotifier` (fanotify_linux.go; the
+  fanotify_other.go twin is plain fsnotify) -- try the fanotify
+  whole-filesystem notifier, ANY constructor error = one log line +
+  per-directory fsnotify fallback. The `newFanotifyFn` package var is
+  the constructor seam both selections probe (scripted in tests, no
+  CAP_SYS_ADMIN needed). fanotifyNotifier: ONE
+  FAN_CLASS_NOTIF|FAN_REPORT_DFID_NAME|FAN_CLOEXEC|FAN_NONBLOCK
+  group; FAN_MARK_FILESYSTEM marks (mask CREATE|DELETE|MOVED_FROM|
+  MOVED_TO|ONDIR; FAN_RENAME deliberately unused) on every root's
+  filesystem -- ANY root-mark failure (EPERM without CAP_SYS_ADMIN,
+  ENODEV null fsid, EXDEV) fails the WHOLE constructor so the
+  fallback takes over cleanly (no mixed-backend watcher in v1) --
+  then best-effort marks per extra real mountpoint under the roots
+  (index.RealMountpoints; a refused mount logs once and is left to
+  sweeps: coverage holds, latency differs). Events: kernel reports
+  (parent-dir file handle, name); the read loop routes the handle by
+  fsid to that superblock's O_PATH mount fd (a handle resolves ONLY
+  against its own fs), open_by_handle_at + readlink /proc/self/fd ->
+  parent path (needs CAP_DAC_READ_SEARCH; ESTALE = parent gone =
+  drop), joins the name, filters to the configured roots (whole-sb
+  marks see outside paths; the index scope never widens), resolving
+  each (fsid, handle) once per read batch (deliberately NO
+  cross-batch cache in v1: a persistent LRU needs rename/delete
+  invalidation to stay truthful), emits advisory
+  fsnotify.Create -- reconcile-by-lstat absorbs merged masks. Full
+  events channel (1024) drops + synthesizes ErrEventOverflow;
+  parsing lives in fanotify_parse_linux.go (bounds-checked
+  DFID_NAME record walker, unit-tested on synthetic buffers); ALL
+  syscalls sit behind seam fields (init/mark/read/resolve/fsid/
+  mounts) so routing/dedup/overflow/shutdown logic tests run
+  unprivileged, plus a capability-gated integration test (t.Skip
+  without CAP_SYS_ADMIN; skipped in CI -- the documented coverage
+  limitation). `MarkMount(path)` extends coverage to
+  sweeper-discovered mounts (unmarking on unmount is NOT
+  implemented; the stale mark pins a little kernel memory until the
+  group closes). Under wideCoverage the Watcher sets `wide`: hot-set
+  fill, bookkeeping, and every per-directory watch call become
+  no-ops (Watched/IndexedDirs stay 0). Degradation (never crash,
+  never spin): refused watch = counted+logged once; event-queue
+  overflow = lost events -> Sweeper.Request when wired, else
+  Rescanner fallback; OnDegraded edge-triggered once -> app's
+  "watch:degraded".
+  Stats{Backend "inotify"|"fanotify"|"none" (strict mode refused: no
+  live watching, sweeps only), Budget, WatchedDirs,
+  IndexedDirs, DroppedWatches, Evictions, Overflows, Degraded};
+  `InitialRegistration()` closes when the first fill finished (the
+  app waits on it before its summary log). `Sweeper` (sweep.go): the
+  always-on convergence tier -- NewSweeper(m, w != nil, SweepOptions
+  {Interval 20m default, MinGap 1m, InitialWatermark (zero = first
+  pass re-lists EVERY dir; the app passes build-completion time),
+  StatsPerSec 50000 sleep-throttle, unexported `mounts` seam
+  (default index.RealMountpoints over the roots)}). One pass:
+  mount-table snapshot
+  under the roots diffed vs the previous pass (symmetric difference
+  force-reconciled -- mount-onto-existing-dir moves no mtime,
+  unmounts restore content silently; an APPEARED mountpoint gets
+  Watcher.markMount first, so a fanotify backend marks the new
+  filesystem before its content is indexed), then the roots (no index entry
+  of their own: routed to reconcileDir directly, a full reconcile
+  would invent one), then every live indexed dir via
+  Manager.LiveDirsPage(4096): lstat each; gone or mtime >= watermark
+  - 2s slack -> reconcile (Relisted), else skip (Swept). The
+  watermark advances to the pass's start ONLY on completion --
+  cancelled passes redo the window; mtime-BACKDATED mutations (tar
+  --preserve) are the documented miss, converging via full re-list /
+  rescan / !rescan. SweepStats{Completed, Cancelled, Running,
+  LastStart, LastDuration, Swept, Relisted}. `Rescanner` (rescan.go):
+  serialized full rebuilds -- `Manager.BuildFromDisk` (fresh-store
+  swap; queries never block) then budget-aware `syncWatches` --
+  triggered by an optional interval ticker (config
+  `rescanIntervalMinutes`) and one-shot requests, coalesced through a
+  1-slot channel, spaced by MinGap (default 30s). Stop cancels
+  promptly at ANY point on all three loops (fast quit): in-flight
+  rebuild aborts mid-walk, syncWatches stops between dirs, sweep
+  passes abort between dirs and inside throttle sleeps, MinGap waits
+  cut short, queued requests dropped. All three loops share the
+  lifecycle.go Start/Stop plumbing: idempotent Stop, safe
+  before/during Start, no goroutine leaks. App wiring: startWatch
+  builds the watch-only excluder (bad watcher.watchExcludes pattern =
+  log + nil), passes app.Options {WatchMaxWatches, WatchEx} into
+  watch.Options, builds watcher + rescanner + sweeper (SweepOptions
+  .Interval = app.Options.SweepInterval, 0 -> the app-side 20m
+  default) -- EXCEPT under Options.SweepDisabled (config
+  watcher.sweepDisabled): the Sweeper is never built and ONE loud
+  warning says unwatched dirs now converge only at full rescans
+  (overflow recovery then falls back to the Rescanner request path)
+  -- starts them in that order, waits
+  for InitialRegistration, then logs ONE summary ("watch: backend %s:
+  %d/%d dirs live-watched (budget %d); sweep interval %s; full rescan
+  interval %s" -- sweep interval reads "disabled" when off); Shutdown
+  stops rescanner, then sweeper (nil-tolerated), then watcher
+  (the sweeper reconciles through the watcher). measure_test.go is
+  the env-gated watcher measurement harness (the internal/index
+  gated-bench pattern: BENCHMARK phase, b.N ignored, skip unless
+  COMPETENT_SEARCH_WATCH_MEASURE=1, knobs _DIRS/_STORM/_ROOT/_OUT)
+  backing the PR-body registration/storm/idle numbers.
 - `internal/portal` -- XDG Desktop Portal GlobalShortcuts client over
   godbus/dbus/v5 (direct dep), the Wayland-native global-hotkey path.
   PURE D-Bus client, deliberately NO app wiring yet. `Dial` (private
@@ -1536,7 +1697,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `frontend/` -- vanilla TypeScript + Vite. No framework. `index.html`
   (query row with inline SVG magnifier + hidden bang chip; #results
   split into #file-results / static #empty ("No matches") /
-  #plugin-results zones; status bar + degraded chip; the #stats row
+  #plugin-results zones; status bar + degraded chip + backend chip;
+  the #stats row
   BELOW the status bar -- the bottom-most chrome, five STATIC
   label/value span pairs (CPU GPU RAM SWP NET, value ids
   stat-cpu/-gpu/-ram/-swap/-net), starts hidden, JS only ever writes
@@ -1606,6 +1768,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   refreshStats re-render (GetStats is the instant cached snapshot;
   the summon's fresh samples follow as events),
   "index:progress" -> status text, "watch:degraded" -> warning chip,
+  "watch:backend" -> the PERSISTENT #backend-chip when full=false
+  ("Partial file watching" for inotify / "File watching off" for
+  none, the Go hint on hover via title; full=true keeps it hidden;
+  independent of the degraded chip -- both can show, one shared
+  --sb-warning chip rule in style.css),
   "stats:update" -> applyStats. STATS ROW wiring (all in main.ts):
   applyStats hides the whole #stats row when snapshot.enabled is
   false (stats.disabled) and otherwise unhides + delegates to

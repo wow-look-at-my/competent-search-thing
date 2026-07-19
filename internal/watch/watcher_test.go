@@ -1,10 +1,12 @@
 package watch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,8 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/require"
+
+	"github.com/wow-look-at-my/competent-search-thing/internal/index"
 )
 
 func TestWatcherInitialWatchSet(t *testing.T) {
@@ -51,6 +55,55 @@ func TestWatcherExcludedRootIsNotWatched(t *testing.T) {
 	waitFor(t, func() bool { return w.Stats().WatchedDirs == 1 }, "only sub gets a watch")
 	require.False(t, f.has(root), "a root matching its own exclude list is not watched")
 	require.True(t, f.has(paths["sub/"]))
+}
+
+func TestWatcherWatchExcludedDirIndexedSweptNeverWatched(t *testing.T) {
+	root := t.TempDir()
+	paths := mkTree(t, root, "hot/", "churn/", "churn/sub/")
+	m := buildManager(t, root, nil)
+
+	watchEx, err := index.NewExcluder([]string{"churn"})
+	require.NoError(t, err)
+	opt := fastOptions()
+	opt.WatchEx = watchEx
+	f := newFakeNotifier()
+	w := New(m, m.Roots(), nil, opt)
+	w.newNotifier = func() (notifier, error) { return f, nil }
+	startWatcherRegistered(t, w)
+
+	// The fill: the excluded dir AND its subtree get no watches and no
+	// desired-set slot, while the index keeps all of them.
+	require.True(t, hasPath(m, paths["churn/"]), "watch-excluded dirs stay indexed")
+	require.True(t, hasPath(m, paths["churn/sub/"]))
+	require.True(t, f.has(root))
+	require.True(t, f.has(paths["hot/"]))
+	require.False(t, f.has(paths["churn/"]), "watch-excluded dirs are never watched at the fill")
+	require.False(t, f.has(paths["churn/sub/"]), "a watch-exclude match covers its whole subtree")
+	st := w.Stats()
+	require.Equal(t, 2, st.WatchedDirs, "root + hot only")
+	require.Equal(t, 2, st.IndexedDirs, "watch-excluded dirs are not part of the desired watch set")
+	require.Zero(t, st.DroppedWatches, "withheld watches are never counted as drops")
+
+	// Events inside the subtree (a wideCoverage backend would deliver
+	// them) still reconcile into the index -- but promote no watch.
+	inChurn := filepath.Join(paths["churn/"], "seen.txt")
+	require.NoError(t, os.WriteFile(inChurn, nil, 0o644))
+	f.send(fsnotify.Create, inChurn)
+	waitFor(t, func() bool { return hasPath(m, inChurn) }, "events under a watch-excluded dir still index")
+	f.send(fsnotify.Create, paths["churn/"]) // a dirty excluded DIR reconciles without a refreshWatch
+	settle(t, m, f, root)
+	require.False(t, f.has(paths["churn/"]), "reconcile never arms a watch on a watch-excluded dir")
+
+	// The sweep tier: changes nobody watched or reported converge, and
+	// sweep promotion respects the exclusion too.
+	s := newTestSweeper(t, m, w, SweepOptions{})
+	startSweeper(t, s)
+	swept := filepath.Join(paths["churn/sub/"], "swept.txt")
+	require.NoError(t, os.WriteFile(swept, nil, 0o644))
+	s.Request()
+	waitFor(t, func() bool { return hasPath(m, swept) }, "sweeps converge watch-excluded subtrees")
+	require.False(t, f.has(paths["churn/"]), "sweep promotion skips watch-excluded dirs")
+	require.False(t, f.has(paths["churn/sub/"]))
 }
 
 func TestWatcherDroppedWatchesDegrade(t *testing.T) {
@@ -180,6 +233,12 @@ func TestWatcherRenameOldNameRemoves(t *testing.T) {
 	startWatcher(t, w)
 
 	require.True(t, hasPath(m, paths["old-name.txt"]))
+	// Renegotiated for reconcile-by-lstat: the rename must actually
+	// happen on disk. The ordered-batch watcher tombstoned on the
+	// Rename op alone; reconcile trusts only the disk, so the old
+	// name's lstat has to fail for the entry to go (a Rename event for
+	// a path that still exists would -- correctly -- keep it).
+	require.NoError(t, os.Rename(paths["old-name.txt"], filepath.Join(root, "new-name.txt")))
 	f.send(fsnotify.Rename, paths["old-name.txt"])
 	waitFor(t, func() bool { return !hasPath(m, paths["old-name.txt"]) }, "rename-from tombstones the old name")
 }
@@ -218,6 +277,13 @@ func TestWatcherExcludedEventsDropped(t *testing.T) {
 	require.Equal(t, 1, w.Stats().WatchedDirs, "still only the root")
 }
 
+// TestWatcherBatchOrderConverges pins the convergence contract for
+// interleaved bursts. Renegotiated for reconcile-by-lstat: the old
+// ordered-batch model reached these outcomes through op-application
+// order (Remove tombstones, then Create resurrects, and vice versa);
+// under reconcile the two events collapse into ONE dirty path and the
+// op order plays no role BY DESIGN -- lstat at flush time decides. The
+// scenarios are kept verbatim and the assertions are final-state only.
 func TestWatcherBatchOrderConverges(t *testing.T) {
 	root := t.TempDir()
 	paths := mkTree(t, root, "victim.txt")
@@ -226,15 +292,13 @@ func TestWatcherBatchOrderConverges(t *testing.T) {
 	w := newTestWatcher(t, m, f)
 	startWatcher(t, w)
 
-	// delete-then-create ends LIVE: the file is on disk at flush time,
-	// so the Remove tombstones and the Create resurrects.
+	// delete-then-create ends LIVE: the file is on disk at flush time.
 	f.send(fsnotify.Remove, paths["victim.txt"])
 	f.send(fsnotify.Create, paths["victim.txt"])
 	settle(t, m, f, root)
 	require.True(t, hasPath(m, paths["victim.txt"]))
 
-	// create-then-delete ends DELETED: by flush time the path is gone,
-	// so the Create's Lstat fails and the Remove tombstones.
+	// create-then-delete ends DELETED: the path is gone at flush time.
 	flash := filepath.Join(root, "flash.txt")
 	require.NoError(t, os.WriteFile(flash, nil, 0o644))
 	f.send(fsnotify.Create, flash)
@@ -244,7 +308,268 @@ func TestWatcherBatchOrderConverges(t *testing.T) {
 	require.False(t, hasPath(m, flash))
 }
 
-func TestWatcherOverflowDegradesAndRequestsRescan(t *testing.T) {
+// TestWatcherMergedLifecycleConverges drives the whole point of the
+// dirty-path model: opposing events on ONE path pend as ONE dirty
+// entry (the debouncer dedups), and the single flush settles it to the
+// on-disk truth.
+func TestWatcherMergedLifecycleConverges(t *testing.T) {
+	root := t.TempDir()
+	m := buildManager(t, root, nil)
+	f := newFakeNotifier()
+	w := newTestWatcher(t, m, f)
+	startWatcher(t, w)
+
+	// create+delete of the same path within one debounce window: the
+	// merged dirty path reconciles to absent, without a panic.
+	flash := filepath.Join(root, "flash.txt")
+	require.NoError(t, os.WriteFile(flash, nil, 0o644))
+	f.send(fsnotify.Create, flash)
+	require.NoError(t, os.Remove(flash))
+	f.send(fsnotify.Remove, flash)
+	settle(t, m, f, root)
+	require.False(t, hasPath(m, flash))
+
+	// delete+recreate-AS-A-DIRECTORY of a live file path, again within
+	// one window: the merged dirty path must end as a live dir with
+	// its subtree indexed (the entry's dir bit flips in place).
+	victim := filepath.Join(root, "victim")
+	require.NoError(t, os.WriteFile(victim, nil, 0o644))
+	f.send(fsnotify.Create, victim)
+	settle(t, m, f, root)
+	require.True(t, hasPath(m, victim))
+
+	require.NoError(t, os.Remove(victim))
+	f.send(fsnotify.Remove, victim)
+	require.NoError(t, os.Mkdir(victim, 0o755))
+	inner := filepath.Join(victim, "inner.txt")
+	require.NoError(t, os.WriteFile(inner, nil, 0o644))
+	f.send(fsnotify.Create, victim)
+	settle(t, m, f, root)
+
+	require.True(t, hasPath(m, victim))
+	require.True(t, hasPath(m, inner), "recreated-as-dir subtree indexed")
+	for _, r := range m.Query("victim", 0) {
+		if r.Path == victim {
+			require.True(t, r.IsDir, "the surviving entry carries the dir bit")
+		}
+	}
+	require.True(t, f.has(victim), "the recreated dir is watched")
+}
+
+// TestWatcherRecreatedDirRegainsWatch pins the refreshWatch half of
+// the reconcile contract: deleting a directory and recreating the SAME
+// path within one debounce window merges into one dirty path, so no
+// Remove is ever applied -- yet the kernel watch died with the old
+// inode. The dirty-dir reconcile must re-issue the notifier Add.
+func TestWatcherRecreatedDirRegainsWatch(t *testing.T) {
+	root := t.TempDir()
+	paths := mkTree(t, root, "d/", "d/old.txt")
+	m := buildManager(t, root, nil)
+	f := newFakeNotifier()
+	w := newTestWatcher(t, m, f)
+	startWatcher(t, w)
+	waitFor(t, func() bool { return w.Stats().WatchedDirs == 2 }, "root and d watched initially")
+
+	require.NoError(t, os.RemoveAll(paths["d/"]))
+	f.unwatch(paths["d/"]) // the kernel dropped the watch with the inode
+	f.send(fsnotify.Remove, paths["d/"])
+	require.NoError(t, os.Mkdir(paths["d/"], 0o755))
+	fresh := filepath.Join(paths["d/"], "fresh.txt")
+	require.NoError(t, os.WriteFile(fresh, nil, 0o644))
+	f.send(fsnotify.Create, paths["d/"])
+	settle(t, m, f, root)
+
+	require.True(t, f.has(paths["d/"]), "reconcile re-armed the watch on the recreated dir")
+	require.True(t, hasPath(m, fresh), "new content indexed")
+	require.False(t, hasPath(m, paths["d/old.txt"]), "stale child diffed away via ChildrenOf")
+	require.Equal(t, 2, w.Stats().WatchedDirs)
+}
+
+// TestWatcherRefreshFailureDropsDeadWatch covers refreshWatch's
+// failure path: when the re-issued Add for a recreated directory is
+// refused, the old bookkeeping entry provably points at a dead watch
+// and must be dropped (and counted), not kept as a false claim.
+func TestWatcherRefreshFailureDropsDeadWatch(t *testing.T) {
+	root := t.TempDir()
+	paths := mkTree(t, root, "d/")
+	m := buildManager(t, root, nil)
+	f := newFakeNotifier()
+	calls := 0
+	f.addErr = func(path string) error { // runs under the fake's lock
+		if path != paths["d/"] {
+			return nil
+		}
+		calls++
+		if calls > 1 {
+			return errors.New("inotify: no space left on device")
+		}
+		return nil
+	}
+	w := newTestWatcher(t, m, f)
+	startWatcher(t, w)
+	waitFor(t, func() bool { return w.Stats().WatchedDirs == 2 }, "root and d watched")
+
+	// d goes away and comes back within one window (one merged dirty
+	// path); the refresh Add is scripted to fail.
+	require.NoError(t, os.RemoveAll(paths["d/"]))
+	f.unwatch(paths["d/"])
+	f.send(fsnotify.Remove, paths["d/"])
+	require.NoError(t, os.Mkdir(paths["d/"], 0o755))
+	f.send(fsnotify.Create, paths["d/"])
+	settle(t, m, f, root)
+
+	require.False(t, f.has(paths["d/"]))
+	waitFor(t, func() bool {
+		s := w.Stats()
+		return s.WatchedDirs == 1 && s.DroppedWatches == 1 && s.Degraded
+	}, "the dead watch leaves the bookkeeping and the drop is counted")
+}
+
+// TestWatcherParentDirtyRemovesMissingChildren covers deletions the
+// watcher never hears about directly: children vanish with no events
+// of their own (lost to an overflow, or merged away by a batching
+// backend), and only the PARENT is dirtied. The ChildrenOf diff must
+// tombstone them anyway.
+func TestWatcherParentDirtyRemovesMissingChildren(t *testing.T) {
+	root := t.TempDir()
+	paths := mkTree(t, root, "p/", "p/gone.txt", "p/gonedir/", "p/gonedir/deep.txt", "p/stays.txt")
+	m := buildManager(t, root, nil)
+	f := newFakeNotifier()
+	w := newTestWatcher(t, m, f)
+	startWatcher(t, w)
+	waitFor(t, func() bool { return w.Stats().WatchedDirs == 3 }, "root, p, gonedir watched")
+
+	require.NoError(t, os.Remove(paths["p/gone.txt"]))
+	require.NoError(t, os.RemoveAll(paths["p/gonedir/"]))
+	f.unwatch(paths["p/gonedir/"])
+	f.send(fsnotify.Create, paths["p/"]) // ANY op only marks p dirty
+	settle(t, m, f, root)
+
+	require.False(t, hasPath(m, paths["p/gone.txt"]), "missing file child diffed away")
+	require.False(t, hasPath(m, paths["p/gonedir/"]), "missing dir child diffed away")
+	require.False(t, hasPath(m, paths["p/gonedir/deep.txt"]), "missing dir child's subtree tombstoned")
+	require.True(t, hasPath(m, paths["p/stays.txt"]), "surviving child untouched")
+	require.True(t, hasPath(m, paths["p/"]))
+	waitFor(t, func() bool { return w.Stats().WatchedDirs == 2 }, "the vanished dir's watch is dropped")
+	require.False(t, f.has(paths["p/gonedir/"]))
+}
+
+// TestWatcherTypeFlipViaParentReconcile flips both kinds under one
+// dirty parent: a file becomes a directory (with content) and a
+// directory becomes a file, neither with events of its own. The diff
+// must tombstone-and-re-add each flipped child with the new kind --
+// including the old dir's subtree and watches.
+func TestWatcherTypeFlipViaParentReconcile(t *testing.T) {
+	root := t.TempDir()
+	paths := mkTree(t, root, "p/", "p/wasfile", "p/wasdir/", "p/wasdir/child.txt")
+	m := buildManager(t, root, nil)
+	f := newFakeNotifier()
+	w := newTestWatcher(t, m, f)
+	startWatcher(t, w)
+	waitFor(t, func() bool { return w.Stats().WatchedDirs == 3 }, "root, p, wasdir watched")
+
+	require.NoError(t, os.Remove(paths["p/wasfile"]))
+	require.NoError(t, os.Mkdir(paths["p/wasfile"], 0o755))
+	nested := filepath.Join(paths["p/wasfile"], "nested.txt")
+	require.NoError(t, os.WriteFile(nested, nil, 0o644))
+	require.NoError(t, os.RemoveAll(paths["p/wasdir/"]))
+	f.unwatch(paths["p/wasdir/"])
+	require.NoError(t, os.WriteFile(paths["p/wasdir/"], []byte("now a file"), 0o644))
+	f.send(fsnotify.Remove, paths["p/"]) // op is advisory; p still exists
+	settle(t, m, f, root)
+
+	// file -> dir: dir bit set, new subtree scanned, watch added.
+	for _, r := range m.Query("wasfile", 0) {
+		if r.Path == paths["p/wasfile"] {
+			require.True(t, r.IsDir, "file->dir flip sets the entry's dir bit")
+		}
+	}
+	require.True(t, hasPath(m, nested), "flipped-to-dir subtree scanned in")
+	require.True(t, f.has(paths["p/wasfile"]), "flipped-to-dir gains a watch")
+
+	// dir -> file: subtree tombstoned, watch dropped, dir bit cleared.
+	require.False(t, hasPath(m, paths["p/wasdir/child.txt"]), "dir->file flip tombstones the old subtree")
+	require.True(t, hasPath(m, paths["p/wasdir/"]), "the flipped path itself stays indexed")
+	for _, r := range m.Query("wasdir", 0) {
+		if r.Path == paths["p/wasdir/"] {
+			require.False(t, r.IsDir, "dir->file flip clears the entry's dir bit")
+		}
+	}
+	require.False(t, f.has(paths["p/wasdir/"]), "flipped-to-file loses its watch")
+	require.Equal(t, 3, w.Stats().WatchedDirs, "root, p, wasfile")
+}
+
+// TestWatcherChildlessDirToFileFlipDropsWatchClaim covers the
+// own-path dir->file flip: the dir is deleted and a FILE recreated at
+// the same path within one debounce window, so the single merged
+// dirty path is all the watcher hears (the parent is never dirtied --
+// both events carry this path). The stale watch claim must go and the
+// entry's dir bit must flip.
+func TestWatcherChildlessDirToFileFlipDropsWatchClaim(t *testing.T) {
+	root := t.TempDir()
+	paths := mkTree(t, root, "d/")
+	m := buildManager(t, root, nil)
+	f := newFakeNotifier()
+	w := newTestWatcher(t, m, f)
+	startWatcherRegistered(t, w)
+	require.Equal(t, 2, w.Stats().WatchedDirs, "root and d watched")
+
+	require.NoError(t, os.RemoveAll(paths["d/"]))
+	f.unwatch(paths["d/"]) // the kernel dropped the watch with the inode
+	require.NoError(t, os.WriteFile(paths["d/"], []byte("file now"), 0o644))
+	f.send(fsnotify.Remove, paths["d/"]) // op advisory; one merged dirty path
+	settle(t, m, f, root)
+
+	waitFor(t, func() bool { return w.Stats().WatchedDirs == 1 }, "the flipped path's watch claim is dropped")
+	require.False(t, f.has(paths["d/"]))
+	found := false
+	for _, r := range m.Query("d", 0) {
+		if r.Path == paths["d/"] {
+			found = true
+			require.False(t, r.IsDir, "the entry's dir bit flipped to file")
+		}
+	}
+	require.True(t, found, "the flipped path stays indexed")
+	require.False(t, w.Degraded(), "a clean flip is not degradation")
+}
+
+func TestWatcherOverflowRequestsSweepWhenWired(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	root := t.TempDir()
+	m := buildManager(t, root, nil)
+	f := newFakeNotifier()
+	w := newTestWatcher(t, m, f)
+	rescans := make(chan struct{}, 8)
+	w.setRescanRequester(func() { rescans <- struct{}{} })
+	sweeps := make(chan struct{}, 8)
+	w.setSweepRequester(func() { sweeps <- struct{}{} })
+	startWatcher(t, w)
+
+	f.errs <- fsnotify.ErrEventOverflow
+	f.errs <- fmt.Errorf("wrapped: %w", fsnotify.ErrEventOverflow)
+	waitFor(t, func() bool { return w.Stats().Overflows == 2 }, "both overflows counted (wrapped included)")
+	require.True(t, w.Degraded())
+	<-sweeps
+	<-sweeps
+	select {
+	case <-rescans:
+		t.Fatal("with a sweeper wired, overflow must never fall back to a full rescan")
+	default:
+	}
+	require.Contains(t, buf.String(), "watch: event queue overflow, events lost (degraded); requesting reconcile sweep")
+
+	// Non-overflow errors are logged and the loop keeps running.
+	f.errs <- errors.New("some transient watcher error")
+	settle(t, m, f, root)
+	require.Equal(t, 2, w.Stats().Overflows)
+}
+
+func TestWatcherOverflowFallsBackToRescanRequest(t *testing.T) {
+	// No sweeper wired: standalone watcher+rescanner setups keep the
+	// old overflow -> rescan behavior.
 	root := t.TempDir()
 	m := buildManager(t, root, nil)
 	f := newFakeNotifier()
@@ -259,11 +584,6 @@ func TestWatcherOverflowDegradesAndRequestsRescan(t *testing.T) {
 	require.True(t, w.Degraded())
 	<-requested
 	<-requested
-
-	// Non-overflow errors are logged and the loop keeps running.
-	f.errs <- errors.New("some transient watcher error")
-	settle(t, m, f, root)
-	require.Equal(t, 2, w.Stats().Overflows)
 }
 
 func TestWatcherLifecycle(t *testing.T) {
