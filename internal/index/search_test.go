@@ -175,9 +175,11 @@ func TestQueryLimit(t *testing.T) {
 	}
 	res := s.Query("file", 7)
 	require.Len(t, res, 7)
-	// All same class/kind/length: pure lexicographic order decides.
+	// All same class/kind/length: the numeric-aware final tie-break
+	// decides, and a numbered family delivers highest-first
+	// (numorder.go).
 	for i, r := range res {
-		require.Equal(t, fmt.Sprintf("/lim/file%02d.txt", i), r.Path)
+		require.Equal(t, fmt.Sprintf("/lim/file%02d.txt", 24-i), r.Path)
 	}
 }
 

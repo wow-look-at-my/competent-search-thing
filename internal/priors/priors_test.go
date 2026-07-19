@@ -69,16 +69,21 @@ func TestRateTerm(t *testing.T) {
 		"cold":  {picks: 0, impressions: 500},  // seen a lot, never picked
 		"quiet": {picks: 1, impressions: 19},   // ~baseline: (1+1)/(19+20)
 	}
+	// The bound is computed through a variable so the arithmetic runs
+	// at runtime like production's (an all-constant expression folds
+	// to a subtly different float64 than the runtime product).
+	clamp := float64(rateLogClamp)
+	maxNudge := rateWeight * clamp
 	require.Zero(t, rateTerm(m, "missing"), "missing key must contribute zero")
 	hot := rateTerm(m, "hot")
 	require.Positive(t, hot)
-	require.LessOrEqual(t, hot, rateWeight*rateLogClamp, "the clamp bounds the nudge")
+	require.LessOrEqual(t, hot, maxNudge, "the clamp bounds the nudge")
 	cold := rateTerm(m, "cold")
 	require.Negative(t, cold)
-	require.GreaterOrEqual(t, cold, -rateWeight*rateLogClamp)
+	require.GreaterOrEqual(t, cold, -maxNudge)
 	require.InDelta(t, 0, rateTerm(m, "quiet"), 0.01, "near-baseline keys are near zero")
 	m["extreme"] = rateCell{picks: 1e6, impressions: 1e6}
-	require.Equal(t, rateWeight*rateLogClamp, rateTerm(m, "extreme"), "the clamp must bind")
+	require.Equal(t, maxNudge, rateTerm(m, "extreme"), "the clamp must bind")
 }
 
 func rec(ts time.Time, query string, shown []string, picked string) PickRecord {

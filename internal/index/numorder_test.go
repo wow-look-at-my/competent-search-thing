@@ -104,30 +104,33 @@ func TestCompareJoinedNumericTotalOrder(t *testing.T) {
 // non-datestamp pair keeps plain lexicographic order, and a pair whose
 // numbers tie keeps the pre-change order (stability).
 func TestNumericTieBreakNameMode(t *testing.T) {
-	s := NewStore()
-	mustAdd(t, s, "/shots", "Screenshot 2024-02-01 at 10.10.11.png", false)
-	mustAdd(t, s, "/shots", "Screenshot 2026-07-18 at 09.12.44.png", false)
-	mustAdd(t, s, "/shots", "Screenshot 2025-06-15 at 23.59.59.png", false)
+	shots := NewStore()
+	mustAdd(t, shots, "/shots", "Screenshot 2024-02-01 at 10.10.11.png", false)
+	mustAdd(t, shots, "/shots", "Screenshot 2026-07-18 at 09.12.44.png", false)
+	mustAdd(t, shots, "/shots", "Screenshot 2025-06-15 at 23.59.59.png", false)
 	require.Equal(t, []string{
 		"/shots/Screenshot 2026-07-18 at 09.12.44.png",
 		"/shots/Screenshot 2025-06-15 at 23.59.59.png",
 		"/shots/Screenshot 2024-02-01 at 10.10.11.png",
-	}, resultPaths(s.Query("screenshot", 10)), "datestamped family: newest first")
+	}, resultPaths(shots.Query("screenshot", 10)), "datestamped family: newest first")
 
-	mustAdd(t, s, "/docs", "invoice_v1.pdf", false)
-	mustAdd(t, s, "/docs", "invoice_v2.pdf", false)
+	docs := NewStore()
+	mustAdd(t, docs, "/docs", "invoice_v1.pdf", false)
+	mustAdd(t, docs, "/docs", "invoice_v2.pdf", false)
 	require.Equal(t, []string{"/docs/invoice_v2.pdf", "/docs/invoice_v1.pdf"},
-		resultPaths(s.Query("invoice", 10)), "versioned family: highest first")
+		resultPaths(docs.Query("invoice", 10)), "versioned family: highest first")
 
-	mustAdd(t, s, "/n", "report_alpha.txt", false)
-	mustAdd(t, s, "/n", "report_betaq.txt", false)
+	plain := NewStore()
+	mustAdd(t, plain, "/n", "report_alpha.txt", false)
+	mustAdd(t, plain, "/n", "report_betaq.txt", false)
 	require.Equal(t, []string{"/n/report_alpha.txt", "/n/report_betaq.txt"},
-		resultPaths(s.Query("report", 10)), "non-datestamp pair: plain lexicographic untouched")
+		resultPaths(plain.Query("report", 10)), "non-datestamp pair: plain lexicographic untouched")
 
-	mustAdd(t, s, "/eq", "v1_alpha.txt", false)
-	mustAdd(t, s, "/eq", "v1_betaq.txt", false)
+	eq := NewStore()
+	mustAdd(t, eq, "/eq", "v1_alpha.txt", false)
+	mustAdd(t, eq, "/eq", "v1_betaq.txt", false)
 	require.Equal(t, []string{"/eq/v1_alpha.txt", "/eq/v1_betaq.txt"},
-		resultPaths(s.Query("v1", 10)), "same-number pair: stable, existing order")
+		resultPaths(eq.Query("v1", 10)), "same-number pair: stable, existing order")
 }
 
 // TestNumericTieBreakSelection: the tie-break also decides WHICH rows

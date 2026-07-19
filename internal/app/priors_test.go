@@ -39,16 +39,35 @@ func seedTelemetry(t *testing.T, picks int, picked, other string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, priorsTelemetryLog), data, 0o600))
 }
 
-func priorsManager(t *testing.T) *index.Manager {
+// priorsFixture builds a real on-disk root with two sibling files
+// (Startup's async index build swaps in a fresh walk of the roots, so
+// in-memory-only entries would be wiped) and a Manager over it, with
+// the entries also pre-added for the pre-build window. Returns the
+// manager and the two absolute paths (one, two).
+func priorsFixture(t *testing.T) (*index.Manager, string, string) {
 	t.Helper()
-	m := index.NewManager([]string{"/x"}, nil, 10)
-	require.NoError(t, m.Add("/a", "report_one.txt", false))
-	require.NoError(t, m.Add("/a", "report_two.txt", false))
-	return m
+	root := t.TempDir()
+	one := filepath.Join(root, "report_one.txt")
+	two := filepath.Join(root, "report_two.txt")
+	require.NoError(t, os.WriteFile(one, []byte("a"), 0o600))
+	require.NoError(t, os.WriteFile(two, []byte("b"), 0o600))
+	m := index.NewManager([]string{root}, nil, 10)
+	require.NoError(t, m.Add(root, "report_one.txt", false))
+	require.NoError(t, m.Add(root, "report_two.txt", false))
+	return m, one, two
+}
+
+func searchPaths(a *App, q string) []string {
+	rs := a.Search(q)
+	out := make([]string, len(rs))
+	for i, r := range rs {
+		out[i] = r.Path
+	}
+	return out
 }
 
 func TestStartPriorsDisabledIsInert(t *testing.T) {
-	m := priorsManager(t)
+	m, _, _ := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{Frecency: config.DefaultFrecency()})
 	a.Startup(context.Background())
 	require.False(t, a.priorsConfigured())
@@ -63,59 +82,52 @@ func TestStartPriorsDisabledIsInert(t *testing.T) {
 // telemetry picks flip the delivered order for that exact query, and
 // only for it.
 func TestStartPriorsPinsPickedRow(t *testing.T) {
-	m := priorsManager(t)
+	m, one, two := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{
 		Frecency: config.DefaultFrecency(),
 		Priors:   config.PriorsConfig{Enabled: true},
 	})
-	seedTelemetry(t, 2, "/a/report_two.txt", "/a/report_one.txt")
+	seedTelemetry(t, 2, two, one)
 	a.Startup(context.Background())
 	require.True(t, a.priorsConfigured())
 	require.NotNil(t, m.Blend().Prior, "the blend must carry the priors resolver")
 
-	paths := func(rs []Result) []string {
-		out := make([]string, len(rs))
-		for i, r := range rs {
-			out[i] = r.Path
-		}
-		return out
-	}
-	// The initial refresh is asynchronous.
+	// The initial refresh (and the index build) are asynchronous.
 	require.Eventually(t, func() bool {
-		got := paths(a.Search("rep"))
-		return len(got) == 2 && got[0] == "/a/report_two.txt"
-	}, 2*time.Second, 5*time.Millisecond, "the remembered pick must pin the row for its query")
+		got := searchPaths(a, "rep")
+		return len(got) == 2 && got[0] == two
+	}, 3*time.Second, 5*time.Millisecond, "the remembered pick must pin the row for its query")
 	// A different query has no exact memory; with both rows sharing
 	// extension and folder the rate nudges tie and the engine order
 	// stands.
-	require.Equal(t, []string{"/a/report_one.txt", "/a/report_two.txt"}, paths(a.Search("report_")))
+	require.Equal(t, []string{one, two}, searchPaths(a, "report_"))
 }
 
 // TestStartPriorsWithFrecencyDisabled: priors alone still activate
 // the blend (a prior-only Blend), and the exact-query pin works.
 func TestStartPriorsWithFrecencyDisabled(t *testing.T) {
-	m := priorsManager(t)
+	m, one, two := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{
 		Frecency: config.FrecencyConfig{Disabled: true},
 		Priors:   config.PriorsConfig{Enabled: true},
 	})
-	seedTelemetry(t, 2, "/a/report_two.txt", "/a/report_one.txt")
+	seedTelemetry(t, 2, two, one)
 	a.Startup(context.Background())
 	require.Nil(t, a.frecencyStore(), "frecency stays off")
 	b := m.Blend()
 	require.NotNil(t, b, "a prior-only blend must reach the Manager")
 	require.NotNil(t, b.Prior)
 	require.Eventually(t, func() bool {
-		rs := a.Search("rep")
-		return len(rs) == 2 && rs[0].Path == "/a/report_two.txt"
-	}, 2*time.Second, 5*time.Millisecond)
+		got := searchPaths(a, "rep")
+		return len(got) == 2 && got[0] == two
+	}, 3*time.Second, 5*time.Millisecond)
 }
 
 // TestOpenKicksPriorsRefresh: a successful activation re-reads the
 // sources, so picks recorded by the telemetry layer land in the
 // tables without any timer.
 func TestOpenKicksPriorsRefresh(t *testing.T) {
-	m := priorsManager(t)
+	m, one, two := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{
 		Frecency: config.FrecencyConfig{Disabled: true},
 		Priors:   config.PriorsConfig{Enabled: true},
@@ -123,19 +135,20 @@ func TestOpenKicksPriorsRefresh(t *testing.T) {
 	a.Startup(context.Background())
 	require.Eventually(t, a.priorsConfigured, time.Second, 5*time.Millisecond)
 
-	// No data yet: engine order.
-	rs := a.Search("rep")
-	require.Len(t, rs, 2)
-	require.Equal(t, "/a/report_one.txt", rs[0].Path)
+	// No data yet: engine order, once the index build has settled.
+	require.Eventually(t, func() bool {
+		got := searchPaths(a, "rep")
+		return len(got) == 2 && got[0] == one
+	}, 3*time.Second, 5*time.Millisecond, "pre-data: engine order")
 
 	// New telemetry appears (as the telemetry layer would append it),
 	// then an activation succeeds: the next generation picks it up.
-	seedTelemetry(t, 2, "/a/report_two.txt", "/a/report_one.txt")
-	require.NoError(t, a.Open("/a/report_two.txt"))
+	seedTelemetry(t, 2, two, one)
+	require.NoError(t, a.Open(two))
 	require.Eventually(t, func() bool {
-		rs := a.Search("rep")
-		return len(rs) == 2 && rs[0].Path == "/a/report_two.txt"
-	}, 2*time.Second, 5*time.Millisecond, "the post-activation refresh must load the new picks")
+		got := searchPaths(a, "rep")
+		return len(got) == 2 && got[0] == two
+	}, 3*time.Second, 5*time.Millisecond, "the post-activation refresh must load the new picks")
 }
 
 // TestPriorsRefreshCoalesces: kicks while a rebuild runs coalesce
@@ -178,10 +191,8 @@ func TestPriorsCorruptSourcesDegrade(t *testing.T) {
 		defer a.priorsMu.Unlock()
 		return a.priorsStore != nil && !a.priorsBusy
 	}, 2*time.Second, 5*time.Millisecond)
-	q, e, d := func() (int, int, int) {
-		a.priorsMu.Lock()
-		defer a.priorsMu.Unlock()
-		return a.priorsStore.Counts()
-	}()
+	a.priorsMu.Lock()
+	defer a.priorsMu.Unlock()
+	q, e, d := a.priorsStore.Counts()
 	require.Zero(t, q+e+d, "nothing parsed, tables empty, no crash")
 }
