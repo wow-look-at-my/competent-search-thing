@@ -34,6 +34,7 @@ const FLASH_ERROR_MS = 2000;
 
 const inputEl = document.getElementById("query") as HTMLInputElement;
 const bangChipEl = document.getElementById("bang-chip") as HTMLSpanElement;
+const resultsEl = document.getElementById("results") as HTMLDivElement;
 const fileResultsEl = document.getElementById(
   "file-results",
 ) as HTMLDivElement;
@@ -174,13 +175,19 @@ function refreshStats(app: WailsAppBindings): void {
 /* --- selection ------------------------------------------------------ */
 
 const rowHandlers = {
-  onHover: select,
+  // Hover selects WITHOUT scrolling: rows sweep under the cursor
+  // while the list scrolls, and a scrollIntoView per mouseenter
+  // would yank the viewport (select's scroll flag defaults to true
+  // for keyboard navigation).
+  onHover: (i: number) => {
+    select(i, false);
+  },
   onActivate: activate,
 };
 
-function select(index: number): void {
+function select(index: number, scroll = true): void {
   state.selected = index;
-  applySelection(state.rows, index);
+  applySelection(state.rows, index, scroll);
   // The single selection choke point: every path (arrows, hover,
   // Home/End, render reconciles, history recall, app:shown reset)
   // funnels through here, so the preview pane sees them all. A no-op
@@ -250,7 +257,7 @@ function renderPluginArea(): void {
     // empty bar stays a no-op until the list is entered explicitly.
     sel = 0;
   }
-  select(sel);
+  select(sel, false); // a late emission must never move the viewport
 }
 
 /* --- query history ---------------------------------------------------- */
@@ -552,6 +559,12 @@ function onKeydown(app: WailsAppBindings, ev: KeyboardEvent): void {
         activate(state.selected, ev.ctrlKey || ev.metaKey);
       }
       break;
+    case "Tab":
+      // Tab/Shift+Tab are reserved for future use: the default focus
+      // traversal would leave the input (the bar's only focusable
+      // element) and the webview, tripping the blur -> Hide path.
+      ev.preventDefault();
+      break;
     case "Escape":
       ev.preventDefault();
       hideBar(app);
@@ -658,6 +671,28 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   document.addEventListener("keydown", (ev: KeyboardEvent) => {
     onKeydown(app, ev);
   });
+  // Own wheel input on the results list: WebKitGTK's default-on
+  // smooth scrolling (no Wails knob) animates wheel deltas, and an
+  // instant programmatic scroll cancels the animation mid-flight, so
+  // fast detents lost distance. Applying deltas straight to
+  // scrollTop interpolates nothing and can swallow nothing.
+  resultsEl.addEventListener(
+    "wheel",
+    (ev: WheelEvent) => {
+      if (ev.ctrlKey) {
+        return; // leave zoom to the webview
+      }
+      ev.preventDefault(); // needs { passive: false } to stick
+      let dy = ev.deltaY;
+      if (ev.deltaMode === 1) {
+        dy *= 40; // lines -> px (WebKitGTK sends pixels; defensive)
+      } else if (ev.deltaMode === 2) {
+        dy *= resultsEl.clientHeight; // pages -> px
+      }
+      resultsEl.scrollTop += dy;
+    },
+    { passive: false },
+  );
   window.addEventListener("blur", () => {
     if (state.visible) {
       hideBar(app);

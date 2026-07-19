@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -268,4 +270,135 @@ func TestShowPositionsWithConfiguredWindowSize(t *testing.T) {
 	wantX, wantY := platform.BarPosition(r.displays[0], 1600, 800)
 	require.Equal(t, []int{wantX}, r.setPosX)
 	require.Equal(t, []int{wantY}, r.setPosY)
+}
+
+// lastPreviewPayload waits until at least n preview:result events
+// arrived and returns the newest one's payload.
+func lastPreviewPayload(t *testing.T, r *seamRecorder, n int) preview.Payload {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		return len(r.emitted(eventPreviewResult)) >= n
+	}, 5*time.Second, 10*time.Millisecond, "preview payload arrives")
+	events := r.emitted(eventPreviewResult)
+	return events[len(events)-1].payload[0].(preview.Payload)
+}
+
+func TestStartPreviewResolvesOpenAIBaseURL(t *testing.T) {
+	// Keep the AI answer cache out of the real config dir.
+	t.Setenv(config.EnvConfigDir, t.TempDir())
+	answerWith := func(text string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"status":"completed","model":"m","output":[{"type":"message","content":[{"type":"output_text","text":"` + text + `"}]}]}`))
+		}))
+	}
+	cfgSrv := answerWith("from-config")
+	defer cfgSrv.Close()
+	envSrv := answerWith("from-env")
+	defer envSrv.Close()
+
+	baseOpts := func() Options {
+		o := previewTestOptions()
+		o.Preview.OpenAI.APIKey = "sk-test"
+		o.Preview.OpenAI.Model = "m"
+		o.Preview.OpenAI.MaxOutputTokens = 16
+		return o
+	}
+	envGetenv := func(key string) string {
+		if key == envOpenAIBaseURL {
+			return envSrv.URL
+		}
+		return ""
+	}
+
+	// The config value wins over the environment (which answers
+	// differently and must not be dialed).
+	opt := baseOpts()
+	opt.Preview.OpenAI.BaseURL = cfgSrv.URL
+	a, ra := newTestApp(t, nil, opt)
+	a.plat.getenv = envGetenv
+	a.Startup(context.Background())
+	a.FetchAIPreview("q config", 1)
+	p := lastPreviewPayload(t, ra, 1)
+	require.Equal(t, preview.KindAI, p.Kind)
+	require.Equal(t, "from-config", p.AI.Answer)
+
+	// An empty config value falls back to OPENAI_BASE_URL through the
+	// getenv seam.
+	b, rb := newTestApp(t, nil, baseOpts())
+	b.plat.getenv = envGetenv
+	b.Startup(context.Background())
+	b.FetchAIPreview("q env", 1)
+	p = lastPreviewPayload(t, rb, 1)
+	require.Equal(t, preview.KindAI, p.Kind)
+	require.Equal(t, "from-env", p.AI.Answer)
+}
+
+func TestStartPreviewPassesKagiBaseURL(t *testing.T) {
+	// The Kagi base is config-only (no environment fallback); the
+	// configured value reaches the real client.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"search":[{"url":"https://hit.example","title":"Hit","snippet":"s"}]}}`))
+	}))
+	defer srv.Close()
+
+	opt := previewTestOptions()
+	opt.Preview.Kagi.APIKey = "k"
+	opt.Preview.Kagi.BaseURL = srv.URL
+	a, r := newTestApp(t, nil, opt)
+	a.Startup(context.Background())
+	a.FetchWebPreview("some query", 1)
+	p := lastPreviewPayload(t, r, 1)
+	require.Equal(t, preview.KindWeb, p.Kind)
+	require.Len(t, p.Web.Results, 1)
+	require.Equal(t, "https://hit.example", p.Web.Results[0].URL)
+}
+
+func TestStartPreviewInvalidBaseURLKeepsTerseFetchError(t *testing.T) {
+	opt := previewTestOptions()
+	opt.Preview.Kagi.APIKey = "k"
+	opt.Preview.Kagi.BaseURL = "kagi.example" // no scheme
+	opt.Preview.OpenAI.APIKey = "o"
+	opt.Preview.OpenAI.BaseURL = "gopher://answers.example"
+	a, r := newTestApp(t, nil, opt)
+	a.Startup(context.Background())
+	d := a.previewDispatcher()
+	require.NotNil(t, d)
+	require.False(t, d.WebConfigured(), "an invalid base never installs a client")
+	require.False(t, d.AIConfigured(), "an invalid base never installs a client")
+
+	// The keys are present, so the frontend buttons stay enabled --
+	// clicking explains the actual problem, naming the knob but never
+	// the value.
+	info := a.GetPreviewConfig()
+	require.True(t, info.KagiConfigured)
+	require.True(t, info.OpenAIConfigured)
+
+	a.FetchWebPreview("q", 1)
+	events := r.emitted(eventPreviewResult)
+	require.Len(t, events, 1, "the invalid-base answer is synchronous")
+	p := events[0].payload[0].(preview.Payload)
+	require.Equal(t, preview.KindError, p.Kind)
+	require.Equal(t, "kagi: invalid baseUrl (preview.kagi.baseUrl)", p.Err)
+	require.NotContains(t, p.Err, "kagi.example")
+
+	a.FetchAIPreview("q", 2)
+	events = r.emitted(eventPreviewResult)
+	require.Len(t, events, 2)
+	p = events[1].payload[0].(preview.Payload)
+	require.Equal(t, preview.KindError, p.Kind)
+	require.Equal(t, "openai: invalid baseUrl (preview.openai.baseUrl / OPENAI_BASE_URL)", p.Err)
+	require.NotContains(t, p.Err, "answers.example")
+}
+
+func TestGetPreviewConfigResultsWidth(t *testing.T) {
+	// The wired flag-off bar width (config window.width via main.go)
+	// is reported as-is...
+	a, _ := newTestApp(t, nil, Options{ResultsWidth: 900})
+	require.Equal(t, 900, a.GetPreviewConfig().ResultsWidth)
+
+	// ...and an unset value (bare-Options tests, or a caller predating
+	// the knob) falls back to the flag-off default, never a collapsed
+	// column.
+	b, _ := newTestApp(t, nil, Options{})
+	require.Equal(t, config.DefaultWindowWidth, b.GetPreviewConfig().ResultsWidth)
 }

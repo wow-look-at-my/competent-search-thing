@@ -402,18 +402,21 @@ body {
   display: none;
 }
 
-/* Wide-window layout: the classic bar becomes the left column at its
-   original 680px width (query row, results, status and the stats row
+/* Wide-window layout: the classic bar becomes the left column at the
+   flag-off bar width (query row, results, status and the stats row
    stacked exactly as before) and the pane fills the remaining width
-   at full height, split off by the border-left divider. Grid rather
-   than nested flex so the existing #bar children need no new wrapper
-   elements; the minmax(0, ...) tracks keep long preview content
-   scrolling inside the pane instead of growing the window. The
-   fourth row is the stats row; hidden (display:none) it collapses
-   to zero height. */
+   at full height, split off by the border-left divider. The column
+   width arrives as --preview-results-col, set on <body> by preview.ts
+   from GetPreviewConfig.resultsWidth (= config window.width); the
+   680px fallback is the pre-knob constant for an old backend. Grid
+   rather than nested flex so the existing #bar children need no new
+   wrapper elements; the minmax(0, ...) tracks keep long preview
+   content scrolling inside the pane instead of growing the window.
+   The fourth row is the stats row; hidden (display:none) it
+   collapses to zero height. */
 body.with-preview #bar {
   display: grid;
-  grid-template-columns: 680px minmax(0, 1fr);
+  grid-template-columns: var(--preview-results-col, 680px) minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto auto;
 }
 

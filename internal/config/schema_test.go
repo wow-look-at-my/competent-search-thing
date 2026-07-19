@@ -60,7 +60,18 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 		Hotkey:                "ctrl+shift+k",
 		RescanIntervalMinutes: 30,
 		MaxResults:            100,
-		Search:                SearchConfig{FuzzyDisabled: true},
+		Search: SearchConfig{
+			FuzzyDisabled: true,
+			Frecency: FrecencyConfig{
+				Disabled:       true,
+				HalfLifeDays:   7,
+				WeightFrecency: 2.5,
+				WeightRecency:  -1, // negative = the documented per-signal off switch
+				WeightCwd:      0.5,
+				WeightNoise:    1,
+				TierJumpCount:  5,
+			},
+		},
 		Watcher: WatcherConfig{
 			MaxWatches:    -1,
 			SweepMinutes:  45,
@@ -103,9 +114,14 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 			TextMaxKB:     512,
 			ImageMaxEdge:  1200,
 			DirMaxEntries: 500,
-			Kagi:          PreviewKagiConfig{APIKey: "kagi-secret", MaxResults: 5},
+			Kagi: PreviewKagiConfig{
+				APIKey:     "kagi-secret",
+				BaseURL:    "https://kagi.internal.example",
+				MaxResults: 5,
+			},
 			OpenAI: PreviewOpenAIConfig{
 				APIKey:          "sk-secret",
+				BaseURL:         "http://llm.local:8080/openai",
 				Model:           "gpt-5",
 				MaxOutputTokens: 2048,
 			},
@@ -142,6 +158,16 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"misspelled watcher backend":       `{"watcher":{"backend":"inotfy"}}`,
 		"empty watcher backend":            `{"watcher":{"backend":""}}`,
 		"non-string watcher backend":       `{"watcher":{"backend":true}}`,
+		"frecency key typo":                `{"search":{"frecency":{"halfLifeDay":7}}}`,
+		"non-bool frecency disabled":       `{"search":{"frecency":{"disabled":"yes"}}}`,
+		"zero frecency half-life":          `{"search":{"frecency":{"halfLifeDays":0}}}`,
+		"negative frecency half-life":      `{"search":{"frecency":{"halfLifeDays":-1}}}`,
+		"zero frecency weight":             `{"search":{"frecency":{"weightFrecency":0}}}`,
+		"zero recency weight":              `{"search":{"frecency":{"weightRecency":0}}}`,
+		"zero cwd weight":                  `{"search":{"frecency":{"weightCwd":0}}}`,
+		"zero noise weight":                `{"search":{"frecency":{"weightNoise":0}}}`,
+		"zero tier jump":                   `{"search":{"frecency":{"tierJumpCount":0}}}`,
+		"non-number frecency weight":       `{"search":{"frecency":{"weightNoise":"1"}}}`,
 		"bad theme name":                   `{"theme":"../evil"}`,
 		"bad plugin entry id":              `{"plugins":{"entries":{"Bad ID":{}}}}`,
 		"non-object settings":              `{"plugins":{"entries":{"calc":{"settings":"loud"}}}}`,
@@ -176,8 +202,10 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"zero preview dirMaxEntries":       `{"preview":{"dirMaxEntries":0}}`,
 		"preview key typo":                 `{"preview":{"enbled":true}}`,
 		"non-string kagi apiKey":           `{"preview":{"kagi":{"apiKey":7}}}`,
+		"non-string kagi baseUrl":          `{"preview":{"kagi":{"baseUrl":7}}}`,
 		"zero kagi maxResults":             `{"preview":{"kagi":{"maxResults":0}}}`,
 		"kagi key typo":                    `{"preview":{"kagi":{"apikey":"x"}}}`,
+		"non-string openai baseUrl":        `{"preview":{"openai":{"baseUrl":false}}}`,
 		"empty openai model":               `{"preview":{"openai":{"model":""}}}`,
 		"zero openai maxOutputTokens":      `{"preview":{"openai":{"maxOutputTokens":0}}}`,
 		"openai key typo":                  `{"preview":{"openai":{"modle":"gpt-5-mini"}}}`,
@@ -248,6 +276,8 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json $defs/searchConfig out of sync with SearchConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(WatcherConfig{})), configSchemaProperties(t, "watcherConfig"),
 		"config.schema.json $defs/watcherConfig out of sync with WatcherConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(FrecencyConfig{})), configSchemaProperties(t, "frecencyConfig"),
+		"config.schema.json $defs/frecencyConfig out of sync with FrecencyConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PluginsConfig{})), configSchemaProperties(t, "pluginsConfig"),
 		"config.schema.json $defs/pluginsConfig out of sync with PluginsConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PluginEntry{})), configSchemaProperties(t, "pluginEntry"),

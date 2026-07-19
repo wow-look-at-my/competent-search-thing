@@ -64,6 +64,17 @@ const (
 	WatcherBackendInotify = "inotify"
 )
 
+// Frecency ranking defaults (see FrecencyConfig). The weights share
+// one scale: at 1.0 each, one recently recorded open, a
+// just-touched file's full recency score, a direct child of the
+// focused app's working directory, and the maximum location-noise
+// penalty all weigh one blend unit.
+const (
+	DefaultFrecencyHalfLifeDays = 14
+	DefaultFrecencyWeight       = 1.0
+	DefaultFrecencyTierJump     = 3.0
+)
+
 // Window size defaults and floors (see WindowConfig). The defaults are
 // ~15% larger than the original fixed 680x460 bar; the floors keep a
 // hand-edited config from producing an unusably tiny window.
@@ -190,7 +201,7 @@ type RewriteRule struct {
 }
 
 // SearchConfig configures the search engine. The zero value means the
-// default behavior: fuzzy matching on.
+// default behavior: fuzzy matching on, frecency ranking on.
 type SearchConfig struct {
 	// FuzzyDisabled true turns the fuzzy (subsequence) name-match tier
 	// off, leaving exact/prefix/substring matching only. The zero
@@ -198,6 +209,41 @@ type SearchConfig struct {
 	// tray.disabled convention). Exact, prefix, and substring matches
 	// always rank above fuzzy ones either way.
 	FuzzyDisabled bool `json:"fuzzyDisabled"`
+	// Frecency configures the frecency/recency/noise ranking blend.
+	Frecency FrecencyConfig `json:"frecency"`
+}
+
+// FrecencyConfig tunes the frecency ranking blend (see the README's
+// "Ranking: frecency, recency and noise" and internal/index blend.go).
+// Numeric convention: a ZERO value means "use the default" (Normalize
+// repairs it, the repo-wide zero-value rule), and a NEGATIVE value
+// explicitly disables that one signal -- the blend clamps negative
+// weights to no contribution and a negative tierJumpCount turns tier
+// jumping off. HalfLifeDays has no disable meaning, so any
+// non-positive value is repaired to the default.
+type FrecencyConfig struct {
+	// Disabled true turns the whole blend off: no open counts are
+	// recorded or loaded, no recency stats run, and result ordering
+	// is exactly the pre-blend engine's.
+	Disabled bool `json:"disabled"`
+	// HalfLifeDays is how long a recorded open takes to count half as
+	// much (default 14).
+	HalfLifeDays float64 `json:"halfLifeDays"`
+	// WeightFrecency scales the decayed open count (default 1.0).
+	WeightFrecency float64 `json:"weightFrecency"`
+	// WeightRecency scales the cold-start recency score in [0, 1] --
+	// files never opened through the bar rank by how recently the
+	// disk saw them touched (default 1.0).
+	WeightRecency float64 `json:"weightRecency"`
+	// WeightCwd scales the focused-app working-directory proximity
+	// boost (default 1.0).
+	WeightCwd float64 `json:"weightCwd"`
+	// WeightNoise scales the location-noise penalty in [0, 1] --
+	// cache/temp/vcs trees rank down (default 1.0).
+	WeightNoise float64 `json:"weightNoise"`
+	// TierJumpCount is the decayed-open-count threshold past which a
+	// result competes one match tier up (default 3.0).
+	TierJumpCount float64 `json:"tierJumpCount"`
 }
 
 // WatcherConfig configures the live-watch layer (see internal/watch):
@@ -387,6 +433,11 @@ type PreviewKagiConfig struct {
 	// environment variable, if set"; with neither, the web-search
 	// preview stays unavailable.
 	APIKey string `json:"apiKey"`
+	// BaseURL is a custom API base URL, e.g. a self-hosted
+	// Kagi-compatible server; empty = the official endpoint
+	// (https://kagi.com). Passed through verbatim (no env fallback);
+	// requests go to <baseUrl>/api/v1/search.
+	BaseURL string `json:"baseUrl"`
 	// MaxResults caps one web-search preview (default 8).
 	MaxResults int `json:"maxResults"`
 }
@@ -398,6 +449,12 @@ type PreviewOpenAIConfig struct {
 	// variable, if set"; with neither, the answer preview stays
 	// unavailable.
 	APIKey string `json:"apiKey"`
+	// BaseURL is a custom API base URL, e.g. an OpenAI-compatible
+	// server; empty means "use the OPENAI_BASE_URL environment
+	// variable, if set", else the official endpoint
+	// (https://api.openai.com). Passed through verbatim; requests go
+	// to <baseUrl>/v1/responses (the Responses API).
+	BaseURL string `json:"baseUrl"`
 	// Model names the model answering (default "gpt-5-mini").
 	Model string `json:"model"`
 	// MaxOutputTokens caps one answer (default 1024).
@@ -445,6 +502,18 @@ func DefaultBangSigils() []string { return []string{"!", "/", "@"} }
 // filesystem, Everything-style ("/" on Linux/macOS, the system drive
 // on Windows), skip the virtual/volatile system trees plus the usual
 // noise (see migrate.go), no periodic rescan.
+// DefaultFrecency returns the default frecency ranking config.
+func DefaultFrecency() FrecencyConfig {
+	return FrecencyConfig{
+		HalfLifeDays:   DefaultFrecencyHalfLifeDays,
+		WeightFrecency: DefaultFrecencyWeight,
+		WeightRecency:  DefaultFrecencyWeight,
+		WeightCwd:      DefaultFrecencyWeight,
+		WeightNoise:    DefaultFrecencyWeight,
+		TierJumpCount:  DefaultFrecencyTierJump,
+	}
+}
+
 func Default() Config {
 	return Config{
 		Roots:                 defaultRoots(),
@@ -453,6 +522,7 @@ func Default() Config {
 		Hotkey:                DefaultHotkey,
 		RescanIntervalMinutes: 0,
 		MaxResults:            DefaultMaxResults,
+		Search:                SearchConfig{Frecency: DefaultFrecency()},
 		Theme:                 DefaultTheme,
 		Plugins:               PluginsConfig{Entries: map[string]PluginEntry{}},
 		Bangs:                 BangsConfig{Sigils: DefaultBangSigils(), Aliases: map[string]string{}},
@@ -549,16 +619,17 @@ func Save(c Config) error {
 // zero/negative knobs get their defaults (the firefox.frequentSites,
 // firefox.openTabs and preview numbers included, plus an empty
 // preview.openai.model; a negative watcher.sweepMinutes becomes 0 =
-// the built-in cadence), the window size gets its defaults when unset
-// and is clamped up to the minimum floors when set too small, an empty
-// theme name gets the default theme, watcher.backend is lowercased and
-// repaired to "auto" when empty or unknown, nil plugin entries and
-// bang aliases become empty maps, and an empty sigil list gets the
-// default sigils. The preview API keys are passed through verbatim,
-// untouched. Excludes are left as the user wrote them (an explicitly
-// empty list means "exclude nothing"), and so are
-// watcher.watchExcludes and watcher.maxWatches (negative = explicitly
-// unlimited).
+// the built-in cadence; the search.frecency numbers repair only
+// exact zeros -- negatives are the documented per-signal off switch
+// there), the window size gets its defaults when unset and is clamped
+// up to the minimum floors when set too small, an empty theme name
+// gets the default theme, watcher.backend is lowercased and repaired
+// to "auto" when empty or unknown, nil plugin entries and bang
+// aliases become empty maps, and an empty sigil list gets the default
+// sigils. The preview API keys are passed through verbatim, untouched.
+// Excludes are left as the user wrote them (an explicitly empty list
+// means "exclude nothing"), and so are watcher.watchExcludes and
+// watcher.maxWatches (negative = explicitly unlimited).
 func (c *Config) Normalize() {
 	if len(c.Roots) == 0 {
 		c.Roots = Default().Roots
@@ -624,6 +695,28 @@ func (c *Config) Normalize() {
 	}
 	if c.Firefox.OpenTabs.MaxResults <= 0 {
 		c.Firefox.OpenTabs.MaxResults = DefaultFirefoxTabsMaxResults
+	}
+	fr := &c.Search.Frecency
+	if fr.HalfLifeDays <= 0 {
+		fr.HalfLifeDays = DefaultFrecencyHalfLifeDays
+	}
+	// Weights and the tier-jump threshold repair only the EXACT zero
+	// value (absent from the JSON): negative values are the
+	// documented per-signal off switch and pass through.
+	if fr.WeightFrecency == 0 {
+		fr.WeightFrecency = DefaultFrecencyWeight
+	}
+	if fr.WeightRecency == 0 {
+		fr.WeightRecency = DefaultFrecencyWeight
+	}
+	if fr.WeightCwd == 0 {
+		fr.WeightCwd = DefaultFrecencyWeight
+	}
+	if fr.WeightNoise == 0 {
+		fr.WeightNoise = DefaultFrecencyWeight
+	}
+	if fr.TierJumpCount == 0 {
+		fr.TierJumpCount = DefaultFrecencyTierJump
 	}
 	w := &c.Window
 	switch {

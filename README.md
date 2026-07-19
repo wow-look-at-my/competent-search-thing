@@ -456,6 +456,60 @@ builtin sections) with `"search": { "fuzzyDisabled": true }` in
 [the configuration](#configuration); term splitting applies regardless
 of the toggle.
 
+## Ranking: frecency, recency and noise
+
+Text matching decides WHICH files surface; four additional signals
+decide how the matches ORDER, so the `log.txt` you just downloaded or
+keep opening beats the one buried 300 directories deep in `~/.cache`:
+
+- **Frecency (learned)**: every file you actually open through the bar
+  (Enter, Ctrl+Enter reveal, or a plugin `open_path` action) counts.
+  Counts decay with a 14-day half-life -- last month's habit still
+  matters, last quarter's does not. A file whose decayed count passes
+  `tierJumpCount` (default 3) competes one match tier up: the file you
+  always open as a substring match can outrank an untouched
+  prefix match, though never an exact match two tiers above.
+- **Recency (cold start)**: files with NO open history are ranked by
+  how recently the disk saw them touched -- `max(atime, mtime)`, so a
+  file just downloaded or just written floats up before the bar has
+  learned anything. The score is log-scaled (about 1.0 within the
+  hour, 0.5 after a day, 0.2 after a week, 0 past 30 days). Honesty
+  caveat: most modern Linux mounts use `relatime`, which updates atime
+  at most once a day (and only when older than mtime), so atime is a
+  COARSE signal; mtime still catches the important "just downloaded /
+  just written" cases. The stats run only over the few dozen
+  already-matched top candidates, budgeted at ~15ms and cached ~5
+  minutes -- never over the index.
+- **Working-directory proximity**: summoning the bar over a terminal
+  or editor boosts results in and under that app's working directory
+  (derived best-effort from the focused window's process tree:
+  `/proc` cwd links, with the terminal's foreground process
+  preferred). Linux-only today, and only where the focused window
+  yields a PID (X11 `_NET_WM_PID`; on Wayland the compositor decides
+  what is visible). Where no working directory can be derived, the
+  boost simply stays off -- never stale.
+- **Noise demotion**: paths under cache/temp/vcs directories
+  (`.cache`, `.git`, `node_modules`, `tmp`, ...), hidden directories,
+  and very deep nesting rank a little lower. A NUDGE, not a filter:
+  noisy paths still match and still surface when nothing cleaner
+  does, and opening one enough times outweighs the penalty.
+
+Signals only reorder the top candidates the text match already
+selected -- keystroke latency does not change (see
+[Performance](#performance) for the measured numbers). Everything is
+tunable under `search.frecency` in
+[the configuration](#configuration): `disabled` turns the whole blend
+off (exact pre-blend ordering), each `weight*` scales one signal, and
+a NEGATIVE weight (or `tierJumpCount`) turns just that signal off --
+`0` means "use the default", the config-wide zero-value convention.
+
+Privacy: the learned open counts live in
+`<configDir>/frecency.json` (next to `config.json`), capped at 4096
+paths (the lowest decayed counts are pruned), created with mode 0600.
+Delete the file to reset the learning; set
+`"search": { "frecency": { "disabled": true } }` to never record
+anything.
+
 ## Rewrite rules
 
 `rewrites` in [the configuration](#configuration) defines regex ->
@@ -558,7 +612,18 @@ The file is created with defaults on first run:
   "hotkey": "alt+space",
   "rescanIntervalMinutes": 0,
   "maxResults": 50,
-  "search": { "fuzzyDisabled": false },
+  "search": {
+    "fuzzyDisabled": false,
+    "frecency": {
+      "disabled": false,
+      "halfLifeDays": 14,
+      "weightFrecency": 1,
+      "weightRecency": 1,
+      "weightCwd": 1,
+      "weightNoise": 1,
+      "tierJumpCount": 3
+    }
+  },
   "watcher": { "maxWatches": 0, "sweepMinutes": 0, "sweepDisabled": false, "watchExcludes": [] },
   "theme": "dark",
   "plugins": { "disabled": false, "entries": {} },
@@ -587,8 +652,8 @@ The file is created with defaults on first run:
     "textMaxKB": 256,
     "imageMaxEdge": 800,
     "dirMaxEntries": 200,
-    "kagi": { "apiKey": "", "maxResults": 8 },
-    "openai": { "apiKey": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 }
+    "kagi": { "apiKey": "", "baseUrl": "", "maxResults": 8 },
+    "openai": { "apiKey": "", "baseUrl": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 }
   },
   "rewrites": [
     {
@@ -647,7 +712,15 @@ Field reference:
   `false`) turns the fuzzy (subsequence) name-match tier off, leaving
   exact/prefix/substring matching only -- see
   [Fuzzy matching](#fuzzy-matching). Exact, prefix, and substring
-  matches always rank above fuzzy ones either way.
+  matches always rank above fuzzy ones either way. `frecency`
+  configures the ranking blend described under
+  [Ranking](#ranking-frecency-recency-and-noise): `disabled` (default
+  `false`) turns the whole blend off; `halfLifeDays` (default 14) is
+  the open-count decay; `weightFrecency`, `weightRecency`,
+  `weightCwd`, `weightNoise` (default 1 each) scale the four signals;
+  `tierJumpCount` (default 3) is the decayed-open-count threshold for
+  competing one match tier up. For every frecency number, `0` means
+  "use the default" and a NEGATIVE value turns that one signal off.
 - `watcher` -- the live-watch layer: `backend` (`auto` | `fanotify` =
   strict, no inotify fallback | `inotify`; unset means `auto`),
   `maxWatches` (hot-set budget; 0 =
@@ -736,7 +809,11 @@ Field reference:
   `OPENAI_API_KEY` environment variables work too) enabling the
   explicit-trigger web-search and answer previews; `kagi.maxResults`
   (default 8), `openai.model` (default `gpt-5-mini`) and
-  `openai.maxOutputTokens` (default 1024) tune them. Zero or negative
+  `openai.maxOutputTokens` (default 1024) tune them. `kagi.baseUrl` /
+  `openai.baseUrl` point either provider at a compatible server
+  (empty = the official endpoint; an empty `openai.baseUrl` also
+  honors `OPENAI_BASE_URL`); both pass through verbatim and are never
+  logged. Zero or negative
   numbers and an empty model are repaired to the defaults. See
   [Preview pane](#preview-pane).
 
@@ -1809,8 +1886,10 @@ Off by default; enable it in `config.json`:
 
 With the pane enabled the window opens at `preview.windowWidth` x
 `preview.windowHeight` (defaults 1600 x 800, read once at startup):
-the classic 680-wide results column stays on the left, exactly as
-before, and the pane fills the remaining width behind a divider. With
+the results column stays on the left at the flag-off bar width -- it
+follows `window.width` (default 780), so it renders exactly as the
+bar would without the pane -- and the pane fills the remaining width
+behind a divider. With
 the pane disabled the window is the configured `window.width` x
 `window.height` (defaults 780 x 550 -- see
 [Configuration](#configuration)) and none of this exists -- no pane
@@ -1855,20 +1934,41 @@ calls out to the network by itself. Each provider needs its API key:
   `preview.openai.model` (default `gpt-5-mini`) and
   `preview.openai.maxOutputTokens` (default 1024) shape the answer.
 
+Both endpoints are configurable for self-hosted or compatible
+servers -- empty (the default) means the official endpoint:
+
+- `preview.kagi.baseUrl` (config only, no environment fallback):
+  searches go to `<baseUrl>/api/v1/search`, so the target must speak
+  the Kagi Search API.
+- `preview.openai.baseUrl`, or the `OPENAI_BASE_URL` environment
+  variable (the SDK convention; the config value wins): answers go to
+  `<baseUrl>/v1/responses`, so the target must implement the OpenAI
+  RESPONSES API -- pointing it at a server that only offers
+  `/v1/chat/completions` will not work.
+
+One trailing `/` on a base URL is trimmed. A value that is not
+`http(s)` with a host is rejected: the provider stays unavailable and
+the fetch answers with a terse error naming the knob
+(`kagi: invalid baseUrl (preview.kagi.baseUrl)` / `openai: invalid
+baseUrl (preview.openai.baseUrl / OPENAI_BASE_URL)`) -- never the
+configured value, which may carry credentials.
+
 The keys are passed through verbatim and NEVER logged or exposed to
 the page -- the frontend only learns "configured or not", and an
 unconfigured provider's button renders disabled with a hint naming
 the config key.
 
 Web searches go to the Kagi Search API (v1: `GET
-https://kagi.com/api/v1/search`, `Authorization: Bot <key>`). Repeat
+<baseUrl>/api/v1/search`, default base `https://kagi.com`,
+`Authorization: Bot <key>`). Repeat
 queries are served from a 15-minute in-memory cache (marked `cached`
 in the pane, zero network), and a client-side courtesy rate limit --
 a burst of 3 requests refilling at 1 per second -- fails fast with
 "rate limited, retry shortly" instead of dialing. Searches time out
 hard at 10 seconds.
 
-AI answers go to the OpenAI Responses API (`POST /v1/responses` with
+AI answers go to the OpenAI Responses API (`POST
+<baseUrl>/v1/responses`, default base `https://api.openai.com`, with
 your `model` and `maxOutputTokens`; answers cut off by the token cap
 end with a `[truncated by max_output_tokens]` marker line). Answers
 are cached PERSISTENTLY in `<configDir>/aicache.json` -- up to 128

@@ -74,6 +74,13 @@ export function initPreview(
   fileTpl = document.getElementById("tpl-icon-file") as HTMLTemplateElement;
 
   document.body.classList.add("with-preview");
+  // The left results column keeps the flag-off bar width (config
+  // window.width) instead of a hardcoded 680px: the grid consumes
+  // this custom property (the --plugin-accent precedent -- a custom
+  // property, never an inline width style).
+  if (cfg.resultsWidth > 0) {
+    document.body.style.setProperty("--preview-results-col", `${cfg.resultsWidth}px`);
+  }
 
   configureTrigger(webBtn, kagiConfigured, "preview.kagi.apiKey (or KAGI_API_KEY)");
   configureTrigger(aiBtn, openaiConfigured, "preview.openai.apiKey (or OPENAI_API_KEY)");

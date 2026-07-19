@@ -107,6 +107,68 @@
           "type": "boolean",
           "default": false,
           "description": "true turns the fuzzy (subsequence) name-match tier off, leaving exact/prefix/substring matching only. The default keeps fuzzy matching on; exact, prefix, and substring matches always rank above fuzzy ones either way (see the README's 'Fuzzy matching')."
+        },
+        "frecency": {
+          "$ref": "#/$defs/frecencyConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "frecencyConfig": {
+      "title": "Frecency ranking blend configuration",
+      "description": "Tunes how learned open counts, on-disk recency, focused-app working-directory proximity, and location noise blend into result ranking (see the README's 'Ranking: frecency, recency and noise'). Numeric convention: omit a knob for its default; a NEGATIVE weight (or tierJumpCount) explicitly disables that one signal. The literal 0 is rejected here because the app would silently repair it to the default -- write the default explicitly or a negative to disable.",
+      "type": "object",
+      "properties": {
+        "disabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "true turns the whole blend off: no open counts are recorded or loaded, no recency stats run, and result ordering is exactly the pre-blend engine's."
+        },
+        "halfLifeDays": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 14,
+          "description": "How long a recorded open takes to count half as much, in days."
+        },
+        "weightFrecency": {
+          "type": "number",
+          "not": {
+            "const": 0
+          },
+          "default": 1.0,
+          "description": "Scales the decayed open count of files opened through the bar. Negative disables the signal."
+        },
+        "weightRecency": {
+          "type": "number",
+          "not": {
+            "const": 0
+          },
+          "default": 1.0,
+          "description": "Scales the cold-start recency score (0..1) of files never opened through the bar, from the disk's max(atime, mtime). Negative disables the signal."
+        },
+        "weightCwd": {
+          "type": "number",
+          "not": {
+            "const": 0
+          },
+          "default": 1.0,
+          "description": "Scales the focused-app working-directory proximity boost. Negative disables the signal."
+        },
+        "weightNoise": {
+          "type": "number",
+          "not": {
+            "const": 0
+          },
+          "default": 1.0,
+          "description": "Scales the location-noise penalty (0..1) demoting cache/temp/vcs trees. Negative disables the signal."
+        },
+        "tierJumpCount": {
+          "type": "number",
+          "not": {
+            "const": 0
+          },
+          "default": 3.0,
+          "description": "Decayed-open-count threshold past which a result competes one match tier up. Negative disables tier jumping."
         }
       },
       "additionalProperties": false
@@ -379,6 +441,11 @@
           "default": "",
           "description": "SECRET: the Kagi Search API token. Passed through verbatim and never logged; keep config.json private when set. Empty means 'use the KAGI_API_KEY environment variable, if set'; with neither, the web-search preview stays unavailable."
         },
+        "baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Custom API base URL, e.g. a self-hosted Kagi-compatible server; empty = the official endpoint (https://kagi.com). No environment fallback. Requests go to <baseUrl>/api/v1/search; a non-http(s) or host-less value leaves the provider unavailable with an error naming this key."
+        },
         "maxResults": {
           "type": "integer",
           "minimum": 1,
@@ -396,6 +463,11 @@
           "type": "string",
           "default": "",
           "description": "SECRET: the OpenAI API key. Passed through verbatim and never logged; keep config.json private when set. Empty means 'use the OPENAI_API_KEY environment variable, if set'; with neither, the answer preview stays unavailable."
+        },
+        "baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Custom API base URL, e.g. an OpenAI-compatible server; empty means 'use the OPENAI_BASE_URL environment variable, if set', else the official endpoint (https://api.openai.com). Requests go to <baseUrl>/v1/responses (the target must implement the Responses API); a non-http(s) or host-less value leaves the provider unavailable with an error naming this key."
         },
         "model": {
           "type": "string",
@@ -508,7 +580,16 @@
       "rescanIntervalMinutes": 0,
       "maxResults": 50,
       "search": {
-        "fuzzyDisabled": false
+        "fuzzyDisabled": false,
+        "frecency": {
+          "disabled": false,
+          "halfLifeDays": 14,
+          "weightFrecency": 1.0,
+          "weightRecency": 1.0,
+          "weightCwd": 1.0,
+          "weightNoise": 1.0,
+          "tierJumpCount": 3.0
+        }
       },
       "watcher": {
         "maxWatches": 0,

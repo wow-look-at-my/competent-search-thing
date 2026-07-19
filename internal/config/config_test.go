@@ -497,6 +497,56 @@ func TestFirefoxConfig(t *testing.T) {
 	require.Equal(t, "/tabs/profile", got.Firefox.OpenTabs.ProfileDir)
 }
 
+func TestFrecencyConfig(t *testing.T) {
+	setConfigDir(t)
+	require.Equal(t, FrecencyConfig{
+		HalfLifeDays:   14,
+		WeightFrecency: 1.0,
+		WeightRecency:  1.0,
+		WeightCwd:      1.0,
+		WeightNoise:    1.0,
+		TierJumpCount:  3.0,
+	}, Default().Search.Frecency)
+
+	// A config predating the frecency block normalizes to the defaults.
+	var c Config
+	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
+	c.Normalize()
+	require.Equal(t, DefaultFrecency(), c.Search.Frecency)
+
+	// Exact zeros are repaired; NEGATIVE values are the documented
+	// per-signal off switch and pass through untouched -- except the
+	// half-life, which has no off meaning and repairs on <= 0.
+	c = Config{Search: SearchConfig{Frecency: FrecencyConfig{
+		Disabled:       true,
+		HalfLifeDays:   -2,
+		WeightFrecency: 0,
+		WeightRecency:  -1,
+		WeightCwd:      2.5,
+		WeightNoise:    0,
+		TierJumpCount:  -1,
+	}}}
+	c.Normalize()
+	fr := c.Search.Frecency
+	require.True(t, fr.Disabled, "the kill switch is never touched")
+	require.Equal(t, float64(DefaultFrecencyHalfLifeDays), fr.HalfLifeDays)
+	require.Equal(t, DefaultFrecencyWeight, fr.WeightFrecency)
+	require.Equal(t, -1.0, fr.WeightRecency, "negative weight = off, preserved")
+	require.Equal(t, 2.5, fr.WeightCwd)
+	require.Equal(t, DefaultFrecencyWeight, fr.WeightNoise)
+	require.Equal(t, -1.0, fr.TierJumpCount, "negative tier jump = off, preserved")
+
+	// The block round-trips through Save/Load.
+	in := Default()
+	in.Search.Frecency.HalfLifeDays = 7
+	in.Search.Frecency.TierJumpCount = 5
+	require.NoError(t, Save(in))
+	got, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 7.0, got.Search.Frecency.HalfLifeDays)
+	require.Equal(t, 5.0, got.Search.Frecency.TierJumpCount)
+}
+
 func TestPreviewConfig(t *testing.T) {
 	setConfigDir(t)
 	require.Equal(t, PreviewConfig{
@@ -518,7 +568,11 @@ func TestPreviewConfig(t *testing.T) {
 	require.Equal(t, DefaultPreview(), c.Preview)
 
 	// Zero and negative knobs and an empty model are repaired; real
-	// values -- the API keys verbatim included -- survive.
+	// values -- the API keys and base URLs verbatim included --
+	// survive. The base URLs are passthrough like the Firefox
+	// profileDirs: Normalize never touches them (validation happens at
+	// the consumer), and an odd spelling -- trailing slash included --
+	// survives byte-for-byte.
 	c = Config{Preview: PreviewConfig{
 		Enabled:       true,
 		WindowWidth:   0,
@@ -526,8 +580,17 @@ func TestPreviewConfig(t *testing.T) {
 		TextMaxKB:     512,
 		ImageMaxEdge:  0,
 		DirMaxEntries: 50,
-		Kagi:          PreviewKagiConfig{APIKey: "kagi-secret", MaxResults: 0},
-		OpenAI:        PreviewOpenAIConfig{APIKey: "sk-secret", Model: "", MaxOutputTokens: -5},
+		Kagi: PreviewKagiConfig{
+			APIKey:     "kagi-secret",
+			BaseURL:    "https://kagi.internal.example/",
+			MaxResults: 0,
+		},
+		OpenAI: PreviewOpenAIConfig{
+			APIKey:          "sk-secret",
+			BaseURL:         "not even a url",
+			Model:           "",
+			MaxOutputTokens: -5,
+		},
 	}}
 	c.Normalize()
 	require.True(t, c.Preview.Enabled)
@@ -537,8 +600,10 @@ func TestPreviewConfig(t *testing.T) {
 	require.Equal(t, DefaultPreviewImageMaxEdge, c.Preview.ImageMaxEdge)
 	require.Equal(t, 50, c.Preview.DirMaxEntries)
 	require.Equal(t, "kagi-secret", c.Preview.Kagi.APIKey, "the key is never touched")
+	require.Equal(t, "https://kagi.internal.example/", c.Preview.Kagi.BaseURL, "the base URL is never touched")
 	require.Equal(t, DefaultPreviewKagiMax, c.Preview.Kagi.MaxResults)
 	require.Equal(t, "sk-secret", c.Preview.OpenAI.APIKey, "the key is never touched")
+	require.Equal(t, "not even a url", c.Preview.OpenAI.BaseURL, "the base URL is never touched")
 	require.Equal(t, DefaultPreviewOpenAIModel, c.Preview.OpenAI.Model)
 	require.Equal(t, DefaultPreviewOpenAITokens, c.Preview.OpenAI.MaxOutputTokens)
 

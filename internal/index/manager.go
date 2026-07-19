@@ -27,6 +27,7 @@ type Manager struct {
 	excludes      []string
 	maxResults    int
 	fuzzyDisabled bool
+	blend         *Blend
 }
 
 // NewManager creates a Manager with an empty store. maxResults <= 0
@@ -84,6 +85,25 @@ func (m *Manager) SetFuzzyDisabled(disabled bool) {
 	m.fuzzyDisabled = disabled
 }
 
+// SetBlend swaps the frecency ranking blend subsequent queries use
+// (see blend.go). The Blend is treated as immutable from here on --
+// callers hand over a fresh copy to change anything (the focused-app
+// cwd changes per summon). Nil, or an inactive blend, keeps the
+// ranking byte-identical to the pre-blend engine.
+func (m *Manager) SetBlend(b *Blend) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.blend = b
+}
+
+// Blend returns the blend subsequent queries use (diagnostics and
+// tests); nil when none was set.
+func (m *Manager) Blend() *Blend {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.blend
+}
+
 // Query searches the live store. limit <= 0 selects the configured
 // default. Returns nil when nothing matches.
 func (m *Manager) Query(q string, limit int) []Result {
@@ -92,7 +112,7 @@ func (m *Manager) Query(q string, limit int) []Result {
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.store.QueryWith(q, limit, QueryOptions{FuzzyDisabled: m.fuzzyDisabled})
+	return m.store.QueryWith(q, limit, QueryOptions{FuzzyDisabled: m.fuzzyDisabled, Blend: m.blend})
 }
 
 // Add inserts or refreshes one entry (watcher pass-through).
