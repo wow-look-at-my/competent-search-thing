@@ -178,9 +178,10 @@ func summonReply(e *env, rep ipc.Reply) error {
 // checkReply maps a parsed IPC reply to a subcommand result. A
 // not-ready reply counts as success: the instance is booting and
 // shows the bar itself once the frontend is ready. The reply parsing
-// itself -- JSON, legacy, or the old-daemon fallback -- lives
-// entirely in ipc.Send; this layer only maps outcomes to exit
-// behavior.
+// itself lives entirely in ipc.Send; this layer only maps outcomes
+// to exit behavior (a non-JSON reply -- e.g. from a still-running
+// pre-JSON daemon -- arrives in-band via Raw and lands in the
+// unexpected-reply error below).
 func checkReply(rep ipc.Reply) error {
 	if rep.OK || rep.NotReady() {
 		return nil
