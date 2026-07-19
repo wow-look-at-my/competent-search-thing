@@ -181,6 +181,10 @@ type App struct {
 	// is the earliest point every platform has a native window to
 	// configure.
 	panelOnce sync.Once
+	// spaceOnce guards the one-time dismiss-on-Space-change arming
+	// (darwin; the plat.watchSpaceChanges seam is nil elsewhere) --
+	// see startSpaceWatch in window.go.
+	spaceOnce sync.Once
 
 	// sessionOnce caches desktop session detection (hotkey backend
 	// selection, the Wayland show path, and the open-windows provider
@@ -220,6 +224,14 @@ type App struct {
 
 	trayOnce sync.Once
 	newTray  func() trayHandle
+
+	// Icon resolution (see icons.go in this package): the resolver
+	// behind the bound ResolveIcons method. newIcons is a seam over
+	// buildIcons so unit tests resolve nothing.
+	iconsOnce sync.Once
+	newIcons  func() iconResolver
+	iconsMu   sync.Mutex
+	icons     iconResolver
 
 	// System-stats sampler (see stats.go in this package): the running
 	// source and the cancel func bounding its goroutines. newStats is
@@ -296,6 +308,7 @@ func New(m *index.Manager, opt Options) *App {
 	a.newTray = a.buildTray
 	a.newStats = a.buildStats
 	a.newProgress = a.buildProgress
+	a.newIcons = a.buildIcons
 	return a
 }
 
@@ -343,8 +356,10 @@ func (a *App) Startup(ctx context.Context) {
 	})
 	a.launchOnce.Do(a.announceLaunch)
 	a.hkOnce.Do(a.registerHotkey)
+	a.spaceOnce.Do(a.startSpaceWatch)
 	a.trayOnce.Do(a.startTray)
 	a.statsOnce.Do(a.startStats)
+	a.iconsOnce.Do(a.startIcons)
 	a.pluginOnce.Do(a.startPlugins)
 	a.previewOnce.Do(a.startPreview)
 	a.histOnce.Do(a.startHistory)

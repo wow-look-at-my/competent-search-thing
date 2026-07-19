@@ -55,11 +55,16 @@ type AppInfo struct {
 	PID   int    `json:"pid"`
 }
 
-// InstalledApp describes one installed application.
+// InstalledApp describes one installed application. Icon is the
+// platform icon ref (a .desktop Icon= value on linux, the absolute
+// .app bundle path on darwin, empty on windows) the builtin app
+// sources turn into a Result.IconKey; plugins receiving it in their
+// request context may ignore it.
 type InstalledApp struct {
 	Name string `json:"name"`
 	Exec string `json:"exec"`
 	ID   string `json:"id"`
+	Icon string `json:"icon,omitempty"`
 }
 
 // Response is a plugin's reply to a Request. A zero V is treated as
@@ -76,9 +81,17 @@ type Response struct {
 // canonical tier band on every emitted row: a plugin's self-score is
 // only ever an intra-tier hint, never the wire score.
 type Result struct {
-	Title       string   `json:"title"`
-	Subtitle    string   `json:"subtitle,omitempty"`
-	Icon        string   `json:"icon,omitempty"`
+	Title    string `json:"title"`
+	Subtitle string `json:"subtitle,omitempty"`
+	Icon     string `json:"icon,omitempty"`
+	// IconKey is INTERNAL-ONLY (trusted builtin sources): an icon
+	// resolution key ("app:<ref>") the frontend hands to the bound
+	// ResolveIcons method for a real icon image, keeping Icon's glyph
+	// while it resolves (or when it misses). SanitizeResponse clears
+	// it on every external result -- image-icon resolution is a
+	// trusted-source capability, external plugins keep the
+	// builtin-name/glyph icon contract.
+	IconKey     string   `json:"iconKey,omitempty"`
 	Badge       string   `json:"badge,omitempty"`
 	AccentColor string   `json:"accent_color,omitempty"`
 	Score       *float64 `json:"score,omitempty"`
@@ -210,6 +223,9 @@ func sanitizeResult(r Result, idx int, allowRunCommand bool) (clean Result, reas
 	r.Subtitle = truncateRunes(stripControl(r.Subtitle), maxSubtitleRunes)
 	r.Badge = truncateRunes(stripControl(r.Badge), maxBadgeRunes)
 	r.Icon = sanitizeIcon(r.Icon)
+	// Internal-only: image-icon resolution is reserved for trusted
+	// builtin sources (the Action.DesktopID precedent).
+	r.IconKey = ""
 	if r.AccentColor != "" && !accentColorRe.MatchString(r.AccentColor) {
 		r.AccentColor = ""
 	}

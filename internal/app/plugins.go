@@ -185,7 +185,7 @@ func (a *App) installedApps() []plugin.InstalledApp {
 	}
 	out := make([]plugin.InstalledApp, len(s.Installed))
 	for i, ia := range s.Installed {
-		out[i] = plugin.InstalledApp{Name: ia.Name, Exec: ia.Exec, ID: ia.ID}
+		out[i] = plugin.InstalledApp{Name: ia.Name, Exec: ia.Exec, ID: ia.ID, Icon: ia.Icon}
 	}
 	return out
 }

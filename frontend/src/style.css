@@ -334,6 +334,17 @@ body {
   text-align: center;
 }
 
+/* A resolved real app icon (render.ts swaps the glyph for an <img>
+   whose src is a Go-minted data URI). Sized to the glyph slot;
+   object-fit keeps non-square sources honest. */
+.plugin-icon-img {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 0 auto;
+  object-fit: contain;
+}
+
 .plugin-title .hl {
   /* Per-character match highlight: LETTER COLOR ONLY (same rule as
      .result .name .hl) -- never a background rectangle. The token is

@@ -48,7 +48,10 @@ func (p *appsProvider) candidates(_ context.Context, req Request) ([]match.Candi
 // the match field is the app NAME, entries whose Exec parses to
 // nothing launchable are dropped, and every row launches its app via
 // a run_command action carrying the parsed .desktop Exec argv. No
-// scores, no filtering -- the engine owns both.
+// scores, no filtering -- the engine owns both. An installed app with
+// an icon ref additionally carries the internal-only IconKey
+// ("app:<ref>") so the frontend can swap the glyph for the real app
+// icon once ResolveIcons answers.
 func appCandidates(installed []InstalledApp) []match.Candidate {
 	out := make([]match.Candidate, 0, len(installed))
 	for _, a := range installed {
@@ -57,16 +60,20 @@ func appCandidates(installed []InstalledApp) []match.Candidate {
 			continue // nothing launchable
 		}
 		exec := strings.Join(argv, " ")
+		res := Result{
+			Title:    a.Name,
+			Subtitle: exec,
+			Icon:     "app",
+			Action:   &Action{Type: ActionRunCommand, Argv: argv, DesktopID: a.ID},
+		}
+		if a.Icon != "" {
+			res.IconKey = "app:" + a.Icon
+		}
 		out = append(out, match.Candidate{
 			Display: a.Name,
 			Texts:   []string{a.Name},
 			SortKey: exec,
-			Payload: Result{
-				Title:    a.Name,
-				Subtitle: exec,
-				Icon:     "app",
-				Action:   &Action{Type: ActionRunCommand, Argv: argv, DesktopID: a.ID},
-			},
+			Payload: res,
 		})
 	}
 	return out

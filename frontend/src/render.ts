@@ -259,6 +259,98 @@ export function iconGlyph(icon: string | undefined): string {
   return iconGlyphs.get(icon) ?? DEFAULT_GLYPH;
 }
 
+/* --- resolved icon images ------------------------------------------ */
+
+// Rows whose result carries an iconKey (builtin app sources only; the
+// sanitizer strips it from external plugins) render their glyph
+// immediately and swap to the real icon once the batched ResolveIcons
+// answer arrives. Requests batch per render tick via queueMicrotask,
+// answers are cached frontend-side (misses too) so held keystrokes
+// re-render without IPC churn, and a row replaced before its answer
+// lands is simply skipped (isConnected). The <img> is built as a DOM
+// node with a data:-URI src assigned as a property -- NOT a markup
+// sink; the no-innerHTML rule is untouched.
+
+// ICON_SIZE is the physical pixel size requested from Go: the row
+// icon renders at 16 CSS px, and 64 stays crisp on HiDPI while small
+// enough that data URIs stay a few KB.
+const ICON_SIZE = 64;
+
+const iconUriCache = new Map<string, string>(); // key -> data URI ("" = known miss)
+let pendingIconEls = new Map<string, HTMLSpanElement[]>();
+let iconFlushQueued = false;
+
+// setIconImage swaps a glyph span's content for the resolved image.
+function setIconImage(el: HTMLSpanElement, uri: string): void {
+  const img = document.createElement("img");
+  img.className = "plugin-icon-img";
+  img.alt = "";
+  img.draggable = false;
+  img.src = uri;
+  el.replaceChildren(img);
+}
+
+// requestIcon resolves key into el: synchronously from the cache, or
+// via the next batch (the glyph already in el stands meanwhile).
+function requestIcon(el: HTMLSpanElement, key: string): void {
+  const cached = iconUriCache.get(key);
+  if (cached !== undefined) {
+    if (cached !== "") {
+      setIconImage(el, cached);
+    }
+    return;
+  }
+  const els = pendingIconEls.get(key);
+  if (els !== undefined) {
+    els.push(el);
+  } else {
+    pendingIconEls.set(key, [el]);
+  }
+  if (!iconFlushQueued) {
+    iconFlushQueued = true;
+    queueMicrotask(flushIconRequests);
+  }
+}
+
+// flushIconRequests ships one batch of pending keys to Go and fills
+// the rows in as the answer arrives. Resolution failures (no binding
+// yet, resolver unavailable) leave the glyphs standing.
+function flushIconRequests(): void {
+  iconFlushQueued = false;
+  const batch = pendingIconEls;
+  pendingIconEls = new Map();
+  if (batch.size === 0) {
+    return;
+  }
+  const app = window.go?.app.App;
+  if (app === undefined) {
+    return;
+  }
+  const keys = [...batch.keys()];
+  app
+    .ResolveIcons(keys, ICON_SIZE)
+    .then((resolved) => {
+      if (iconUriCache.size > 512) {
+        iconUriCache.clear(); // crude bound; keys are per-app, small
+      }
+      for (const key of keys) {
+        const uri = resolved?.[key] ?? "";
+        iconUriCache.set(key, uri);
+        if (uri === "") {
+          continue; // known miss: the glyph stands
+        }
+        for (const el of batch.get(key) ?? []) {
+          if (el.isConnected) {
+            setIconImage(el, uri);
+          }
+        }
+      }
+    })
+    .catch(() => {
+      /* resolver unavailable: glyphs stand, keys stay uncached */
+    });
+}
+
 // resultScore mirrors the Go sanitizer's default score.
 function resultScore(r: PluginResult): number {
   return r.score ?? 50;
@@ -321,8 +413,11 @@ function buildPluginRow(
   const rowFrag = pluginRowTpl.content.cloneNode(true) as DocumentFragment;
   const row = rowFrag.firstElementChild as HTMLDivElement;
 
-  (row.querySelector(".plugin-icon") as HTMLSpanElement).textContent =
-    iconGlyph(result.icon);
+  const iconEl = row.querySelector(".plugin-icon") as HTMLSpanElement;
+  iconEl.textContent = iconGlyph(result.icon);
+  if (result.iconKey !== undefined && result.iconKey !== "") {
+    requestIcon(iconEl, result.iconKey);
+  }
   appendHighlighted(
     row.querySelector(".plugin-title") as HTMLSpanElement,
     result.title,

@@ -171,6 +171,17 @@ func TestSanitizeIconRules(t *testing.T) {
 	}
 }
 
+func TestSanitizeClearsIconKey(t *testing.T) {
+	// IconKey is a trusted-builtin-source capability (the
+	// Action.DesktopID precedent): an external plugin smuggling one is
+	// silently cleared while the rest of the result survives.
+	r := Result{Title: "t", Icon: "app", IconKey: "app:/Applications/Evil.app"}
+	results, _ := SanitizeResponse(&Response{Results: []Result{r}}, false)
+	require.Len(t, results, 1)
+	require.Empty(t, results[0].IconKey)
+	require.Equal(t, "app", results[0].Icon)
+}
+
 func TestSanitizeAccentColor(t *testing.T) {
 	tests := []struct {
 		color string

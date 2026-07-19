@@ -57,6 +57,11 @@ interface PluginResult {
   title: string; // always non-empty
   subtitle?: string;
   icon?: string; // builtin icon name [a-z0-9_-]+ OR literal glyph/emoji
+  // INTERNAL-ONLY icon-resolution key ("app:<ref>"), stamped by
+  // trusted builtin sources and stripped from external plugins by the
+  // Go sanitizer: render.ts batches visible keys through ResolveIcons
+  // and swaps the glyph for the resolved image; misses keep the glyph.
+  iconKey?: string;
   badge?: string;
   accent_color?: string; // "#rgb" | "#rrggbb" -- ONLY ever sets --plugin-accent
   score?: number; // 0..100; in practice always present (engine-minted)
@@ -212,6 +217,12 @@ interface WailsAppBindings {
   // Record one executed query (called after an activation actually
   // ran; Go trims it, skips blanks, and dedups exact repeats).
   AddHistory(entry: string): Promise<void>;
+  // Icon resolution (internal/app icons.go over internal/icons):
+  // maps icon keys ("app:<ref>") to data URIs at the wanted physical
+  // pixel size; keys that miss are absent (never null Go-side;
+  // render.ts still tolerates it defensively). Batched per render
+  // tick -- rows keep their glyph until the answer lands.
+  ResolveIcons(keys: string[], size: number): Promise<Record<string, string>>;
   // Resolved theme tokens: every internal/theme.TokenNames key mapped
   // to a validated CSS value (theme.ts sets each as --sb-<key>).
   GetTheme(): Promise<Record<string, string>>;

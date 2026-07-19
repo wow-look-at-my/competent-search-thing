@@ -234,6 +234,10 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// No real /proc walks: the frecency cwd derivation stays inert
 	// unless a test injects a fake process tree.
 	a.plat.procTree = nil
+	// No real NSWorkspace observers (the seam is non-nil when the
+	// darwin CI job builds the production seams); Space-watch tests
+	// inject a recording fake.
+	a.plat.watchSpaceChanges = nil
 	// No config.json or plugins-dir IO in unit tests; tests that
 	// exercise the real builder restore a.buildRegistry explicitly.
 	a.newRegistry = func() dispatcher { return nil }
@@ -244,6 +248,9 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// nothing. Stats tests inject a recording fake (or restore
 	// a.buildStats explicitly).
 	a.newStats = func() statsSource { return nil }
+	// No icon-theme detection (gsettings exec) or disk lookups:
+	// ResolveIcons answers empty maps. Icon tests inject a fake.
+	a.newIcons = func() iconResolver { return nil }
 	// The progress printer is inert: non-TTY (never intercepts the
 	// global log output), io.Discard target, dropped non-TTY lines.
 	// Progress tests inject recording printers.

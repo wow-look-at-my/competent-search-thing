@@ -26,7 +26,14 @@ import (
 //	  a whole-filesystem walk without it indexes almost half the disk
 //	  twice. Same default-shaped gate and stamp-only fallback as v3;
 //	  a no-op on every other OS.
-const currentRootsVersion = 4
+//	5 -- the macOS noise excludes (see darwinNoiseExcludesFor):
+//	  unambiguous cache/derived/temp trees (Caches, Xcode DerivedData,
+//	  code-signature manifests, /private/var/folders). Same
+//	  default-shaped gate and stamp-only fallback as v3/v4; a no-op on
+//	  every other OS. Deliberately a NEW version step rather than an
+//	  extension of v4: configs already stamped 4 by a v4-era build
+//	  must still receive it.
+const currentRootsVersion = 5
 
 // baseExcludes returns the name-based exclude patterns every platform
 // defaults to. A fresh slice on every call so callers may append.
@@ -94,13 +101,34 @@ func firmlinkExcludesFor(goos string) []string {
 	return []string{"/System/Volumes/Data"}
 }
 
+// darwinNoiseExcludesFor returns the macOS noise exclude patterns for
+// goos, added in rootsVersion 5: the base-name cache and
+// code-signature trees (Caches -- ~/Library/Caches and every app's
+// cache dir; DerivedData -- Xcode's build products; _CodeSignature
+// and CodeResources -- per-bundle signature manifests, thousands of
+// identically-named entries with zero search value) plus
+// /private/var/folders, macOS's real per-user temp tree (the /tmp and
+// /var/tmp system excludes cover only the symlinked spellings). goos
+// is a parameter so tests cover the darwin shape headlessly (the
+// defaultRootsFor convention). Deliberately NOT here: wholesale
+// .app/.framework bundle-internals exclusion and Application Support
+// filtering -- those change user-visible search semantics and need an
+// owner decision. A fresh slice on every call so callers may append.
+func darwinNoiseExcludesFor(goos string) []string {
+	if goos != "darwin" {
+		return nil
+	}
+	return []string{"Caches", "DerivedData", "_CodeSignature", "CodeResources", "/private/var/folders"}
+}
+
 // defaultExcludes returns the full default exclude set for this
 // process: the base name patterns, the high-churn noise patterns,
-// then the GOOS's system patterns and firmlink-dedup patterns.
+// then the GOOS's system, firmlink-dedup, and macOS noise patterns.
 func defaultExcludes() []string {
 	ex := append(baseExcludes(), noiseExcludes()...)
 	ex = append(ex, systemExcludesFor(runtime.GOOS)...)
-	return append(ex, firmlinkExcludesFor(runtime.GOOS)...)
+	ex = append(ex, firmlinkExcludesFor(runtime.GOOS)...)
+	return append(ex, darwinNoiseExcludesFor(runtime.GOOS)...)
 }
 
 // legacyDefaultRoots returns the pre-v2 default root set -- the user's
@@ -131,6 +159,8 @@ func legacyDefaultRoots() []string {
 // left untouched and only announced. The v4 step: the same policy for
 // the macOS firmlink-dedup exclude (firmlinkExcludesFor) -- on any
 // other OS the step has nothing to add and only the stamp advances.
+// The v5 step: the same policy again for the macOS noise excludes
+// (darwinNoiseExcludesFor).
 // Patterns the user wrote are never touched or reordered either way.
 // Every user-visible change is recorded in MigrationNotes for the app
 // to log loudly at startup -- the index scope never changes silently.
@@ -188,6 +218,21 @@ func (c *Config) migrateRootsFor(goos string) bool {
 			c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
 				"a new default exclude exists (%s, the macOS firmlink duplicate view of /Users, /Applications, ...) but your customized exclude list was left unchanged",
 				strings.Join(fl, ", ")))
+		}
+	}
+	// v5: the macOS noise excludes, same default-shaped gate and
+	// non-darwin no-op as v4.
+	if dn := darwinNoiseExcludesFor(goos); c.RootsVersion < 5 && len(dn) > 0 {
+		if c.hasAllBaseExcludes() {
+			if added := c.mergeExcludes(dn); len(added) > 0 {
+				c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
+					"macOS noise exclude patterns added: %s (app caches, Xcode build products, code-signature manifests, and the real temp tree); remove any of them in config.json to index those trees",
+					strings.Join(added, ", ")))
+			}
+		} else {
+			c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
+				"new default exclude patterns exist (%s, the macOS cache/derived/temp noise set) but your customized exclude list was left unchanged",
+				strings.Join(dn, ", ")))
 		}
 	}
 	c.RootsVersion = currentRootsVersion
