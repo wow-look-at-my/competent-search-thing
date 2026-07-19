@@ -143,6 +143,14 @@ jobs:
           cgo: 'true'
           timeout: '30'
 
+      - name: GUI smoke (window + IPC round-trip)
+        # Non-gating while the macOS summon fix iterates on this branch;
+        # flipped to a hard gate before merge.
+        continue-on-error: true
+        uses: wow-look-at-my/actions@typescript#latest
+        with:
+          file: .github/scripts/darwin-smoke.ts
+
       - name: Hand off the darwin binary to the publish job
         # Same org-standard cache hand-off the linux job uses.
         uses: wow-look-at-my/actions@cache-upload#latest
