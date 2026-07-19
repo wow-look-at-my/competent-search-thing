@@ -14,8 +14,8 @@
 // shape, anything else takes the legacy (v1) path byte-for-byte.
 //
 // JSON (v2), what Send speaks: the request is one JSON object,
-// {"cmd":"toggle"} -- cmds toggle, show, hide, version, ping -- and
-// the response is one JSON object:
+// {"cmd":"toggle"} -- cmds toggle, show, hide, config, version, ping
+// -- and the response is one JSON object:
 //
 //	{"ok":true}                             ping
 //	{"ok":true,"version":"1.2.3"}           version
@@ -70,6 +70,7 @@ const (
 	CmdToggle  = "toggle"
 	CmdShow    = "show"
 	CmdHide    = "hide"
+	CmdConfig  = "config"
 	CmdVersion = "version"
 	CmdPing    = "ping"
 )

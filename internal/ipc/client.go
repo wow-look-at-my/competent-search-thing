@@ -32,6 +32,12 @@ type Reply struct {
 // usually treat as success: the booting instance acts once ready.
 func (r Reply) NotReady() bool { return !r.OK && r.Err == errNotReady }
 
+// UnknownCommand reports whether the running instance rejected the
+// command as one it does not know -- an OLDER daemon predating the
+// command (either wire shape maps here), which callers surface as a
+// version-skew message instead of a generic failure.
+func (r Reply) UnknownCommand() bool { return !r.OK && r.Err == errUnknownCommand }
+
 // Send dials the single-instance socket, delivers cmd, and returns
 // the parsed reply. It speaks the JSON (v2) protocol and degrades to
 // the legacy (v1) line protocol against an old daemon: exactly the
