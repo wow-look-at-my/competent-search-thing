@@ -113,6 +113,12 @@ macOS-specific notes:
   suite on macOS runners, but it has not yet had human acceptance
   testing on real hardware.
 
+![The searchbar summoned on the macOS CI runner, showing the empty-bar command cheat sheet](docs/screenshot-macos.png)
+
+The real macOS WebKit window on the CI runner's WindowServer session,
+captured by the hard-gated darwin GUI smoke on every push (see
+`.github/scripts/darwin-smoke.ts`).
+
 Other URL forms: `?v=N` pins a release permanently, `?branch=<name>`
 follows a branch (URL-encode slashes), and `&fmt=tar.gz`/`zip`
 repackages on the fly. These work on the `/deb` project too. See

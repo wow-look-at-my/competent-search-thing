@@ -2255,3 +2255,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `docs/screenshot.png` is the committed reference image used by
   README.md (the 02-results state, captured from the real app under
   Xvfb). If the UI changes deliberately, recapture and replace it.
+- `docs/screenshot-macos.png` is the committed macOS reference image
+  used by README.md's macOS install section (the darwin GUI smoke's
+  01-summoned capture, taken from the `darwin-smoke-<sha>` artifact).
+  If the macOS UI changes deliberately, recapture and replace it.
