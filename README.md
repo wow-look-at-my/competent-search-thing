@@ -2212,17 +2212,12 @@ tolerance to responses. For example:
 
     printf '{"cmd":"toggle"}\n' | nc -U "$XDG_RUNTIME_DIR/competent-search-thing.sock"
 
-A request whose first non-space byte is not `{` takes the original
-v1 line protocol instead (`toggle` in, `ok` / `err not ready` /
-`err unknown command` / the bare version string out), answered
-byte-for-byte as before.
-
-Mixed versions across an upgrade keep working in both directions
-for one release: an old CLI keeps speaking v1 lines to a new daemon
-(the legacy path above), and a new CLI talking to a still-running
-old daemon recognizes the v1 `err unknown command` answer to its
-JSON request and retries once with the v1 line on a fresh
-connection.
+JSON is the only wire format: a request line that does not parse as
+JSON -- including the bare command words of the old pre-JSON line
+protocol -- is answered with `{"ok":false,"error":"invalid request"}`
+and nothing runs. If a pre-JSON build is still running, restart it
+once after upgrading -- the new CLI no longer speaks the old
+protocol.
 
 ### GNOME (Wayland)
 

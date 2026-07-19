@@ -1,9 +1,8 @@
 package ipc
 
 // The config command's wire tests live in their own file (the shared
-// helpers are in ipc_test.go): the command is JSON-shape tested only,
-// deliberately -- it rides handlerFor exactly like toggle/show/hide,
-// and the legacy shape's coverage of that switch already exists.
+// helpers are in ipc_test.go): the command rides handlerFor exactly
+// like toggle/show/hide, so only its own JSON shapes need pinning.
 
 import (
 	"net"
@@ -22,7 +21,6 @@ func TestConfigCommandJSONRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, rep.OK)
 	require.Equal(t, CmdConfig, rep.Accepted, "the JSON ack names the accepted command")
-	require.False(t, rep.Legacy)
 	awaitSignal(t, got, "config")
 
 	require.JSONEq(t, `{"ok":true,"accepted":"config"}`,
