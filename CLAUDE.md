@@ -29,7 +29,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   lives only in the nil branch, so an unpinned non-nil Linux block
   silently flips it to OnDemand -- and with the flag off both fields
   stay nil, byte-identical to the pre-flag call (CI screenshots run
-  flag-off). Zero-arg invocation boots the GUI exactly as before the
+  flag-off). runGUI also wires RunOptions.OpenConfig ->
+  app Options.OpenConfigOnStartup (the CLI config subcommand's
+  start-into-editor path). Zero-arg invocation boots the GUI exactly
+  as before the
   CLI existed (CI screenshots rely on that). Deliberately has NO test
   file and stays minimal (see coverage note below).
 - `internal/app` -- the Wails-bound App object and its methods
@@ -98,8 +101,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   icon activation -> the same toggle path the hotkey uses (pending-
   show deferral included), Rescan now -> requestRescan (the !rescan
   behavior minus the bar-hide; still-building = friendly logged
-  error), Open config -> openConfigFile (the !config behavior minus
-  the bar-hide), Quit -> runBuiltin("quit"); the tooltip getter wraps
+  error), Open config -> showConfig (the !config behavior: summon
+  into the in-app config editor, pre-DomReady deferral included; the
+  config FILE stays reachable via the OpenConfigFile bound method),
+  Quit -> runBuiltin("quit"); the tooltip getter wraps
   hotkeyDescription(), so no shortcut is promised until one is
   proven), starts the system-stats sampler once (stats.go in this
   package: the `newStats` builder seam -- production buildStats does a
@@ -310,16 +315,59 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   without one, byte-identical old behavior (run seam, detached, nil
   env); run_builtin -> rescan (Rescanner.Request;
   friendly error while the index is still building) / reload
-  (newRegistry, swap under mutex, Close the old) / config (open
-  config.json) / version (copy `Version`, stays open) / quit
+  (newRegistry, swap under mutex, Close the old) / config
+  (showConfig: summon into the in-app config editor, bar stays up) /
+  version (copy `Version`, stays open) / quit
   (runtime Quit); activate_window (parseWindowID: non-empty base-10
   uint32) -> the activateWindow seam (production
-  native.ActivateWindow); everything else hides the bar on success. Events
+  native.ActivateWindow); everything else hides the bar on success.
+  CONFIG EDITOR (configui.go + configapply.go): `showConfig()` is the
+  one summon-into-editor path (IPC "config", the !config builtin, the
+  tray item, Options.OpenConfigOnStartup -- which latches
+  pendingShow+pendingConfig at Startup): pre-DomReady = latch both
+  (Hide cancels both; DomReady runs the show then emits
+  "config:open"), hidden = the capture+show path then "config:open",
+  visible = "config:open" only -- the mode event ALWAYS follows
+  "app:shown" (the frontend's app:shown handler re-renders). Bound
+  methods: `GetConfigSchema()` (the embedded
+  schemas.ConfigSchemaJSON), `GetConfigForEdit()` (fresh
+  Load+Normalize as indented JSON + config path + LoadWarning +
+  config.UnknownKeys of the RAW file -- keys a GUI save would drop,
+  "$schema" included), `SaveConfig(raw)` (strict
+  DisallowUnknownFields decode with line-numbered error messages ->
+  force on-disk rootsVersion (a GUI save must never re-trigger the
+  Load migrations) -> Normalize -> atomic config.Save -> record
+  sha256 of the saved bytes (lastSavedSum, self-write suppression) ->
+  applyConfig(next, "gui-save")), and `OpenConfigFile()` (the file
+  escape hatch, wraps openConfigFile). The LIVE-APPLY ENGINE
+  (configapply.go): `applyConfig(next, origin)` diffs old->new per
+  section over the `sectionAppliers` table (cfgCurrent baseline,
+  seeded by Startup's startConfigState fresh Load, swapped per pass;
+  nil baseline = apply-all, appliers are idempotent), runs each
+  changed row's apply plus each named GROUP once per pass
+  (groupRegistry = one reloadRegistry covering plugins/bangs/
+  rewrites/firefox/search.fuzzyDisabled's plugin half), returns
+  ApplyResult{Applied, Pending, Errors} -- rows with nil apply land
+  in Pending (roots, excludes, hotkey, rescanIntervalMinutes,
+  search.frecency, watcher, tray, history, stats, window, preview --
+  the Phase-B slots; the table is meant to become total). Live now:
+  maxResults (Manager.SetMaxResults), search.fuzzyDisabled
+  (Manager.SetFuzzyDisabled + registry), theme (existing
+  GetTheme/watcher machinery), plugins/bangs/rewrites/firefox (the
+  registry group). External config.json edits hot-apply through the
+  THEME watcher (theme.go: a debounce batch touching cfgPath also
+  runs handleConfigFileChange -- skip when the file's sha256 equals
+  lastSavedSum (our own save), else fresh Load -> applyConfig
+  (origin=external-edit) -> emit "config:changed"; Load failure =
+  log + emit with the error, previous config stays applied). Events
   emitted (all guarded so a nil ctx no-ops): "index:progress"
   {indexed,done,seconds}, "watch:degraded"
   {watched,dropped,overflows}, "watch:backend" {backend,full,hint}
   (once, from startWatch; see above), "app:shown", "theme:changed" (no
-  payload; frontend refetches GetTheme/GetCustomCSS),
+  payload; frontend refetches GetTheme/GetCustomCSS), "config:open"
+  (no payload; enter config-editor mode), "config:changed" (payload
+  {applied,pending,error} -- an external edit hot-applied or failed
+  to load),
   "plugin:results" (payload plugin.Emission
   {plugin,name,gen,results}), "stats:update" (payload
   sysstats.Snapshot {enabled,cpuPct,cpuOk,gpuPct,gpuOk,memUsed,
@@ -409,8 +457,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   starting up; it may take a moment to respond" notice (the instance
   is booting and shows itself). hide never starts the app: not
   running = plain notice on
-  stderr + exit 1 (cobra error/usage output suppressed). The CLI
-  branches ONLY on ipc.Reply fields (checkReply/summonReply); wire
+  stderr + exit 1 (cobra error/usage output suppressed). config
+  (config.go) opens the in-app config editor: Send CmdConfig to the
+  running instance (OK -> "opening the config editor in the running
+  instance" exit 0; NotReady() -> the still-starting notice exit 0;
+  Reply.UnknownCommand() -- a running pre-config daemon on either
+  wire shape -- -> "older version without the config command;
+  restart it" on stderr, exit 1, cobra error line suppressed); not
+  running -> start the GUI in-process with RunOptions{Server,
+  ShowOnStartup: true, OpenConfig: true} (ErrAlreadyRunning race ->
+  Send CmdConfig again). The CLI
+  branches ONLY on ipc.Reply fields (checkReply/summonReply/
+  configReply); wire
   parsing incl. the old-daemon legacy retry lives entirely in
   ipc.Send, so version skew is invisible here -- user-visible
   messages and exit codes are identical either way
@@ -419,7 +477,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   ONE self-registering subcommand per file (init -> registerCommand);
   newRoot() consumes the builder registry so Execute -- and every
   test -- gets a fresh command tree. RunOptions{Server,
-  ShowOnStartup} is the runGUI contract; the App takes ownership of
+  ShowOnStartup, OpenConfig} is the runGUI contract (main.go wires
+  OpenConfig to app Options.OpenConfigOnStartup); the App takes
+  ownership of
   the server (Shutdown closes it). Unit-tested headlessly: fake
   runGUI, real ipc servers on temp sockets, COMPETENT_SEARCH_SOCKET
   (t.Setenv) isolation.
@@ -430,7 +490,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   4 KiB line cap), one newline-terminated line each way, TWO wire
   shapes the server picks per request by sniffing the trimmed line's
   first byte: '{' = the JSON v2 protocol -- request
-  {"cmd":"toggle|show|hide|version|ping"} with unknown JSON fields
+  {"cmd":"toggle|show|hide|config|version|ping"} with unknown JSON
+  fields
   IGNORED on both sides (the documented tolerance contract), response
   {"ok":true} (ping) / {"ok":true,"version":v} /
   {"ok":true,"accepted":cmd} / {"ok":false,"error":"not ready"|
@@ -441,12 +502,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   against a NEW daemon is untouched. Commands answer "not ready"
   until SetHandlers wires the app (nil handler members stay not
   ready; version/ping always answer), and in BOTH shapes the ack is
-  written BEFORE the toggle/show/hide handler runs -- ack = accepted,
+  written BEFORE the toggle/show/hide/config handler runs -- ack =
+  accepted,
   not completed, so an app whose main thread is briefly stalled
   (startup indexing) can never time the client out; the handler then
   runs on the same conn goroutine, so Close still waits for in-flight
-  handlers. Send(path, cmd, timeout) speaks JSON and returns a parsed
-  Reply{OK, Accepted, Version, Err, Raw, Legacy} + NotReady() -- ALL
+  handlers. The config command (config_cmd_test.go) rides handlerFor
+  exactly like the others and is JSON-shape tested only (the legacy
+  shape's switch coverage already exists). Send(path, cmd, timeout)
+  speaks JSON and returns a parsed
+  Reply{OK, Accepted, Version, Err, Raw, Legacy} + NotReady() +
+  UnknownCommand() (an older daemon rejecting a newer command, either
+  wire shape; the CLI's version-skew message branches on it) -- ALL
   reply parsing lives here, callers branch on fields, never wire
   strings: stray legacy reply lines map equivalently (middle-state
   servers), and EXACTLY the legacy "err unknown command" string
@@ -746,7 +813,21 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   and firefox.openTabs numbers -> their defaults; negative
   watcher.sweepMinutes -> 0, while watcher.maxWatches keeps its sign
   and watchExcludes stays as written); entry settings are
-  opaque json.RawMessage forwarded verbatim to that plugin.
+  opaque json.RawMessage forwarded verbatim to that plugin. `Save` is
+  ATOMIC (temp-file-then-rename in the config dir, the
+  internal/history pattern at the file's historical 0644 perms; a
+  crash never truncates config.json and watchers see one rename per
+  save); `Encode(c)` returns exactly the bytes Save writes (two-space
+  indent + trailing newline -- the app's self-write suppression hashes
+  them); `CurrentRootsVersion()` exposes the build's rootsVersion
+  stamp (the GUI save path preserves the on-disk stamp so a full-file
+  rewrite can never re-trigger the Load migrations); and
+  `UnknownKeys(raw)` (unknown.go) reflectively walks a raw
+  config.json document against Config's json tags and reports the
+  dotted paths of keys a full rewrite would drop ("$schema" included;
+  maps by key, arrays by index, json.RawMessage settings opaque,
+  wrong-shaped values skipped -- unknown KEYS only, the strict decode
+  owns type errors), sorted; the config editor warns with it.
 - `internal/history` -- the query-history store behind the frontend's
   Up/Down recall, pure and exhaustively unit-tested. `New(path,
   persist)`; `Load()` (missing file or memory-only store = empty +
@@ -2026,7 +2107,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   every struct json tag against the schema properties (and the theme
   token set against TokenNames), so a struct/schema drift fails CI.
   The example manifests and builtin themes carry "$schema" keys
-  (loaders ignore unknown top-level keys).
+  (loaders ignore unknown top-level keys). `schemas/embed.go` makes
+  the directory a Go package too: it go:embeds config.schema.json as
+  `schemas.ConfigSchemaJSON` for the app's GetConfigSchema bound
+  method (the config editor validates client-side against it) --
+  deliberately data-only, no functions or statements, so it stays out
+  of the coverage math.
 
 ## Build / test
 

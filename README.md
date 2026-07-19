@@ -620,6 +620,35 @@ WebView2 runtime is required (preinstalled on Windows 11).
 
 ## Configuration
 
+### Config editor
+
+The app carries a built-in config editor: run
+`competent-search-thing config`, type `!config` into the bar, or pick
+"Open config" from the tray icon, and the bar opens in editor mode
+(the editor UI itself is landing in a later phase on this branch; the
+whole backend surface -- the summon paths, the save/apply engine, and
+the IPC command -- is in place). The editor validates against the
+shipped JSON Schema, saves atomically, and keeps `config.json` itself
+reachable as an escape hatch for hand edits (unknown keys a hand edit
+added are surfaced in the editor and would be dropped by a GUI save;
+use the file for those).
+
+Settings apply LIVE where the wiring exists today, no restart:
+
+- `theme` (as before), `maxResults`, `search.fuzzyDisabled`
+- everything the plugin registry serves: `plugins`, `bangs`,
+  `rewrites`, `firefox`
+
+The remaining sections (roots/excludes, watcher, hotkey, window,
+preview, stats, tray, history, frecency, rescan interval) currently
+take effect on the next launch; their live-apply engines are in
+progress on this same branch -- the goal is every knob applying live.
+
+Hand edits to `config.json` hot-apply through the same engine: the
+app watches the file (the theme hot-reload watcher) and re-applies
+external changes on save, so editing the file by hand is just as
+live as the GUI.
+
 Config lives at the platform config dir (set the
 `COMPETENT_SEARCH_CONFIG_DIR` environment variable to point at a
 different directory):
@@ -1357,7 +1386,7 @@ its disable knob -- `firefox-frequent`, `firefox-tabs`):
 |------|------|
 | `!rescan` | rebuild the file index from disk now (errors while the initial build is still running) |
 | `!reload` | re-read `config.json` and the plugin manifests, restart providers |
-| `!config` | open `config.json` with the OS default handler |
+| `!config` | open the in-app config editor (see "Config editor"; `config.json` itself stays reachable from there) |
 | `!version` | copy the app version to the clipboard |
 | `!quit` | exit the app |
 | `!app <text>` / `!launch <text>` | search installed applications and launch the selection |
@@ -2016,7 +2045,8 @@ GNOME desktop that is the top-right status area -- with a menu:
 
 - **Show/Hide** -- toggle the searchbar (same path as the hotkey)
 - **Rescan now** -- request a full re-index
-- **Open config** -- open `config.json` in your editor
+- **Open config** -- summon the bar into the in-app config editor
+  (see "Config editor"; `config.json` stays reachable from there)
 - **Quit** -- exit the app
 
 The bar itself stays hidden until summoned, so the tray icon is the
@@ -2122,7 +2152,7 @@ keybinding backend; everything else: to a logged manual-binding hint).
 Declining the portal's approval dialog is respected -- the app logs it
 and stops, it does not go on to write a keybinding after you said no.
 
-### The CLI: toggle, show, hide
+### The CLI: toggle, show, hide, config
 
 The binary doubles as its own remote control. The app runs as a
 single instance around one unix socket (in `$XDG_RUNTIME_DIR`):
@@ -2150,10 +2180,15 @@ single instance around one unix socket (in `$XDG_RUNTIME_DIR`):
 - `competent-search-thing hide` -- hides the running instance's bar;
   unlike the others it never starts the app (prints a notice and
   exits 1 when nothing is running).
+- `competent-search-thing config` -- opens the running instance's
+  in-app config editor (see "Config editor"); starts the app when it
+  is not running, opening the editor once the frontend is ready. A
+  running instance too old to know the command earns a clear
+  "older version without the config command" notice and exit 1.
 - `competent-search-thing --version` -- prints the app version.
 
-The running instance acknowledges each `toggle`/`show`/`hide`
-immediately and executes the action right after the reply, so an
+The running instance acknowledges each `toggle`/`show`/`hide`/
+`config` immediately and executes the action right after the reply, so an
 instance busy with the initial index build can no longer time the
 client out -- the command is accepted instantly and acts as soon as
 the app gets to it.
@@ -2166,8 +2201,8 @@ the bar. That is the whole Wayland story in one line: bind a key to
 
 The socket speaks newline-delimited JSON, one request per
 connection: write one object like `{"cmd":"toggle"}` (commands
-`toggle`, `show`, `hide`, `version`, `ping`) and read one object
-back -- `{"ok":true,"accepted":"toggle"}` for an accepted command
+`toggle`, `show`, `hide`, `config`, `version`, `ping`) and read one
+object back -- `{"ok":true,"accepted":"toggle"}` for an accepted command
 (written before the action runs: "ok" means accepted, not
 completed), `{"ok":true,"version":"..."}` for `version`,
 `{"ok":true}` for `ping`, and `{"ok":false,"error":"not ready"}` /
