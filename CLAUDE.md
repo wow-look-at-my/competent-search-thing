@@ -163,7 +163,32 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   but can never leak an unbounded refresh, cancelled in Shutdown and
   left cancelled afterwards), and logs every registry Errors()
   entry once with a "plugin:" prefix -- missing plugins dir =
-  builtins only, no noise), starts theme hot reload (theme.go: a
+  builtins only, no noise), brings the Firefox tab-switching bridge
+  up once (ffext.go in this package: the `newFfext` builder seam over
+  the ffextBridge interface -- production buildFfext gates on
+  firefox.FindProfile over plat.firefoxBases (no profile = one quiet
+  log + nil), then installFfextHost writes/self-heals the
+  native-messaging host pieces (ffext.InstallHost over
+  platform.StableExecutable(exe, args0) + the plat.userHome seam +
+  config.Dir(); Repaired = ONE loud old->new wrapper-command line,
+  the gsettings precedent; any failure = log + run on), then
+  ffext.Listen on ffext.SocketPath(plat.getenv) -- listen failure =
+  log + nil, the Options.IPC degrade twin. The handle is APP-LIFETIME
+  under ffextMu: registry reloads never own or restart it (a reload
+  must not sever the extension's connection), Shutdown closes it
+  beside the IPC server, and newTestApp stubs the seam nil so no
+  test ever creates a socket or probes the real home. liveTabs()
+  converts the bridge snapshot to plugin.TabInfo rows carrying
+  ffext.Token(conn,tab,window) -- served only when Connected() AND
+  fresh within ffextTabTTL (15s, the sessionstore TTL twin), rows
+  http(s)-filtered like the sessionstore reader, fresh-but-empty
+  still wins; the openTabs getter (firefox.go) prefers it and falls
+  back to the TabCache byte-identically otherwise. activateTab()
+  routes one activation through the bridge -- no bridge/no conn =
+  ffext.ErrNotConnected after the ffextInactiveOnce quiet heads-up,
+  other failures log per occurrence -- and RunPluginAction's
+  activate_tab case falls back to Open(url) on ANY of it),
+  starts theme hot reload (theme.go: a
   dedicated fsnotify watcher on the config dir + its themes/ subdir,
   events debounced 300ms into "theme:changed"; any failure = log +
   run on without live reload), builds the startup progress printer
@@ -213,7 +238,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   elapsed covers build + watch setup; never on the error/cancel
   paths;
   `Shutdown` (wired to Wails OnShutdown) closes the IPC server first
-  (when present), releases the hotkey (native stop func, cancel of
+  (when present) and the ffext bridge beside it (shutdownFfext: the
+  other owned listener; unlinks its socket, the host relay just
+  retries until the next launch), releases the hotkey (native stop func, cancel of
   the async portal/gsettings chain, idempotent+nil-safe close of the
   active portal handle -- a handle the chain stores after Shutdown
   ran is closed by the chain itself), closes the tray (cancels a
@@ -258,7 +285,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   when hidden beyond that window it FIRST
   captures app context (`captureAppContext`: CaptureFocused +
   RefreshRunningAsync + RefreshWindowsAsync +
-  EnsureFreshInstalled(5m) + the async frecency cwd derivation
+  EnsureFreshInstalled(5m) + kickFfextRefresh (the nil-safe async
+  live-tab list refresh, so the bridge snapshot is warm by first
+  keystroke) + the async frecency cwd derivation
   (captureFrecencyCwd in frecency.go: focused PID -> the
   plat.procTree per-capture snapshot factory (production
   appctx.NewProcTree("/proc"), linux only, nil elsewhere) ->
@@ -421,7 +450,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   version (copy `Version`, stays open) / quit
   (runtime Quit); activate_window (parseWindowID: non-empty base-10
   uint32) -> the activateWindow seam (production
-  native.ActivateWindow); everything else hides the bar on success.
+  native.ActivateWindow); activate_tab (ffext.ParseToken on the
+  internal-only Tab field -- strict c<conn>:<tab>:<window> digits --
+  PLUS validHTTPURL on Value, the fallback URL) -> activateTab
+  through the bridge, Hide on success, and on ANY bridge failure
+  (not connected, timeout, tab gone) the case returns a.Open(Value)
+  -- the pick never surfaces an error when the fallback works;
+  everything else hides the bar on success.
   CONFIG EDITOR (configui.go + configapply.go): `showConfig()` is the
   one summon-into-editor path (IPC "config", the !config builtin, the
   tray item, Options.OpenConfigOnStartup -- which latches
@@ -533,21 +568,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
   incl. run/activateWindow/configurePanel/watchSpaceChanges/appSource plus getenv/executable/args0/detectSession/
-  startPortal/ensureGnomeBinding/procTree AND the launch seams --
+  startPortal/ensureGnomeBinding/procTree/userHome AND the launch
+  seams --
   open/reveal/run take extraEnv now (reveal also startupID),
   launchExec, resolveHandler, handlerByID, mintCredential,
   prepareLaunch, dbusLaunch, watchState, snRemove -- in window.go;
   defaults in New, plus
-  the `newRegistry`, `newTray`, `newStats`, `newProgress` and
-  `newIcons` seams);
+  the `newRegistry`, `newTray`, `newStats`, `newProgress`,
+  `newIcons` and `newFfext` seams);
   unit tests MUST
   replace them (see
   newTestApp, which also nils appSource, procTree AND
   watchSpaceChanges (non-nil on the darwin CI job's production
   seams), stubs
-  newRegistry, newTray, newStats, newIcons
-  AND newProgress (an inert non-TTY io.Discard printer) so no config,
-  X11, session-bus, /proc//sys or global-log-output IO
+  newRegistry, newTray, newStats, newIcons, newFfext
+  AND newProgress (an inert non-TTY io.Discard printer), and pins
+  userHome to an error so no config,
+  X11, session-bus, /proc//sys, ~/.mozilla or global-log-output IO
   happens, pins goos to
   "linux" -- identical launch-path behavior on the darwin CI job;
   tests exercising other OSes set goos themselves -- pins getenv to
@@ -625,7 +662,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   restart it" on stderr, exit 1, cobra error line suppressed); not
   running -> start the GUI in-process with RunOptions{Server,
   ShowOnStartup: true, OpenConfig: true} (ErrAlreadyRunning race ->
-  Send CmdConfig again). The CLI
+  Send CmdConfig again). firefox-host (firefoxhost.go) is the
+  native-messaging relay Firefox spawns through the generated
+  wrapper: it never boots the GUI and never touches the
+  single-instance socket -- it only runs ffext.RunHost over its
+  stdio and ffext.SocketPath(os.Getenv), tolerates and ignores
+  Firefox's positional args (manifest path, extension id), exits
+  cleanly on stdin EOF, and keeps STDOUT strictly for protocol
+  frames (cobra out is os.Stdout, so diagnostics go to the stderr
+  logger, NEVER cmd.OutOrStdout(); env.hostIn/hostOut inject the
+  stdio in tests, which drive a full relay round-trip against an
+  in-process ffext.Server). The CLI
   branches ONLY on ipc.Reply fields (checkReply/summonReply/
   configReply); ALL
   wire parsing lives in ipc.Send -- a non-JSON reply (e.g. a
@@ -685,6 +732,65 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   waits for in-flight conns. Handlers run on conn
   goroutines and must be goroutine-safe. Deliberately NO schema in
   schemas/ (an internal two-party protocol, like history.json).
+- `internal/ffext` -- the Firefox companion-extension bridge, pure
+  and headless-tested (real temp sockets, scripted fakes, pipe-driven
+  stdio): the pure half of switch-to-tab (webextension/ is the
+  extension, internal/app ffext.go the wiring, internal/cli
+  firefox-host the relay entry). Topology: extension <->
+  native-messaging frames <-> host process <-> JSON lines on a SECOND
+  unix socket <-> the app's bridge Server; the host only reframes
+  bytes, both hops carry ONE message shape (requests
+  {id,type:listTabs|activate,tabId,windowId}; replies {id,ok,tabs?|
+  error}; unsolicited pushes {type:tabsChanged,tabs} -- unknown
+  fields ignored, the ipc tolerance contract). Constants HostName
+  "competent_search_thing" (Firefox's ^\w+(\.\w+)*$ rule),
+  ExtensionID (the pinned gecko id), ProtocolVersion, Msg* -- all
+  LOCKSTEP with webextension/logic.mjs via sync_test.go (the theme
+  sync_test precedent; it also pins manifest.json's permissions
+  exactly [nativeMessaging, tabs], MV2 persistent background page,
+  and that the wrapper names the firefox-host subcommand).
+  frame.go: ReadFrame/WriteFrame -- 4-byte NATIVE-endian length
+  prefix (binary.NativeEndian per MDN) + JSON body, single-Write
+  frames, caps MaxOutFrame 1 MB (Firefox kills the port beyond it)
+  / MaxInFrame 8 MiB, torn stream = ErrUnexpectedEOF, clean end =
+  io.EOF. SocketPath: $COMPETENT_SEARCH_FFEXT_SOCKET override, else
+  $XDG_RUNTIME_DIR/competent-search-thing-ffext.sock, else per-uid
+  under os.TempDir() (the ipc.SocketPath mirror). token.go:
+  Token/ParseToken "c<conn>:<tab>:<window>" -- digits ONLY (strconv
+  alone would take a leading sign), conn >= 1, 64-byte cap; the
+  activate_tab wire token. manifest.go: ManifestPath per OS (linux+
+  unix-likes ~/.mozilla/native-messaging-hosts/, darwin ~/Library/
+  Application Support/Mozilla/NativeMessagingHosts/, windows =
+  configDir + HKCU registry via registry_windows.go, stub elsewhere),
+  WrapperPath/WrapperContent (configDir/firefox-host.{sh,bat};
+  sh single-quote escaping, exec "<stable exe>" firefox-host "$@"),
+  ManifestContent (name/description/path/type stdio/
+  allowed_extensions=[ExtensionID]), InstallHost = read-compare-
+  atomic-write both pieces (config.Save temp+rename shape, wrapper
+  0700) with self-heal: unchanged = zero writes, changed wrapper
+  reports PreviousExe for the app's loud repair log (the gsettings
+  precedent). server.go: Listen = the ipc stale-socket recovery +
+  chmod 0600 + ErrAlreadyRunning, but conns are PERSISTENT (8 MiB
+  line cap): per-conn pending map correlates replies by id --
+  listTabs replies store their dump ON THE CONN GOROUTINE (pendingReq
+  .isList) so snapshot updates are strictly arrival-ordered vs
+  tabsChanged pushes (a requester-side store could clobber a newer
+  push); Tabs() = the merged per-conn snapshot (Tab tagged with the
+  owning conn id, negative wire ids skipped, float lastAccessed
+  tolerated) + newest update time (the app's freshness gate);
+  KickRefresh = single-flight async listTabs fan-out (also fired
+  once per fresh conn); Activate routes to the owning conn
+  (ErrNotConnected when gone) under activateTimeout 1200ms /
+  listTimeout 1000ms / writeTimeout 2s; dead conns drop their tabs
+  and close their pending channels; Close idempotent+nil-safe.
+  host.go: RunHost, the relay loop -- stdin frames -> socket lines
+  (json.Compact when a frame carries newlines, drop-with-log while
+  the app is down, one log per episode), socket lines -> stdout
+  frames, reconnect with capped exponential backoff (1s..30s,
+  seam-shrinkable), stdin EOF = clean nil return (Firefox closed the
+  port), shutdownConn refuses a dial that lands after teardown.
+  Deliberately NO schema in schemas/ (internal two-party protocol,
+  the ipc stance).
 - `internal/match` -- THE shared matching engine, pure (stdlib only),
   consumed by internal/index AND internal/plugin: ONE fold definition
   (FoldTable/FoldRune/FoldPattern, the per-string ASCII+rune helpers;
@@ -1442,7 +1548,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   purpose); Action carries the
   INTERNAL-ONLY DesktopID json:"desktop_id" -- the .desktop entry
   behind a builtin run_command launch, consumed by the app's
-  credentialed launch path) and `SanitizeResponse`, which
+  credentialed launch path -- and the INTERNAL-ONLY Tab json:"tab"
+  -- the ffext c<conn>:<tab>:<window> routing token behind a builtin
+  activate_tab switch, Value doubling as the fallback URL) and
+  `SanitizeResponse`, which
   clamps/validates everything an external plugin returns: 20-result
   cap, rune caps (title 200/subtitle 300/badge 24/field 40+200, max 8
   fields), control chars -> spaces everywhere, icon = builtin name or
@@ -1450,8 +1559,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   action validation (open_path abs path, open_url http(s)+host,
   copy_text <=8 KiB, run_command 1..16 argv <=1024 B each and the
   whole RESULT is dropped unless the manifest sets allow_run_command;
-  internal-only set_query/run_builtin/activate_window always stripped
-  and a stray Action.Window OR Action.DesktopID on external types
+  internal-only set_query/run_builtin/activate_window/activate_tab
+  always stripped
+  and a stray Action.Window, Action.Tab OR Action.DesktopID on
+  external types
   cleared; anything
   removed gets a human-readable reason for logging). trigger.go:
   `Trigger` Compile/Match/Boost -- prefix (case-insensitive,
@@ -1567,8 +1678,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the host here, unlike frequent-sites), ties by lastAccessed DESC
   then title, cap Options.OpenTabsMax (<=0 -> 6); result =
   title-or-host / URL subtitle / icon "link" (globe is taken) /
-  "pinned" badge on pinned tabs / open_url action -- which re-OPENS
-  the page, it cannot focus the existing tab (README honesty note).
+  "pinned" badge on pinned tabs / the action: a TabInfo.Token-carrying
+  row (the app's ffext live snapshot supplied it) gets the
+  internal-only activate_tab {Tab: token, Value: URL} SWITCH, a
+  token-less (sessionstore) row keeps the byte-identical open_url --
+  which re-OPENS the page (the README tab-switching section owns the
+  user-facing story).
   Exhaustively
   unit-tested, table-driven, plus an end-to-end manifest ->
   registry -> /bin/sh transport dispatch test.
@@ -1888,7 +2003,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   once-per-distinct-message logging and 1m retry gap, ctx bounds
   every goroutine. Consumed by
   internal/app's firefox.go + the plugin registry's firefox-frequent
-  and firefox-tabs builtins.
+  and firefox-tabs builtins -- where the open-tabs getter now serves
+  the internal/ffext live bridge snapshot FIRST (connected + fresh
+  within the same 15s bound) and this sessionstore layer is the
+  always-there fallback.
 - `internal/watch` -- keeps the index live after the initial walk;
   three cooperating tiers whose CONTRACT is identical final index
   state, differing only in latency (pinned by TestTierEquivalence*).
@@ -2440,7 +2558,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   before render.ts's module-load template grabs, so the DOM-order
   tests fail if the zones/templates change shape; src/priority.test.ts
   pins priority-above-files rendering, the flat traversal order, and
-  the reconcileSelection rules -- run in the CI linux job's frontend
+  the reconcileSelection rules; src/ffext-logic.test.ts drives
+  ../../webextension/logic.mjs (typed via its sibling logic.d.mts)
+  with scripted browser/timer fakes -- listTabs/activate shapes, the
+  tab-then-window call order, stale-tab rejection, reconnect backoff,
+  push debounce -- run in the CI linux job's frontend
   step). `index.html`
   (query row with inline SVG magnifier + hidden bang chip; #results
   split into #priority-results (plugin sections with priority > 0,
@@ -2736,7 +2858,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   GetStats return AND "stats:update" payload, field names lockstep
   with internal/sysstats.Snapshot json tags), and the plugin wire
   contract TargetInfo/PluginAction (incl. activate_window + its
-  window field and the internal desktop_id the frontend echoes back
+  window field, activate_tab + its tab token field, and the internal
+  desktop_id -- all echoed back
   unchanged)/PluginResult/PluginEmission plus the preview contract
   Preview{Target,Payload,ConfigInfo,MetaRow,Text,Image,Dir,DirEntry,
   Web,WebResult,AI}, ResolveIcons, and the four preview bound
@@ -2750,6 +2873,22 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   internal/sysstats + internal/telemetry payload
   structs; field names lockstep with configui.go/configapply.go json
   tags).
+- `webextension/` -- the shipped Firefox companion extension behind
+  switch-to-tab (MV2, persistent background page -- an MV3 event page
+  idles out and the host can never wake it, since native-messaging
+  connections are always extension-initiated; permissions exactly
+  [nativeMessaging, tabs]; pinned gecko id = ffext.ExtensionID).
+  logic.mjs is ALL the logic, pure and importable (constants +
+  tabRow/listTabs/handleMessage -- activate is tabs.update THEN
+  windows.update, any rejection = {ok:false,error} -- +
+  nextReconnectDelay + createController with injectable
+  setTimeout/clearTimeout: one native port, capped-backoff reconnect,
+  500ms-coalesced tabsChanged pushes on the five tabs.on* events);
+  background.js/background.html are the thin module-script entry;
+  logic.d.mts types the vitest import. NOT built or bundled by
+  anything -- Firefox loads the directory (about:debugging) or a
+  web-ext-signed .xpi of it; internal/ffext/sync_test.go +
+  frontend/src/ffext-logic.test.ts are its CI gates (both hard).
 - `examples/plugins/` -- three shipped example plugins, INERT until a
   user copies one into `<configDir>/plugins/` (each has a README with
   install/usage): `calc` (python3 command plugin: trigger prefix "=",
@@ -2910,8 +3049,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   ci.yml cleanup (#25).
 - The `linux` job: checkout -> apt install gtk/webkit/x11 dev packages plus
   xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run
-  build && npm test` in `frontend/` (npm test = the vitest
-  DOM-ordering gate) -> `wow-look-at-my/go-toolchain@v1`
+  build && npm test` in `frontend/` (npm test = the vitest gate:
+  DOM ordering + the webextension logic suite) -> `wow-look-at-my/go-toolchain@v1`
   with `targets: linux/amd64,windows/amd64`, `cgo: 'true'`,
   `timeout: '20'`, `autorelease: 'false'`, and env
   `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> two
