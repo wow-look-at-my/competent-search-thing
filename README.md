@@ -468,11 +468,12 @@ buildhost (see [Install](#install)):
       opt-in app-context awareness (focused/running/installed apps),
       built-in commands (`!rescan`, `!reload`, `!config`, `!version`,
       `!quit`, `!app`) and three documented example plugins
-- [x] Installed apps in normal results: matching apps show up as an
-      async Apps section ABOVE the file results for plain queries
-      (a source-priority placement, not a score hack; engine
-      exact/prefix/word-start/substring ranking, capped at 6; see
-      [Apps in normal results](#apps-in-normal-results))
+- [x] Installed apps in normal results: strongly matching apps show
+      up as an async Apps section ABOVE the file results for plain
+      queries (word-start tier or better earns the promotion; weak
+      substring/fuzzy matches render below the files), ordered by
+      your actual launch counts within a match class; capped at 6;
+      see [Apps in normal results](#apps-in-normal-results)
 - [x] Empty-query cheat sheet: an empty bar lists the available
       commands (the same list a bare `!` shows) with no row
       pre-selected; it disappears the moment you type, and no plugin
@@ -1709,15 +1710,27 @@ exactly like `!app` does. This is the fourth built-in provider,
 - It fires on every query of 2+ characters and matches app names
   case-insensitively. Ranking: exact name match, then name prefix,
   then word start (`code` matches `Visual Studio Code`), then
-  substring; ties break alphabetically. The section caps at 6 results
-  to stay out of the way -- use `!app` / `!launch` for the full list
-  of 15.
-- "Above the files" is a SOURCE PRIORITY, not a score: the section
-  carries priority 1 on its emission (every other section is 0 and
-  keeps rendering below the file results), the UI places priority > 0
-  sections in the zone above the file rows, and the engine's scoring
-  bands are untouched. The priority is stamped by the app for its
-  built-in sources; external plugins cannot set it.
+  substring; equal classes order by your decayed launch counts (the
+  apps you actually open first), then name. The section caps at 6
+  results to stay out of the way -- use `!app` / `!launch` for the
+  full list of 15.
+- "Above the files" must be EARNED: the section is promoted only
+  when its best row matched at the word-start tier or better, and a
+  promoted section carries only those strong rows. Weak matches
+  (substring, fuzzy) render below the file results instead -- a
+  scattered-subsequence app hit never outranks a directory literally
+  named like your query.
+- The placement is a SOURCE PRIORITY, not a score: the promoted
+  emission carries priority 1 (everything else is 0 and renders
+  below the file results), the UI places priority > 0 sections in
+  the zone above the file rows, and the engine's scoring bands are
+  untouched. The priority is stamped by the app for its built-in
+  sources; external plugins cannot set it.
+- Launch counts come from the frecency store: every successful app
+  launch through the bar counts, decaying with the same 14-day
+  half-life as file opens (under namespaced `app:` keys in
+  `frecency.json`, invisible to file ranking). Cold start -- or
+  `search.frecency.disabled` -- keeps the honest name order.
 - Bang routing keeps the two paths mutually exclusive: a `!app ...` /
   `!launch ...` query dispatches only the targeted launcher (in the
   classic below zone -- there are no file results to outrank on a

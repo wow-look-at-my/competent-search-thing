@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -228,4 +229,100 @@ func TestSetFrecencyCwdSwapsFreshBlend(t *testing.T) {
 
 	a.setFrecencyCwd("/work/x")
 	require.Same(t, second, m.Blend(), "an unchanged cwd swaps nothing")
+}
+
+// TestRecordAppPickPaths pins WHERE the app-launch usage hook fires:
+// the RunPluginAction run_command success path, for the two builtin
+// app sources only -- and nowhere else (failures, external plugins'
+// run_commands, other action types).
+func TestRecordAppPickPaths(t *testing.T) {
+	a, r := newTestApp(t, nil, Options{Frecency: config.DefaultFrecency()})
+	a.Startup(context.Background())
+
+	// A targeted !app launch (linux shape: desktop id) records under
+	// its desktop-id key.
+	require.NoError(t, a.RunPluginAction("apps", plugin.Action{
+		Type: plugin.ActionRunCommand, Argv: []string{"firefox"}, DesktopID: "firefox.desktop"}))
+	waitRecorded(t, a, "app:firefox.desktop")
+
+	// An apps-search launch (darwin shape: no desktop id, `open -a`
+	// argv) records under the argv key.
+	require.NoError(t, a.RunPluginAction("apps-search", plugin.Action{
+		Type: plugin.ActionRunCommand, Argv: []string{"open", "-a", "/Applications/Safari.app"}}))
+	waitRecorded(t, a, "app:open -a /Applications/Safari.app")
+
+	// An external plugin's run_command executes but records nothing.
+	require.NoError(t, a.RunPluginAction("some-plugin", plugin.Action{
+		Type: plugin.ActionRunCommand, Argv: []string{"external-tool"}}))
+	require.True(t, r.has("run:external-tool"))
+
+	// A FAILED launch records nothing.
+	a.plat.run = func(argv, _ []string) error { return errors.New("boom") }
+	require.Error(t, a.RunPluginAction("apps", plugin.Action{
+		Type: plugin.ActionRunCommand, Argv: []string{"broken"}, DesktopID: "broken.desktop"}))
+	a.plat.run = func(argv, _ []string) error { return nil }
+
+	// Beacon: one more success proves the async recorder drained.
+	require.NoError(t, a.RunPluginAction("apps", plugin.Action{
+		Type: plugin.ActionRunCommand, Argv: []string{"beacon"}, DesktopID: "beacon.desktop"}))
+	waitRecorded(t, a, "app:beacon.desktop")
+	entries := a.frecencyStore().Entries()
+	require.NotContains(t, entries, "app:external-tool")
+	require.NotContains(t, entries, "app:broken.desktop")
+	require.Len(t, entries, 3)
+}
+
+// TestAppUsageReadsLiveStore: the registry's Options.AppUsage seam
+// answers from the CURRENT store on every call, so a live
+// search.frecency config change (applyFrecencyConfig swaps the store)
+// applies without a registry reload -- and disabled frecency reads 0
+// for every key (the cold pure-name app ordering).
+func TestAppUsageReadsLiveStore(t *testing.T) {
+	a, _ := newTestApp(t, nil, Options{Frecency: config.DefaultFrecency()})
+	a.Startup(context.Background())
+
+	require.Zero(t, a.appUsage("app:code.desktop"), "an unrecorded key reads 0")
+	require.NoError(t, a.RunPluginAction("apps", plugin.Action{
+		Type: plugin.ActionRunCommand, Argv: []string{"code"}, DesktopID: "code.desktop"}))
+	waitRecorded(t, a, "app:code.desktop")
+	require.Positive(t, a.appUsage("app:code.desktop"))
+
+	// Disable live: the same getter now reads 0 through the swapped
+	// (nil) store.
+	a.applyFrecencyConfig(config.FrecencyConfig{Disabled: true})
+	require.Zero(t, a.appUsage("app:code.desktop"), "disabled frecency = cold ordering")
+
+	// Re-enable live: the store rebuilds over the SAME frecency.json,
+	// so the learned usage comes back once the async load finishes.
+	a.applyFrecencyConfig(config.DefaultFrecency())
+	require.Eventually(t, func() bool {
+		return a.appUsage("app:code.desktop") > 0
+	}, 2*time.Second, 5*time.Millisecond, "the on-disk usage must survive a config round-trip")
+}
+
+// TestAppKeysStayOutOfFileRanking pins the namespace non-collision:
+// app usage keys live in the same frecency store as file opens, but
+// they start "app:" and are therefore never equal to the absolute
+// paths the file-ranking blend looks up (Store.Boost is an exact-key
+// lookup on both sides), so recorded app launches can never boost or
+// penalize a file result.
+func TestAppKeysStayOutOfFileRanking(t *testing.T) {
+	a, _ := newTestApp(t, nil, Options{Frecency: config.DefaultFrecency()})
+	a.Startup(context.Background())
+
+	require.NoError(t, a.RunPluginAction("apps", plugin.Action{
+		Type: plugin.ActionRunCommand, Argv: []string{"code"}, DesktopID: "code.desktop"}))
+	waitRecorded(t, a, "app:code.desktop")
+	require.NoError(t, a.Open("/docs/code"))
+	waitRecorded(t, a, "/docs/code")
+
+	st := a.frecencyStore()
+	require.Positive(t, st.Boost("/docs/code"))
+	require.Positive(t, st.Boost("app:code.desktop"))
+	require.Zero(t, st.Boost("/app:code.desktop"), "exact-key lookups: no abs path can alias an app key")
+	for key := range st.Entries() {
+		if strings.HasPrefix(key, "app:") {
+			require.False(t, filepath.IsAbs(key), "app keys must never be absolute paths")
+		}
+	}
 }

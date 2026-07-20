@@ -1477,17 +1477,42 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   is live -- emit runs on provider goroutines and MUST be
   goroutine-safe. SOURCE PRIORITY (placement metadata, NEVER a
   score): `prioritized` (engine.go, the watch backendInfo
-  optional-extension pattern) is `priority() int`; Emission gains
-  Priority (json priority,omitempty) stamped in dispatchOne and
-  CheatSheet via providerPriority (type assertion, absent = 0).
-  Only apps-search implements it (sourcePriorityApps = 1, the
-  above-file-results placement); the targeted apps provider stays 0
+  optional-extension pattern) is `priority(best match.Tier) int` --
+  decided PER EMISSION from the strongest tier the engine minted
+  (sourceResults returns it beside the rows; TierNone for external/
+  empty answers); Emission gains Priority (json priority,omitempty)
+  stamped in dispatchOne and CheatSheet via providerPriority (type
+  assertion, absent = 0 whatever the tier). Only apps-search
+  implements it (sourcePriorityApps = 1 when best <= strongTier =
+  TierWordStart -- a STRONG match (triggered/exact/prefix/word-start)
+  earns the above-file-results placement, a weak best (substring/
+  fuzzy) emits at 0 and renders below the files: the macOS "test"
+  field report, where scattered-subsequence app hits outranked a
+  directory literally named "test"), and a PROMOTED emission is cut
+  to its strong rows inside sourceResults (weak rows must never ride
+  the promoted zone; they render below the files whenever no strong
+  match exists, the whole section then being priority 0); the
+  targeted apps provider stays 0
   (bang queries have no files to outrank), and external plugins can
   NEVER set it -- the wire Response has no priority field and
   *externalProvider does not implement the extension (pinned by
   TestSourcePriorityMetadata + TestExternalEmissionPriorityAlwaysZero
   + TestPriorityNeverChangesMintedScores: the mint is byte-identical,
-  bands untouched). Routing: resolved bang (exact/alias/unique-prefix)
+  bands untouched; TestAppsSearchWeakMatchesStayBelowFiles +
+  TestAppsSearchPromotedSectionStrongRowsOnly pin the tier gate).
+  APP USAGE TIE-BREAK: Options.AppUsage (the app layer's frecency
+  store behind a live accessor; nil = cold) feeds appCandidates'
+  Candidate.TieBreak (decayed launch count x1000, usageTieBreak), so
+  equal-tier equal-score app rows order by real usage before the
+  name -- within a match class only, the tier stays the primary sort
+  key (in the fuzzy band the alignment score still ranks first;
+  usage breaks exact score ties). Keys: AppUsageKey(desktopID, argv)
+  = "app:"+desktopID when a *.desktop id is stamped, else "app:"+
+  argv joined with spaces (the darwin `open -a <bundle>` shape) --
+  derivable identically from the snapshot (lookup) and the echoed
+  action (record); AppPickKey(pluginID, action) gates recording to
+  run_command launches from the two builtin app sources.
+  Routing: resolved bang (exact/alias/unique-prefix)
   + space => ONLY that provider, all trigger gating bypassed;
   bare/partial/ambiguous or resolved-without-space sigil => ONLY the
   builtin suggestions provider; bang-shaped text with zero candidates
@@ -1505,21 +1530,28 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   !rescan/!reload/!config/!version/!quit, one run_builtin result each
   (version subtitle from Options.Version); builtin_apps.go
   "apps"/Launch -- !app/!launch over the Options.InstalledApps
-  snapshot (empty query = first 15 alphabetical, prefix 100 /
-  substring 80, cap 15, run_command argv via `parseDesktopExec`:
+  snapshot (empty query = all 15 listed, usage first then
+  alphabetical, cap 15, run_command argv via `parseDesktopExec`:
   quotes, backslash escapes, %-field codes stripped; the shared
   candidate builder is `appCandidates`, whose
-  actions also carry DesktopID = the InstalledApp.ID so the app can
-  launch with activation credentials, and whose Results carry the
+  actions carry DesktopID = the InstalledApp.ID ONLY when it is a
+  bare *.desktop name (launch.ValidDesktopID -- the darwin scan's
+  ".app" bundle ids used to fail the app layer's run_command
+  re-validation and error every macOS launch) so linux launches keep
+  activation credentials, whose TieBreak carries the AppUsage decayed
+  launch count (see the registry bullet), and whose Results carry the
   internal-only IconKey "app:<Icon ref>" when the installed app has
-  one -- the frontend's real-icon hook);
+  one -- the frontend's real-icon hook;
+  AppUsageKey/AppPickKey/usageTieBreak live here too);
   builtin_apps_search.go "apps-search"/Apps -- installed apps in
   NORMAL results: no bangs, a real all_queries Trigger (match
   override on builtinBase, effective min 2 runes), the shared
   engine's canonical bands over the app name (words = letter/digit
   runs, so spaces, hyphens, dots split), cap 6, same run_command
-  launch, and THE one prioritized source (priority() = 1 -> its
-  Emission renders above the file results); bang routing keeps it
+  launch, and THE one prioritized source (priority(best) = 1 only at
+  word-start tier or better -> its Emission renders above the file
+  results with only its strong rows; weak bests emit at 0, below the
+  files); bang routing keeps it
   exclusive with the targeted !app
   path, and a nil/empty snapshot emits nothing;
   builtin_openwindows.go "windows"/Open Windows -- also in the normal

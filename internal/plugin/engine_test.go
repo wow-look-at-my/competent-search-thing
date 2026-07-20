@@ -15,9 +15,18 @@ import (
 // into the single mint path.
 func srcResults(t *testing.T, src candidateSource, req Request) []Result {
 	t.Helper()
-	res, err := sourceResults(src, context.Background(), req, false)
+	res, _, err := sourceResults(src, context.Background(), req, false)
 	require.NoError(t, err)
 	return res
+}
+
+// srcResultsTier is srcResults plus the emission's strongest minted
+// tier -- the per-emission section-priority input.
+func srcResultsTier(t *testing.T, src candidateSource, req Request) ([]Result, match.Tier) {
+	t.Helper()
+	res, best, err := sourceResults(src, context.Background(), req, false)
+	require.NoError(t, err)
+	return res, best
 }
 
 // TestEveryRegisteredSourceRoutesThroughEngine is the inversion guard:
@@ -74,7 +83,7 @@ func TestEngineFireFoxRepro(t *testing.T) {
 			{Name: "GIMP", Exec: "gimp %F"},
 		}
 	}
-	p := newAppsSearchProvider(installed)
+	p := newAppsSearchProvider(installed, nil)
 
 	for _, q := range []string{"fire fox", "fox fire", "firefx", "FIRE FOX"} {
 		results := srcResults(t, p, baseRequest(q, q, 1, nil))

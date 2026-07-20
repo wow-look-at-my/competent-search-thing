@@ -9,7 +9,7 @@ import (
 )
 
 func TestAppsProviderBasics(t *testing.T) {
-	p := newAppsProvider(nil)
+	p := newAppsProvider(nil, nil)
 	require.Equal(t, "apps", p.id())
 	require.Equal(t, "Launch", p.displayName())
 	require.Equal(t, []string{"app", "launch"}, p.bangNames())
@@ -29,7 +29,7 @@ func TestAppsProviderEmptyQueryListsAlphabetically(t *testing.T) {
 			ID:   fmt.Sprintf("app%d.desktop", i),
 		})
 	}
-	p := newAppsProvider(func() []InstalledApp { return list })
+	p := newAppsProvider(func() []InstalledApp { return list }, nil)
 
 	results := srcResults(t, p, targetedReq("app", ""))
 	require.Len(t, results, maxAppResults)
@@ -45,7 +45,7 @@ func TestAppsProviderSearchScoring(t *testing.T) {
 		{Name: "GIMP", Exec: "gimp %F"},
 		{Name: "Fireplace", Exec: "fireplace"},
 	}
-	p := newAppsProvider(func() []InstalledApp { return list })
+	p := newAppsProvider(func() []InstalledApp { return list }, nil)
 
 	results := srcResults(t, p, targetedReq("launch", "FiRe"))
 	require.Len(t, results, 3, "case-insensitive substring match")
@@ -68,7 +68,7 @@ func TestAppsProviderIconKey(t *testing.T) {
 		{Name: "Editor", Exec: "editor", ID: "Editor.app", Icon: "/Applications/Editor.app"},
 		{Name: "Bare", Exec: "bare"},
 	}
-	p := newAppsProvider(func() []InstalledApp { return list })
+	p := newAppsProvider(func() []InstalledApp { return list }, nil)
 
 	byTitle := map[string]Result{}
 	for _, r := range srcResults(t, p, targetedReq("app", "")) {
@@ -90,7 +90,7 @@ func TestAppsProviderSkipsUnlaunchableAndCaps(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		list = append(list, InstalledApp{Name: fmt.Sprintf("Tool %02d", i), Exec: "tool"})
 	}
-	p := newAppsProvider(func() []InstalledApp { return list })
+	p := newAppsProvider(func() []InstalledApp { return list }, nil)
 
 	results := srcResults(t, p, targetedReq("app", ""))
 	require.Len(t, results, maxAppResults)
@@ -101,7 +101,7 @@ func TestAppsProviderSkipsUnlaunchableAndCaps(t *testing.T) {
 }
 
 func TestAppsProviderIgnoresNonTargeted(t *testing.T) {
-	p := newAppsProvider(func() []InstalledApp { return []InstalledApp{{Name: "X", Exec: "x"}} })
+	p := newAppsProvider(func() []InstalledApp { return []InstalledApp{{Name: "X", Exec: "x"}} }, nil)
 	results := srcResults(t, p, baseRequest("x", "x", 1, nil))
 	require.Empty(t, results)
 }

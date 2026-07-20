@@ -44,22 +44,41 @@ type resultProvider interface {
 
 // prioritized is an OPTIONAL provider extension (the internal/watch
 // backendInfo pattern): a section-level source weight the frontend
-// uses for PLACEMENT. priority > 0 means "render this provider's
-// section in the zone ABOVE the file results"; the magnitude orders
-// prioritized sections among themselves. It is metadata, NOT a score:
-// it never touches match.Rank's canonical bands or any Result.Score,
-// and external plugins can never carry one -- the Emission field is
-// stamped registry-side from this interface, which only in-process
-// builtin sources can implement (the wire Response has no priority
-// field at all). Providers without the extension default to 0.
-type prioritized interface{ priority() int }
+// uses for PLACEMENT, decided PER EMISSION from the strongest tier
+// the engine minted for it. priority > 0 means "render this
+// provider's section in the zone ABOVE the file results"; the
+// magnitude orders prioritized sections among themselves. It is
+// metadata, NOT a score: it never touches match.Rank's canonical
+// bands or any Result.Score, and external plugins can never carry
+// one -- the Emission field is stamped registry-side from this
+// interface, which only in-process builtin sources can implement
+// (the wire Response has no priority field at all). Providers
+// without the extension default to 0 whatever the tier.
+type prioritized interface{ priority(best match.Tier) int }
+
+// strongTier is the WEAKEST match tier that still counts as a strong
+// match for section promotion: word-start or better (triggered,
+// exact, prefix, word-start). Substring and fuzzy hits are weak --
+// scattered-subsequence app matches must never outrank a directory
+// literally named like the query (the macOS "test" field report), so
+// a section whose best row is weak renders below the file results.
+const strongTier = match.TierWordStart
 
 // sourceResults runs one candidate source through the engine: the
-// single choke point for builtin results.
-func sourceResults(src candidateSource, ctx context.Context, req Request, fuzzyDisabled bool) ([]Result, error) {
+// single choke point for builtin results. Alongside the minted rows
+// it reports the STRONGEST tier among them (TierNone when nothing
+// matched) -- the input to per-emission section priority. When the
+// source's priority for that tier is positive (the emission WILL be
+// promoted above the file results), the rows are truncated to the
+// strong ones: promotion is earned per row, and a weak
+// (sub-word-start) row must never ride the promoted zone above
+// exact-name file matches. Weak rows still render -- below the files
+// -- whenever no strong match exists, because the whole section then
+// stays at priority 0.
+func sourceResults(src candidateSource, ctx context.Context, req Request, fuzzyDisabled bool) ([]Result, match.Tier, error) {
 	cands, err := src.candidates(ctx, req)
 	if err != nil || len(cands) == 0 {
-		return nil, err
+		return nil, match.TierNone, err
 	}
 	ranked := match.Rank(cands, match.RankOptions{
 		Terms:         match.Terms(req.Stripped),
@@ -68,7 +87,21 @@ func sourceResults(src candidateSource, ctx context.Context, req Request, fuzzyD
 		Targeted:      req.Targeted,
 		PreRanked:     src.preRanked(),
 	})
-	return mintResults(ranked, false), nil
+	if len(ranked) == 0 {
+		return nil, match.TierNone, nil
+	}
+	// The tier is the primary sort key in every Rank mode, so the
+	// first row carries the emission's strongest tier.
+	best := ranked[0].Tier()
+	if providerPriority(src, best) > 0 {
+		for i, rk := range ranked {
+			if rk.Tier() > strongTier {
+				ranked = ranked[:i]
+				break
+			}
+		}
+	}
+	return mintResults(ranked, false), best, nil
 }
 
 // rankExternal passes a sanitized external response through the
