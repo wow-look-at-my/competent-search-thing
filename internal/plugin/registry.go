@@ -370,12 +370,28 @@ type TargetInfo struct {
 }
 
 // Emission is one provider's answer for one query generation, shaped
-// like the "plugin:results" Wails event payload.
+// like the "plugin:results" Wails event payload. Priority is the
+// provider's source priority (the prioritized extension, stamped
+// HERE, never by a provider response): sections with priority > 0
+// render in the frontend zone ABOVE the file results, and the
+// magnitude orders prioritized sections among themselves. External
+// plugins can never set it -- their wire Response carries no such
+// field and *externalProvider does not implement prioritized.
 type Emission struct {
-	Plugin  string   `json:"plugin"`
-	Name    string   `json:"name"`
-	Gen     int64    `json:"gen"`
-	Results []Result `json:"results"`
+	Plugin   string   `json:"plugin"`
+	Name     string   `json:"name"`
+	Gen      int64    `json:"gen"`
+	Results  []Result `json:"results"`
+	Priority int      `json:"priority,omitempty"`
+}
+
+// providerPriority reads a provider's optional source priority
+// (the prioritized extension); every provider without it is 0.
+func providerPriority(p provider) int {
+	if pr, ok := p.(prioritized); ok {
+		return pr.priority()
+	}
+	return 0
 }
 
 // Dispatch fans a query out to the matching providers, one goroutine
@@ -459,7 +475,12 @@ func (r *Registry) CheatSheet() Emission {
 		r.logf("plugin %s: cheat sheet: %v", r.suggest.id(), err)
 		return Emission{}
 	}
-	return Emission{Plugin: r.suggest.id(), Name: r.suggest.displayName(), Results: results}
+	return Emission{
+		Plugin:   r.suggest.id(),
+		Name:     r.suggest.displayName(),
+		Results:  results,
+		Priority: providerPriority(r.suggest), // suggestions are not prioritized: 0
+	}
 }
 
 // dispatchOne runs one provider query on its own goroutine: optional
@@ -517,7 +538,13 @@ func (r *Registry) dispatchOne(ctx context.Context, p provider, req Request, boo
 		}
 		applyBoost(results, boost)
 		if len(results) > 0 && ctx.Err() == nil {
-			emit(Emission{Plugin: p.id(), Name: p.displayName(), Gen: req.Gen, Results: results})
+			emit(Emission{
+				Plugin:   p.id(),
+				Name:     p.displayName(),
+				Gen:      req.Gen,
+				Results:  results,
+				Priority: providerPriority(p),
+			})
 		}
 	}()
 }

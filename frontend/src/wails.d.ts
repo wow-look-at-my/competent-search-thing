@@ -57,6 +57,11 @@ interface PluginResult {
   title: string; // always non-empty
   subtitle?: string;
   icon?: string; // builtin icon name [a-z0-9_-]+ OR literal glyph/emoji
+  // INTERNAL-ONLY icon-resolution key ("app:<ref>"), stamped by
+  // trusted builtin sources and stripped from external plugins by the
+  // Go sanitizer: render.ts batches visible keys through ResolveIcons
+  // and swaps the glyph for the resolved image; misses keep the glyph.
+  iconKey?: string;
   badge?: string;
   accent_color?: string; // "#rgb" | "#rrggbb" -- ONLY ever sets --plugin-accent
   score?: number; // 0..100; in practice always present (engine-minted)
@@ -78,6 +83,12 @@ interface PluginEmission {
   name: string; // section header display name
   gen: number; // DROP unless === the current frontend seq
   results: PluginResult[]; // non-empty (empty answers never emit)
+  // Source priority, stamped registry-side for builtin sources only
+  // (internal/plugin Emission.Priority, json omitempty: absent means
+  // 0; external plugins can never set it). Sections with priority > 0
+  // render in the #priority-results zone ABOVE the file rows, and
+  // the magnitude orders prioritized sections among themselves.
+  priority?: number;
 }
 
 // The preview target QueryPreview sends (internal/preview Target).
@@ -276,6 +287,12 @@ interface WailsAppBindings {
   // Record one executed query (called after an activation actually
   // ran; Go trims it, skips blanks, and dedups exact repeats).
   AddHistory(entry: string): Promise<void>;
+  // Icon resolution (internal/app icons.go over internal/icons):
+  // maps icon keys ("app:<ref>") to data URIs at the wanted physical
+  // pixel size; keys that miss are absent (never null Go-side;
+  // render.ts still tolerates it defensively). Batched per render
+  // tick -- rows keep their glyph until the answer lands.
+  ResolveIcons(keys: string[], size: number): Promise<Record<string, string>>;
   // Report one activated result for the opt-in ranking telemetry log
   // (called beside AddHistory at the same activation-success sites,
   // fire-and-forget). Go re-validates the echoed report, joins the
@@ -341,10 +358,12 @@ interface WatchDegradedEvent {
 
 // Payload of the "watch:backend" event (internal/app watchBackend),
 // emitted once when the watch layer is up. full is true only for the
-// fanotify whole-filesystem backend; otherwise hint carries a short
-// user-facing explanation the status-bar chip shows on hover.
+// whole-filesystem backends (fanotify on Linux, fsevents on macOS);
+// otherwise hint carries a short user-facing explanation the
+// status-bar chip shows on hover. The per-directory model reports its
+// honest per-OS label (inotify / kqueue / windows).
 interface WatchBackendEvent {
-  backend: "fanotify" | "inotify" | "none";
+  backend: "fanotify" | "fsevents" | "inotify" | "kqueue" | "windows" | "none";
   full: boolean;
   hint: string;
 }

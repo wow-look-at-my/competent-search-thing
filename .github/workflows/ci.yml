@@ -21,7 +21,9 @@ jobs:
 
       - name: Build frontend
         working-directory: frontend
-        run: npm ci && npm run build
+        # npm test is the vitest DOM-ordering gate (priority sections
+        # above file rows + the flat selection rules).
+        run: npm ci && npm run build && npm test
 
       - uses: wow-look-at-my/go-toolchain@v1
         env:

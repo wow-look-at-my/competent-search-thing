@@ -1,16 +1,18 @@
 // Package icons resolves result-row icons to data URIs: app icons
-// named by .desktop Icon= values and file-type icons derived from
-// file names via the shared-mime-info database, both looked up
-// through the freedesktop icon-theme machinery (detected GTK theme +
-// its Inherits chain + Adwaita/hicolor, then unthemed and pixmap
-// fallbacks).
+// named by .desktop Icon= values (or, on macOS, by .app bundle paths
+// resolved through Info.plist + .icns extraction -- see bundle.go)
+// and file-type icons derived from file names via the shared-mime-info
+// database, the themed shapes looked up through the freedesktop
+// icon-theme machinery (detected GTK theme + its Inherits chain +
+// Adwaita/hicolor, then unthemed and pixmap fallbacks).
 //
 // The package is pure stdlib, headless-testable (every input dir and
-// external command sits behind Options seams) and compiles on every
-// platform without build tags: on windows and darwin the XDG lookup
-// dirs simply do not exist, so every lookup misses gracefully and
-// the frontend keeps its built-in glyphs -- that is the honest
-// cross-platform story until native .ico/.icns extraction exists.
+// external command sits behind Options seams; the bundle branch is
+// selected by ref SHAPE, so fixture bundles exercise it on any OS)
+// and compiles on every platform without build tags: on windows the
+// lookup sources simply do not exist, so every lookup misses
+// gracefully and the frontend keeps its built-in glyphs -- the honest
+// story until native .ico extraction exists.
 //
 // Nothing touches the disk or execs anything at NewService; the
 // first Resolve pays the one-time initialization (mime database
@@ -213,9 +215,11 @@ func (s *Service) resolveKey(key string, size int) (string, bool) {
 	return "", false
 }
 
-// appIcon resolves a .desktop Icon= value: an absolute path is
-// served directly when it is a .png/.svg within the size cap (XPM
-// and everything else miss); anything relative is a themed icon name
+// appIcon resolves an app icon ref: an absolute path ending in ".app"
+// is a macOS bundle (the darwin appctx source's ref shape; see
+// bundle.go), any other absolute path is served directly when it is a
+// .png/.svg within the size cap (XPM and everything else miss), and
+// anything relative is a themed icon name (the .desktop Icon= shape)
 // with a known image extension stripped, rejected outright when it
 // smells of traversal.
 func (s *Service) appIcon(ref string, size int) (string, bool) {
@@ -224,6 +228,8 @@ func (s *Service) appIcon(ref string, size int) (string, bool) {
 	}
 	if filepath.IsAbs(ref) {
 		switch strings.ToLower(filepath.Ext(ref)) {
+		case ".app":
+			return s.bundleIcon(ref, size)
 		case ".png", ".svg":
 			return s.cachedFile(ref, size)
 		}

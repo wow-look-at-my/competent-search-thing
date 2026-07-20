@@ -20,11 +20,13 @@
 // code or on arrival order -- and the Sweeper feeds the very same
 // reconcile with paths that never had an event at all.
 //
-// fsnotify is used uniformly on every platform, and an fsnotify watch
-// covers exactly ONE directory everywhere -- on Linux that is how
-// inotify works, and the package deliberately uses the same
-// one-watch-per-directory model on the other backends too, so behavior
-// never diverges by OS. The Watcher maintains a bounded HOT SET of
+// Where no whole-filesystem backend runs (fanotify marks on linux,
+// the FSEvents stream on darwin), per-directory fsnotify is the
+// fallback on every platform, and an fsnotify watch covers exactly
+// ONE directory everywhere -- on Linux that is how inotify works, and
+// the package deliberately uses the same one-watch-per-directory
+// model on the other backends too (kqueue on darwin, labeled
+// honestly via PerDirBackendName), so behavior never diverges by OS. The Watcher maintains a bounded HOT SET of
 // watches (Options.MaxWatches; unlimited resolves to the old
 // watch-everything behavior): the configured roots are always watched,
 // the remaining budget is filled preferring the user's home subtree,
@@ -74,13 +76,16 @@ type Options struct {
 	// MaxWatches bounds the hot set: the number of directories watched
 	// concurrently. 0 = auto (linux: min(max_user_watches/2, 65536)
 	// read from /proc/sys/fs/inotify/max_user_watches, floor 1024;
-	// non-linux, or when the limit cannot be read, there is no
-	// effective limit and every indexed directory is watched -- the
-	// pre-budget behavior). Negative = explicitly unlimited, the same
-	// watch-everything behavior. Directories beyond the budget stay
-	// cold: no watch syscalls are issued for them, they are never
-	// counted as drops and never degrade the watcher, and the sweep
-	// tier converges them.
+	// darwin: min(RLIMIT_NOFILE/16, 8192), floor 256 -- kqueue opens
+	// one fd per watched dir PLUS one per direct child file, so the
+	// budget must leave descriptors for the app itself; elsewhere, or
+	// when the limit cannot be read, there is no effective limit and
+	// every indexed directory is watched -- the pre-budget behavior).
+	// Negative = explicitly unlimited, the same watch-everything
+	// behavior. Directories beyond the budget stay cold: no watch
+	// syscalls are issued for them, they are never counted as drops
+	// and never degrade the watcher, and the sweep tier converges
+	// them.
 	MaxWatches int
 	// WatchEx, when non-nil, excludes directories from LIVE WATCHING
 	// only: a matching directory -- and everything beneath it, the
@@ -103,29 +108,36 @@ type Options struct {
 	// into the Watcher's Stop.
 	OnDegraded func(Stats)
 	// Backend selects the notification backend (wire config's
-	// watcher.backend here). "" or "auto" = automatic detection:
-	// fanotify whole-filesystem marks when the kernel, privileges, and
-	// filesystems allow, else per-directory fsnotify. "fanotify" =
-	// STRICT: require the fanotify backend; when it cannot start the
-	// watcher runs with NO live watching at all (the no-op "none"
-	// notifier -- Stats().Backend reports "none", nothing is watched,
-	// nothing is delivered) instead of silently falling back to
-	// inotify, and the refusal is logged loudly; sweeps keep the index
-	// converging. "inotify" = skip the fanotify probe and use
-	// per-directory fsnotify directly (debugging). Unrecognized values
-	// behave like "auto" (config normalization canonicalizes upstream).
+	// watcher.backend here). "" or "auto" = automatic detection: a
+	// whole-filesystem backend where one exists -- fanotify marks on
+	// linux (kernel, privileges, and filesystems allowing), the
+	// FSEvents stream on darwin -- else per-directory fsnotify.
+	// "fanotify" and "fsevents" = STRICT: require that backend; when
+	// it cannot start (including on the wrong OS) the watcher runs
+	// with NO live watching at all (the no-op "none" notifier --
+	// Stats().Backend reports "none", nothing is watched, nothing is
+	// delivered) instead of silently falling back to the
+	// per-directory model, and the refusal is logged loudly; sweeps
+	// keep the index converging. "inotify" = skip the
+	// whole-filesystem probe and use per-directory fsnotify directly
+	// on every OS (debugging; the runtime label is then the honest
+	// per-OS PerDirBackendName). Unrecognized values behave like
+	// "auto" (config normalization canonicalizes upstream).
 	Backend string
 }
 
 // Stats is a snapshot of the watcher's health for logs and the UI.
 type Stats struct {
-	// Backend names the notification backend feeding the watcher:
-	// "inotify" for the per-directory fsnotify model (the uniform
-	// default everywhere), "fanotify" when Start detected the
-	// whole-filesystem backend (linux with CAP_SYS_ADMIN and
-	// markable filesystems; see backendInfo), "none" when the strict
-	// Options.Backend="fanotify" mode could not start fanotify: no
-	// live watching at all, sweeps only.
+	// Backend names the notification backend feeding the watcher,
+	// honestly per OS: "inotify" | "kqueue" | "windows" for the
+	// per-directory fsnotify model (PerDirBackendName -- the same
+	// model everywhere, labeled by what fsnotify runs on),
+	// "fanotify" when Start detected the linux whole-filesystem
+	// backend (CAP_SYS_ADMIN and markable filesystems; see
+	// backendInfo), "fsevents" for the darwin whole-filesystem
+	// stream, "none" when a strict Options.Backend mode could not
+	// start its required backend: no live watching at all, sweeps
+	// only.
 	Backend string
 	// Budget is the resolved MaxWatches cap (math.MaxInt when
 	// unlimited); 0 until Start resolved it.
@@ -176,7 +188,8 @@ type Watcher struct {
 	// Seams: unit tests swap these for deterministic fakes.
 	newNotifier    func() (notifier, error)
 	readDir        func(string) ([]os.DirEntry, error)
-	readMaxWatches func() int             // raw kernel watch limit; <= 0 = unknown
+	readMaxWatches func() int             // raw kernel watch/fd limit; <= 0 = unknown
+	autoBudget     func(int) int          // auto formula over that raw limit (per-OS)
 	homeDir        func() (string, error) // the priority-fill home subtree
 
 	lc lifecycle
@@ -226,14 +239,18 @@ func New(m *index.Manager, roots []string, ex *index.Excluder, opt Options) *Wat
 		opt:            opt,
 		pinned:         make(map[string]struct{}),
 		readDir:        os.ReadDir,
-		readMaxWatches: readInotifyMaxWatches,
+		readMaxWatches: defaultReadMaxWatches,
+		autoBudget:     defaultAutoBudget,
 		homeDir:        os.UserHomeDir,
 		initialDone:    make(chan struct{}),
 		watched:        make(map[string]*list.Element),
 		lru:            list.New(),
 		deb:            debouncer{quiet: opt.Quiet, maxAge: opt.MaxAge, maxPending: opt.MaxPending},
 	}
-	w.stats.Backend = "inotify"
+	// The honest per-OS default label; notifiers implementing
+	// backendInfo (incl. the production per-directory fsnotifier)
+	// overwrite it in Start.
+	w.stats.Backend = PerDirBackendName()
 	for _, r := range roots {
 		if a, err := filepath.Abs(r); err == nil {
 			r = a
@@ -256,11 +273,16 @@ func New(m *index.Manager, roots []string, ex *index.Excluder, opt Options) *Wat
 
 // resolveBudget turns Options.MaxWatches into the effective hot-set
 // cap. Explicit positives are taken as-is; negatives are explicitly
-// unlimited; 0 is auto: half the kernel's per-user inotify watch
-// allowance capped at 65536 (floor 1024) so one app never hogs the
-// whole per-user budget, or unlimited where no limit is readable
-// (non-linux -- watch-everything remains the behavior there).
-func resolveBudget(maxWatches int, readMax func() int) int {
+// unlimited; 0 is auto: the per-OS formula (auto; nil defaults to the
+// inotify formula) over the raw limit readMax reports, or unlimited
+// where no limit is readable (windows and the BSDs --
+// watch-everything remains the behavior there). Production bindings
+// per OS: linux reads the per-user inotify watch allowance and halves
+// it, darwin reads the process fd limit and takes a conservative
+// sixteenth (see the formulas below); both live untagged here so both
+// are unit-tested on every CI job, and budget_{linux,darwin,other}.go
+// bind the defaults.
+func resolveBudget(maxWatches int, readMax func() int, auto func(int) int) int {
 	switch {
 	case maxWatches > 0:
 		return maxWatches
@@ -274,6 +296,18 @@ func resolveBudget(maxWatches int, readMax func() int) int {
 	if raw <= 0 {
 		return math.MaxInt
 	}
+	if auto == nil {
+		auto = autoBudgetInotify
+	}
+	return auto(raw)
+}
+
+// autoBudgetInotify is the linux auto formula: half the kernel's
+// per-user inotify watch allowance capped at 65536 (floor 1024), so
+// one app never hogs the whole per-user budget. One inotify watch
+// costs one watch descriptor per DIRECTORY, so the dir-count budget
+// bounds kernel cost linearly.
+func autoBudgetInotify(raw int) int {
 	b := raw / 2
 	if b > 65536 {
 		b = 65536
@@ -282,6 +316,43 @@ func resolveBudget(maxWatches int, readMax func() int) int {
 		b = 1024
 	}
 	return b
+}
+
+// autoBudgetDarwinFD is the darwin auto formula over the process's
+// RLIMIT_NOFILE soft limit: a sixteenth of it, capped at 8192 (floor
+// 256). Far more conservative than linux's half, because fsnotify's
+// kqueue backend opens one fd per watched directory PLUS one per
+// direct child file -- at the field corpus's ~7.5 entries/dir a
+// watched dir costs ~8 fds on average, so raw/16 targets roughly
+// half the fd limit spent on watching, leaving the other half for
+// the app (webview, sqlite copies, exec, IPC). A heuristic by
+// nature: one file-dense directory can still cost thousands of fds
+// (inherent to the kqueue model; DroppedWatches stays honest), and
+// the real fix is that auto prefers the FSEvents backend, which
+// needs no hot set at all. Worked examples: limit 61440 -> 3840
+// dirs (~30k fds at the average); legacy limit 10240 -> 640 dirs
+// (~5k fds).
+func autoBudgetDarwinFD(raw int) int {
+	b := raw / 16
+	if b > 8192 {
+		b = 8192
+	}
+	if b < 256 {
+		b = 256
+	}
+	return b
+}
+
+// FormatBudget renders a resolved watch budget for logs: the
+// unlimited sentinel (math.MaxInt) prints as "unlimited" -- never the
+// raw 9223372036854775807 the field logs carried -- and everything
+// else as the plain number. Exported for the app layer's summary
+// line.
+func FormatBudget(b int) string {
+	if b == math.MaxInt {
+		return "unlimited"
+	}
+	return strconv.Itoa(b)
 }
 
 // readInotifyMaxWatches reads the kernel's per-user inotify watch
@@ -323,7 +394,7 @@ func (w *Watcher) Start() error {
 		w.stats.Backend = name
 		w.wide = wide
 	}
-	w.budget = resolveBudget(w.opt.MaxWatches, w.readMaxWatches)
+	w.budget = resolveBudget(w.opt.MaxWatches, w.readMaxWatches, w.autoBudget)
 	w.stats.Budget = w.budget
 	w.mu.Unlock()
 	go w.run(ctx)

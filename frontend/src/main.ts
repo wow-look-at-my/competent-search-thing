@@ -1,17 +1,19 @@
 // Frontend wiring: as-you-type search over the Go index with stale
 // response dropping, a keyboard/mouse selection model, open/reveal
 // actions, the async plugin pipeline (fire-and-forget QueryPlugins,
-// "plugin:results" sections below the file rows, the bang-target
-// chip, plugin action dispatch), the empty-query command cheat sheet
-// (CheatSheet, rendered unselected), the query history (the bar
-// summons empty; Up/Down recall committed queries -- see the history
-// section below), and the runtime events the Go side emits
-// (app:shown, index:progress, watch:degraded, watch:backend,
-// theme:changed, stats:update -- the system stats row at the bottom
-// edge). Rendering lives in render.ts (results) and stats.ts (the
-// stats row's formatting); theme token/custom-css application lives in
-// theme.ts; the opt-in preview pane lives in preview.ts (wired below
-// through GetPreviewConfig + the selection/query hooks).
+// "plugin:results" sections -- priority > 0 sections in the zone
+// ABOVE the file rows, the rest below -- the bang-target chip, plugin
+// action dispatch), the empty-query command cheat sheet (CheatSheet,
+// rendered unselected), the query history (the bar summons empty;
+// Up/Down recall committed queries -- see the history section below),
+// and the runtime events the Go side emits (app:shown,
+// index:progress, watch:degraded, watch:backend, theme:changed,
+// stats:update -- the system stats row at the bottom edge). Rendering
+// lives in render.ts (results) and stats.ts (the stats row's
+// formatting); the selection-reconcile rules live pure in
+// selection.ts; theme token/custom-css application lives in theme.ts;
+// the opt-in preview pane lives in preview.ts (wired below through
+// GetPreviewConfig + the selection/query hooks).
 
 import { configModeActive, initConfig } from "./config";
 import {
@@ -23,8 +25,10 @@ import {
   applySelection,
   renderPluginSections,
   renderResults,
+  splitByPriority,
 } from "./render";
 import type { PluginRowRef, PluginSection } from "./render";
+import { reconcileSelection } from "./selection";
 import { renderStats } from "./stats";
 import type { StatsNodes } from "./stats";
 import { initTheme } from "./theme";
@@ -36,6 +40,9 @@ const FLASH_ERROR_MS = 2000;
 const inputEl = document.getElementById("query") as HTMLInputElement;
 const bangChipEl = document.getElementById("bang-chip") as HTMLSpanElement;
 const resultsEl = document.getElementById("results") as HTMLDivElement;
+const priorityResultsEl = document.getElementById(
+  "priority-results",
+) as HTMLDivElement;
 const fileResultsEl = document.getElementById(
   "file-results",
 ) as HTMLDivElement;
@@ -60,24 +67,31 @@ const statsNodes: StatsNodes = {
 };
 
 // A selectable row: a file hit or one plugin result. The flat
-// keyboard/hover selection runs over files first, then plugin rows.
+// keyboard/hover selection runs over the priority plugin rows first,
+// then files, then the below-zone plugin rows -- the DOM order.
 type SelectableItem =
   | { kind: "file"; file: WailsSearchResult }
   | { kind: "plugin"; pluginId: string; result: PluginResult };
 
 interface UIState {
   items: SelectableItem[]; // combined selectables, parallel to rows
-  rows: HTMLDivElement[]; // combined file + plugin rows
+  rows: HTMLDivElement[]; // combined priority + file + plugin rows
   fileItems: WailsSearchResult[];
   fileRows: HTMLDivElement[];
   sections: PluginSection[]; // plugin emissions for the current seq
-  pluginRefs: PluginRowRef[];
+  priorityRefs: PluginRowRef[]; // rendered above the file rows
+  priorityRows: HTMLDivElement[];
+  pluginRefs: PluginRowRef[]; // rendered below the file rows
   pluginRows: HTMLDivElement[];
   selected: number;
   seq: number; // stale-response guard: only the newest generation renders
   visible: boolean; // mirrors the Go side; gates the blur auto-hide
   indexMsg: string; // last index build status, shown while idle
   query: string; // query of the current generation (empty-state check)
+  // Whether the user navigated (arrows/Home/End/hover) since the
+  // current generation started: a late priority emission only steals
+  // the auto-selection while this is false (see selection.ts).
+  userNavigated: boolean;
   histEntries: string[]; // committed query history, oldest -> newest
   histCursor: number; // -1 = not browsing history; 0 = newest entry
 }
@@ -88,6 +102,8 @@ const state: UIState = {
   fileItems: [],
   fileRows: [],
   sections: [],
+  priorityRefs: [],
+  priorityRows: [],
   pluginRefs: [],
   pluginRows: [],
   selected: -1,
@@ -95,6 +111,7 @@ const state: UIState = {
   visible: false,
   indexMsg: "",
   query: "",
+  userNavigated: false,
   histEntries: [],
   histCursor: -1,
 };
@@ -175,15 +192,29 @@ function refreshStats(app: WailsAppBindings): void {
 
 /* --- selection ------------------------------------------------------ */
 
+// Row handlers resolve the flat index at EVENT time from the row
+// element (rows.indexOf): a render-time index would go stale the
+// moment a later-arriving priority section prepends rows above the
+// file rows. indexOf over <= ~30 rows per event is free.
 const rowHandlers = {
   // Hover selects WITHOUT scrolling: rows sweep under the cursor
   // while the list scrolls, and a scrollIntoView per mouseenter
   // would yank the viewport (select's scroll flag defaults to true
-  // for keyboard navigation).
-  onHover: (i: number) => {
-    select(i, false);
+  // for keyboard navigation). Hover counts as navigation: a late
+  // emission must not yank the selection out from under the mouse.
+  onHover: (row: HTMLDivElement) => {
+    const i = state.rows.indexOf(row);
+    if (i >= 0) {
+      state.userNavigated = true;
+      select(i, false);
+    }
   },
-  onActivate: activate,
+  onActivate: (row: HTMLDivElement, reveal: boolean) => {
+    const i = state.rows.indexOf(row);
+    if (i >= 0) {
+      activate(i, reveal);
+    }
+  },
 };
 
 function select(index: number, scroll = true): void {
@@ -201,6 +232,7 @@ function moveSelection(delta: number): void {
   if (n === 0) {
     return;
   }
+  state.userNavigated = true;
   if (state.selected < 0) {
     // Entering the list from no selection (the empty-query cheat
     // sheet): Down lands on the first row, Up on the last.
@@ -210,10 +242,14 @@ function moveSelection(delta: number): void {
   select((((state.selected + delta) % n) + n) % n); // wraps both ways
 }
 
-// syncCombined rebuilds the flat selection model (file rows first,
-// then plugin rows) after either area re-renders.
+// syncCombined rebuilds the flat selection model in DOM order --
+// priority plugin rows, then file rows, then below-zone plugin rows
+// -- after any area re-renders.
 function syncCombined(): void {
   const items: SelectableItem[] = [];
+  for (const ref of state.priorityRefs) {
+    items.push({ kind: "plugin", pluginId: ref.pluginId, result: ref.result });
+  }
   for (const file of state.fileItems) {
     items.push({ kind: "file", file });
   }
@@ -221,7 +257,20 @@ function syncCombined(): void {
     items.push({ kind: "plugin", pluginId: ref.pluginId, result: ref.result });
   }
   state.items = items;
-  state.rows = state.fileRows.concat(state.pluginRows);
+  state.rows = state.priorityRows.concat(state.fileRows, state.pluginRows);
+}
+
+// sameItem matches selectables by underlying identity, so a re-render
+// can preserve the user's selection even when zone membership shifts
+// the flat index (a late priority emission prepends rows above it).
+function sameItem(a: SelectableItem, b: SelectableItem): boolean {
+  if (a.kind === "file" && b.kind === "file") {
+    return a.file === b.file;
+  }
+  if (a.kind === "plugin" && b.kind === "plugin") {
+    return a.pluginId === b.pluginId && a.result === b.result;
+  }
+  return false;
 }
 
 // The "No matches" message shows only when a non-blank query produced
@@ -233,31 +282,42 @@ function updateEmptyState(): void {
     state.sections.length > 0;
 }
 
-// renderPluginArea re-renders the plugin sections below the file rows
-// and reconciles the flat selection with the new combined row set. It
-// runs after every file render too, so plugin row handler indices
-// always offset from the file rows currently on screen.
+// renderPluginArea re-renders BOTH plugin zones -- priority > 0
+// sections above the file rows, the rest below -- and reconciles the
+// flat selection with the new combined row set (selection.ts): a
+// navigated user keeps their item by identity, an un-navigated one
+// gets auto-select re-run on row 0, so a late-arriving apps section
+// takes the selection Spotlight-style; the blank-query cheat sheet
+// stays unselected.
 function renderPluginArea(): void {
-  const out = renderPluginSections(
-    pluginResultsEl,
-    state.sections,
-    state.fileRows.length,
+  const prevItem = state.items[state.selected] ?? null;
+  const zones = splitByPriority(state.sections);
+  const above = renderPluginSections(
+    priorityResultsEl,
+    zones.priority,
     rowHandlers,
   );
-  state.pluginRows = out.rows;
-  state.pluginRefs = out.refs;
+  state.priorityRows = above.rows;
+  state.priorityRefs = above.refs;
+  const below = renderPluginSections(
+    pluginResultsEl,
+    zones.normal,
+    rowHandlers,
+  );
+  state.pluginRows = below.rows;
+  state.pluginRefs = below.refs;
   syncCombined();
   updateEmptyState();
-  let sel = state.selected;
-  if (sel >= state.rows.length) {
-    sel = state.rows.length - 1; // the area shrank under the selection
-  }
-  if (sel < 0 && state.rows.length > 0 && state.query.trim() !== "") {
-    // First content to arrive takes the selection -- but never at an
-    // empty query: the cheat sheet starts unselected so Enter on an
-    // empty bar stays a no-op until the list is entered explicitly.
-    sel = 0;
-  }
+  const sel = reconcileSelection({
+    prevItemIndex:
+      prevItem === null
+        ? -1
+        : state.items.findIndex((it) => sameItem(it, prevItem)),
+    prevSelected: state.selected,
+    rowCount: state.rows.length,
+    queryBlank: state.query.trim() === "",
+    userNavigated: state.userNavigated,
+  });
   select(sel, false); // a late emission must never move the viewport
 }
 
@@ -452,6 +512,7 @@ function runSearch(app: WailsAppBindings): void {
   const seq = ++state.seq;
   const query = inputEl.value;
   state.query = query;
+  state.userNavigated = false; // navigation state is per-generation
   previewOnQueryChange(query); // no-op while the pane is disabled
   state.sections = []; // plugin sections are per-generation
   if (query.trim() === "") {
@@ -467,10 +528,15 @@ function runSearch(app: WailsAppBindings): void {
       const ms = performance.now() - t0;
       state.fileItems = items;
       state.fileRows = renderResults(fileResultsEl, items, rowHandlers);
-      renderPluginArea(); // re-offset plugin rows below the new file rows
-      // Auto-select the first row only for a real query: the
-      // empty-query cheat sheet stays unselected (Enter = no-op).
-      select(query.trim() !== "" && state.rows.length > 0 ? 0 : -1);
+      renderPluginArea(); // re-render both plugin zones around the new file rows
+      // Auto-select the first row only for a real query (the
+      // empty-query cheat sheet stays unselected; Enter = no-op) --
+      // and only while the user has not already navigated this
+      // generation. Unlike the late-emission reconcile, a fresh
+      // response scrolls the selection into view.
+      if (!state.userNavigated) {
+        select(query.trim() !== "" && state.rows.length > 0 ? 0 : -1);
+      }
       if (query.trim() === "") {
         refreshIdleStatus();
       } else {
@@ -506,7 +572,10 @@ function fetchCheatSheet(app: WailsAppBindings, seq: number): void {
       if (results.length === 0) {
         return; // suggestions disabled or nothing registered
       }
-      state.sections = [{ plugin: e.plugin, name: e.name, results }];
+      // The cheat sheet always renders in the classic below zone.
+      state.sections = [
+        { plugin: e.plugin, name: e.name, results, priority: 0 },
+      ];
       renderPluginArea();
     })
     .catch((err: unknown) => {
@@ -589,12 +658,14 @@ function onKeydown(app: WailsAppBindings, ev: KeyboardEvent): void {
     case "Home":
       ev.preventDefault();
       if (state.items.length > 0) {
+        state.userNavigated = true;
         select(0);
       }
       break;
     case "End":
       ev.preventDefault();
       if (state.items.length > 0) {
+        state.userNavigated = true;
         select(state.items.length - 1);
       }
       break;
@@ -663,9 +734,10 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
     }
   });
 
-  // The one-time backend announcement: full coverage (fanotify) needs
-  // no notice; anything else keeps a persistent chip up -- "Partial
-  // file watching" for the bounded inotify hot set, "File watching
+  // The one-time backend announcement: full coverage (fanotify on
+  // Linux, fsevents on macOS) needs no notice; anything else keeps a
+  // persistent chip up -- "Partial file watching" for the bounded
+  // per-directory hot set (inotify/kqueue/windows), "File watching
   // off" for the none backend -- with the Go-side hint on hover.
   // Independent of the degraded chip: both can show.
   rt.EventsOn("watch:backend", (...data: unknown[]) => {
@@ -688,6 +760,7 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
       plugin: e.plugin,
       name: e.name,
       results: e.results,
+      priority: e.priority ?? 0, // omitempty: absent means 0
     };
     const at = state.sections.findIndex((s) => s.plugin === e.plugin);
     if (at >= 0) {

@@ -38,6 +38,10 @@ type seamRecorder struct {
 	emits   []emittedEvent
 	setPosX []int
 	setPosY []int
+	// gcPercents records every setGCPercent value in call order: the
+	// build-window bound writes buildGCPercent, its restore writes the
+	// fake's fixed previous value back.
+	gcPercents []int
 
 	winX, winY int  // what getPos returns
 	cursorOK   bool // what cursorInfo returns
@@ -145,6 +149,14 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// same-binary guard, so the seam's path is written verbatim.
 	a.plat.args0 = func() string { return "" }
 	a.plat.detectSession = func() platform.Session { return platform.Session{} }
+	// A recording GC seam so no test flips the real runtime's GOGC;
+	// the fake's previous value is a recognizable non-default.
+	a.plat.setGCPercent = func(pct int) int {
+		r.mu.Lock()
+		r.gcPercents = append(r.gcPercents, pct)
+		r.mu.Unlock()
+		return testPrevGCPercent
+	}
 	a.plat.startPortal = func(context.Context, platform.Hotkey, func()) (portalHandle, error) {
 		r.call("startPortal")
 		return nil, portal.ErrNoPortal
@@ -232,6 +244,10 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// No real /proc walks: the frecency cwd derivation stays inert
 	// unless a test injects a fake process tree.
 	a.plat.procTree = nil
+	// No real NSWorkspace observers (the seam is non-nil when the
+	// darwin CI job builds the production seams); Space-watch tests
+	// inject a recording fake.
+	a.plat.watchSpaceChanges = nil
 	// No config.json or plugins-dir IO in unit tests; tests that
 	// exercise the real builder restore a.buildRegistry explicitly.
 	a.newRegistry = func() dispatcher { return nil }
@@ -242,6 +258,9 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// nothing. Stats tests inject a recording fake (or restore
 	// a.buildStats explicitly).
 	a.newStats = func() statsSource { return nil }
+	// No icon-theme detection (gsettings exec) or disk lookups:
+	// ResolveIcons answers empty maps. Icon tests inject a fake.
+	a.newIcons = func() iconResolver { return nil }
 	// The progress printer is inert: non-TTY (never intercepts the
 	// global log output), io.Discard target, dropped non-TTY lines.
 	// Progress tests inject recording printers.
@@ -405,12 +424,17 @@ func TestStartWatchLogsTierSummary(t *testing.T) {
 	_, _, err := m.BuildFromDisk(context.Background(), nil)
 	require.NoError(t, err)
 
-	a, _ := newTestApp(t, m, Options{RescanEvery: 45 * time.Minute})
+	// Pin the per-directory backend: auto would pick a wide backend
+	// where one is available (fsevents on the darwin CI job), whose
+	// summary legitimately reads 0/0. The LABEL is per-OS honest
+	// ("inotify" linux, "kqueue" darwin), so build the expectation
+	// from the real one.
+	a, _ := newTestApp(t, m, Options{RescanEvery: 45 * time.Minute, WatchBackend: "inotify"})
 	a.startWatch() // waits for the initial registration, so the numbers are real
 	require.True(t, watchUp(a))
 	out := buf.String()
-	require.Contains(t, out, "watch: backend inotify: 1/1 dirs live-watched (budget ",
-		"the summary announces the tier with real registration numbers")
+	require.Contains(t, out, "watch: backend "+watch.PerDirBackendName()+": 1/1 dirs live-watched (budget ",
+		"the summary announces the tier with real registration numbers and the honest per-OS label")
 	require.Contains(t, out, "); sweep interval 20m0s; full rescan interval 45m0s")
 	a.Shutdown(context.Background())
 
@@ -440,6 +464,10 @@ func TestStartWatchWiresWatcherConfig(t *testing.T) {
 		WatchMaxWatches: 7,
 		SweepInterval:   45 * time.Minute,
 		WatchExcludes:   []string{"skipme"},
+		// Pin the per-directory backend so the 1/1 assertion below
+		// holds on the darwin CI job too (auto would pick the wide
+		// fsevents backend there, which watches 0/0 by design).
+		WatchBackend: "inotify",
 	})
 	a.startWatch()
 	require.True(t, watchUp(a))
@@ -565,15 +593,27 @@ func TestEmitDegradedPayload(t *testing.T) {
 func TestWatchBackendForPayloads(t *testing.T) {
 	require.Equal(t, watchBackend{Backend: "fanotify", Full: true, Hint: ""},
 		watchBackendFor("fanotify"), "full coverage carries no hint")
+	require.Equal(t, watchBackend{Backend: "fsevents", Full: true, Hint: ""},
+		watchBackendFor("fsevents"), "the darwin wide backend is full coverage too")
 	require.Equal(t, watchBackend{
 		Backend: "inotify",
 		Full:    false,
 		Hint:    "Partial file watching: changes outside the hot set appear within the sweep interval. Enable full coverage: see README (fanotify).",
 	}, watchBackendFor("inotify"))
 	require.Equal(t, watchBackend{
+		Backend: "kqueue",
+		Full:    false,
+		Hint:    "Partial file watching: changes outside the hot set appear within the sweep interval. The fsevents backend provides full coverage on macOS: check the startup log for why it is not active (watcher.backend in config.json).",
+	}, watchBackendFor("kqueue"), "the darwin per-directory fallback points at fsevents, not setcap")
+	require.Equal(t, watchBackend{
+		Backend: "windows",
+		Full:    false,
+		Hint:    hintPartialWatch,
+	}, watchBackendFor("windows"), "unknown per-directory labels take the generic partial hint")
+	require.Equal(t, watchBackend{
 		Backend: "none",
 		Full:    false,
-		Hint:    "Live file watching is off (fanotify required by config but unavailable). The index refreshes on sweeps only.",
+		Hint:    "Live file watching is off (the configured backend is required but unavailable). The index refreshes on sweeps only.",
 	}, watchBackendFor("none"))
 }
 
@@ -593,7 +633,10 @@ func TestStartWatchEmitsBackendNoticeAndGrantHint(t *testing.T) {
 
 	require.Eventually(t, func() bool { return len(r.emitted(eventWatchBackend)) == 1 },
 		20*time.Second, 10*time.Millisecond, "the backend notice is emitted once the watch layer is up")
-	require.Equal(t, watchBackend{Backend: "inotify", Full: false, Hint: hintPartialWatch},
+	// The pinned per-directory backend reports the honest per-OS
+	// label ("inotify" on the linux job, "kqueue" on the darwin one),
+	// each with its matching hint.
+	require.Equal(t, watchBackendFor(watch.PerDirBackendName()),
 		r.emitted(eventWatchBackend)[0].payload[0])
 	require.Contains(t, buf.String(),
 		"watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /test/bin/competent-search-thing",

@@ -48,18 +48,29 @@ const DefaultFirefoxTabsMaxResults = 6
 
 // Watcher backend selection values (WatcherConfig.Backend).
 const (
-	// WatcherBackendAuto (the default) uses fanotify whole-filesystem
-	// marks when the kernel, privileges, and filesystems allow, and
-	// falls back to the per-directory inotify hot set otherwise.
+	// WatcherBackendAuto (the default) uses a whole-filesystem
+	// backend where one exists -- fanotify marks on Linux (kernel,
+	// privileges, and filesystems allowing), the FSEvents stream on
+	// macOS (no privileges needed) -- and falls back to the
+	// per-directory hot set otherwise.
 	WatcherBackendAuto = "auto"
-	// WatcherBackendFanotify is STRICT: fanotify or nothing. When the
-	// fanotify backend cannot start, live watching is disabled
-	// outright -- never a silent inotify fallback -- and the index
-	// converges through sweeps only, announced loudly in-app and in
-	// the log.
+	// WatcherBackendFanotify is STRICT: fanotify or nothing; Linux
+	// only. When the fanotify backend cannot start (or on any other
+	// OS), live watching is disabled outright -- never a silent
+	// per-directory fallback -- and the index converges through
+	// sweeps only, announced loudly in-app and in the log.
 	WatcherBackendFanotify = "fanotify"
-	// WatcherBackendInotify skips the fanotify probe and uses the
-	// per-directory inotify hot set directly (mainly for debugging).
+	// WatcherBackendFSEvents is STRICT: FSEvents or nothing; macOS
+	// only. Same stance as WatcherBackendFanotify -- when the stream
+	// cannot start (or on any other OS), live watching is disabled
+	// outright and sweeps keep the index converging, announced
+	// loudly.
+	WatcherBackendFSEvents = "fsevents"
+	// WatcherBackendInotify skips the whole-filesystem probe and uses
+	// the per-directory hot set directly on every OS (mainly for
+	// debugging). Named after Linux's inotify; the runtime backend is
+	// whatever fsnotify uses on the OS (kqueue on macOS), and the
+	// watch layer labels it honestly.
 	WatcherBackendInotify = "inotify"
 )
 
@@ -315,16 +326,19 @@ type WatcherConfig struct {
 	// trees you still want searchable from consuming watch budget.
 	WatchExcludes []string `json:"watchExcludes,omitempty"`
 	// Backend selects the notification backend (the WatcherBackend*
-	// constants): "auto" (the default; fanotify whole-filesystem marks
-	// when the binary can use them, else the per-directory inotify hot
-	// set), "fanotify" (STRICT: when fanotify cannot start, live
-	// watching is DISABLED -- never a silent inotify fallback -- and
-	// sweeps keep the index converging), or "inotify" (skip the
-	// fanotify probe; for debugging). Normalize lowercases the value
-	// and repairs empty or unknown values to "auto" -- no migration
-	// note is recorded for that repair because the effective backend is
-	// never silent: the watch layer logs it at startup and the frontend
-	// shows a notice chip whenever coverage is not full.
+	// constants): "auto" (the default; a whole-filesystem backend
+	// when the binary can use one -- fanotify marks on Linux, the
+	// FSEvents stream on macOS -- else the per-directory hot set),
+	// "fanotify" or "fsevents" (STRICT: when the named backend cannot
+	// start, including on the wrong OS, live watching is DISABLED --
+	// never a silent per-directory fallback -- and sweeps keep the
+	// index converging), or "inotify" (skip the whole-filesystem
+	// probe on every OS; for debugging). Normalize lowercases the
+	// value and repairs empty or unknown values to "auto" -- no
+	// migration note is recorded for that repair because the
+	// effective backend is never silent: the watch layer logs it at
+	// startup and the frontend shows a notice chip whenever coverage
+	// is not full.
 	Backend string `json:"backend,omitempty"`
 }
 

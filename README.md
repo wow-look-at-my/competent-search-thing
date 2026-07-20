@@ -109,6 +109,20 @@ macOS-specific notes:
   use -- no Accessibility/TCC prompt, nothing to add in System
   Settings. The default hotkey is Option+Space -- Cmd+Space belongs
   to Spotlight.
+- **Dock and Cmd-Tab icon**: the raw-binary distribution ships no
+  `.app` bundle, so there is no `Info.plist` or `.icns` for macOS to
+  read -- a bare executable would normally show the generic app icon.
+  The app therefore sets its Dock/Cmd-Tab icon at runtime, from the
+  same in-code magnifier rasterizer the tray icon uses, the moment
+  its window exists. That covers the RUNNING app; a proper `.app`
+  bundle (Info.plist + iconset, CI packaging, and how it coexists
+  with the raw-binary download URLs) is a known limitation that is
+  deliberately not built yet.
+- **Space switches dismiss the bar**: like Spotlight, switching
+  Spaces (or entering a fullscreen app's Space) hides an open bar
+  instead of dragging it along -- the window joins all Spaces to
+  summon on the active one, and without the dismiss the transition
+  animation could briefly ghost a stale frame of it.
 - The darwin/arm64 binary is CI-built and passes the full unit-test
   suite on macOS runners, but it has not yet had human acceptance
   testing on real hardware.
@@ -146,6 +160,18 @@ A whole-system walk needs guardrails, and they are on by default:
   [File watching and freshness](#file-watching-and-freshness)). On
   Windows only the name patterns apply (it has no such virtual
   trees).
+- **macOS firmlink dedup.** Since Catalina, macOS mounts the writable
+  APFS Data volume at `/System/Volumes/Data` and *also* exposes its
+  content at the canonical paths (`/Users`, `/Applications`,
+  `/usr/local`, ...) through firmlinks. Both spellings name the same
+  files, so a whole-filesystem walk from `/` without a guard indexes
+  roughly 45% of the disk twice -- double the entries, double the RAM,
+  double the build time, duplicate search results. Fresh macOS
+  configs therefore exclude `/System/Volumes/Data` (a full-path
+  pattern); everything stays searchable under its canonical spelling.
+  If you truly want the raw Data-volume view indexed too, delete that
+  pattern from `excludes` in config.json -- it is an ordinary exclude,
+  not hardcoded.
 - **Mount skipping.** At every index build and rescan the app reads
   `/proc/self/mounts` (Linux) and skips mountpoints under the roots
   whose filesystem type is kernel-virtual (`proc`, `sysfs`, `tmpfs`,
@@ -168,7 +194,7 @@ To narrow the scope, edit `roots` in config.json (see
 ```json
 {
   "roots": ["/home/me", "/etc"],
-  "rootsVersion": 3
+  "rootsVersion": 4
 }
 ```
 
@@ -183,14 +209,19 @@ additionally get the v3 step: if your `excludes` still contain all
 three stock patterns (`.git`, `node_modules`, `.cache`), the missing
 high-churn noise patterns are appended (see
 [File watching and freshness](#file-watching-and-freshness)); a
-curated or emptied list is left exactly as you wrote it. Either way
-`"rootsVersion": 3` is written back so the check never re-runs. Watch
+curated or emptied list is left exactly as you wrote it. On macOS,
+configs stamped below 4 get the v4 step under the same rule: the
+firmlink-dedup exclude `/System/Volumes/Data` (see above) is appended
+to default-shaped lists, while curated lists only get an
+informational note. Either way
+`"rootsVersion": 4` is written back so the check never re-runs. Watch
 for these startup log lines:
 
 ```
 config: index roots upgraded to the whole-filesystem default (/); edit roots in config.json to revert -- the first rescan will re-walk everything
 config: system exclude patterns added for whole-filesystem indexing: /proc, /sys, /dev, /run, /tmp, /var/tmp, lost+found
 config: high-churn exclude patterns added for the watch layer: .hg, .svn, __pycache__, .mypy_cache, .pytest_cache, .ruff_cache, .tox, .nox, .venv; remove any of them in config.json to index those trees
+config: macOS firmlink exclude added: /System/Volumes/Data (macOS shows the same files at /Users, /Applications, ...; indexing both nearly doubles the index and its RAM); remove it in config.json to index the Data volume twice
 ```
 
 To revert, set `roots` back to what you want (e.g. `["/home/me"]`) and
@@ -223,6 +254,16 @@ reports the whole time-to-ready:
 index: startup complete: 12449259 entries in 41.3s, 384.2MB ram
 ```
 
+The `ram` figure is the process's **current** memory footprint: on
+Linux the resident set from `/proc/self/statm`, on macOS the mach
+`phys_footprint` -- the same number Activity Monitor's "Memory"
+column shows (older builds reported `getrusage` `ru_maxrss` there,
+the peak high-water mark, which could only ever grow). While the
+initial build runs the app also lowers the Go garbage collector's
+growth target (`GOGC` 40 for just that window, restored right after)
+so the walk's transient allocations cannot balloon the peak to ~2x
+the live index; steady-state behavior is untouched.
+
 ## File watching and freshness
 
 After the initial walk, three cooperating tiers keep the index live.
@@ -232,18 +273,32 @@ index state** -- they differ only in how quickly a change shows up.
 | Tier | Coverage | Change latency | When active |
 |------|----------|----------------|-------------|
 | fanotify whole-filesystem marks | every directory on the roots' filesystems, one kernel mark per filesystem, no per-directory watches | ~1 second (debounced) | Linux, automatic, when the binary holds `CAP_SYS_ADMIN` (see below) |
-| inotify hot set | a bounded budget of per-directory watches: the roots first, then your home subtree, then the rest, rotated LRU-style toward recently active directories | ~1 second (debounced) for watched directories | whenever fanotify is not available; the only live tier on macOS and Windows |
+| FSEvents stream | every directory under the roots, one recursive kernel stream, a handful of file descriptors total | ~1 second (debounced; 0.3s stream latency) | macOS, automatic, no privileges needed |
+| per-directory hot set (inotify on Linux, kqueue on macOS, ReadDirectoryChangesW on Windows) | a bounded budget of per-directory watches: the roots first, then your home subtree, then the rest, rotated LRU-style toward recently active directories | ~1 second (debounced) for watched directories | whenever no whole-filesystem backend is available; the only live tier on Windows |
 | reconcile sweeps | every indexed directory, every pass | one sweep interval (default 20 minutes) | always (unless `watcher.sweepDisabled`) |
+
+On macOS the per-directory fallback deserves a warning: kqueue (what
+fsnotify uses there) opens one file descriptor per watched directory
+PLUS one per direct child file, so the automatic budget is a
+conservative sixteenth of the process fd limit (capped at 8192) --
+and an explicit `"maxWatches": -1` can exhaust the fd limit and break
+the whole process (folders refusing to open, every later `open()`
+failing with "too many open files"). The FSEvents backend makes all
+of that moot: `auto` selects it on macOS, it needs no watch set, no
+budget, and no privileges.
 
 ### Enable full-filesystem watching (recommended)
 
-The fanotify tier is the one you want to be on: a handful of kernel
-marks cover every directory of the roots' filesystems, registration
-is near-instant, `max_user_watches` stops mattering, and freshness no
-longer depends on which directories happen to be in a watch budget.
-Linux gates it behind capabilities -- `CAP_SYS_ADMIN` for the marks,
-`CAP_DAC_READ_SEARCH` for resolving event paths -- so an unprivileged
-launch physically cannot use it. Grant both on the installed binary:
+A whole-filesystem tier is the one you want to be on: registration is
+near-instant, per-directory watch limits stop mattering, and
+freshness no longer depends on which directories happen to be in a
+watch budget. **macOS needs no setup at all** -- the FSEvents backend
+is whole-filesystem out of the box and `auto` selects it. On Linux,
+fanotify covers every directory of the roots' filesystems with a
+handful of kernel marks, but Linux gates it behind capabilities --
+`CAP_SYS_ADMIN` for the marks, `CAP_DAC_READ_SEARCH` for resolving
+event paths -- so an unprivileged launch physically cannot use it.
+Grant both on the installed binary:
 
 ```
 sudo setcap cap_sys_admin,cap_dac_read_search+ep /usr/local/bin/competent-search-thing
@@ -255,24 +310,28 @@ upgrade that replaces the file (file capabilities live on the inode).
 
 With the grant, a change anywhere under your roots reaches search
 results in about a second. Without it, the watcher falls back to the
-bounded inotify hot set: the final index state is identical, but only
-hot-set directories get ~1s latency -- everything else waits for a
-sweep (see the tier table above). Running without fanotify is never
-silent:
+bounded per-directory hot set: the final index state is identical,
+but only hot-set directories get ~1s latency -- everything else waits
+for a sweep (see the tier table above). Running without a
+whole-filesystem backend is never silent:
 
 - the status bar keeps a persistent **"Partial file watching"** chip
   up (hover it for what that means), or **"File watching off"** when
   strict mode disabled the fallback (next paragraph);
-- the startup log names the effective backend and prints the setcap
-  command above.
+- the startup log names the effective backend honestly (`inotify` on
+  Linux, `kqueue` on macOS, `windows` on Windows) and, on Linux,
+  prints the setcap command above.
 
-If a quiet inotify fallback is not acceptable, pin the backend:
-`"watcher": { "backend": "fanotify" }` in config.json is STRICT --
-when fanotify cannot start, live watching is disabled outright rather
-than falling back (the index still converges through sweeps), the log
-announces it loudly, and the bar shows "File watching off".
-`"backend": "inotify"` skips the fanotify probe entirely (debugging);
-the default `"auto"` tries fanotify and falls back.
+If a quiet per-directory fallback is not acceptable, pin the backend:
+`"watcher": { "backend": "fanotify" }` (Linux) or
+`"watcher": { "backend": "fsevents" }` (macOS) in config.json is
+STRICT -- when the named backend cannot start (including on the wrong
+OS), live watching is disabled outright rather than falling back (the
+index still converges through sweeps), the log announces it loudly,
+and the bar shows "File watching off". `"backend": "inotify"` skips
+the whole-filesystem probe entirely and pins the per-directory model
+on every OS (debugging); the default `"auto"` tries the
+whole-filesystem backend and falls back.
 
 **Understand what the grant means before running it.** File
 capabilities apply process-wide to every run of that binary:
@@ -301,18 +360,21 @@ The consistency model in practice:
   `rescanIntervalMinutes` timer if you set one).
 
 Startup announces the active tier and its numbers in the log -- the
-second form means fanotify is on; the first is always followed by the
-ready-to-paste grant command:
+second form means a whole-filesystem backend is on (`fanotify` on
+Linux, `fsevents` on macOS); the first is always followed, on Linux,
+by the ready-to-paste grant command. An unlimited budget prints as
+`unlimited`, never as a raw MaxInt:
 
 ```
 watch: backend inotify: 41230/612009 dirs live-watched (budget 65536); sweep interval 20m0s; full rescan interval off
 watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /usr/local/bin/competent-search-thing
-watch: backend fanotify: whole-filesystem marks active; per-directory watches not needed
+watch: backend fsevents: whole-filesystem coverage active; per-directory watches not needed
+watch: backend fsevents: 0/0 dirs live-watched (budget 3840); sweep interval 20m0s; full rescan interval off
 ```
 
 The same state is visible in the app itself: whenever the backend is
-not fanotify, the status bar keeps the "Partial file watching" /
-"File watching off" chip up (see
+not a whole-filesystem one, the status bar keeps the "Partial file
+watching" / "File watching off" chip up (see
 [Enable full-filesystem watching](#enable-full-filesystem-watching-recommended)).
 
 ### Watcher configuration
@@ -322,8 +384,8 @@ The `watcher` section of config.json tunes the layer (see
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `watcher.backend` | `"auto"` | Backend selection. `"auto"` uses fanotify when the binary can (see [Enable full-filesystem watching](#enable-full-filesystem-watching-recommended)) and falls back to the inotify hot set. `"fanotify"` is STRICT: when fanotify cannot start, live watching is disabled outright -- no inotify fallback; sweeps keep the index converging -- announced loudly in-app and in the log. `"inotify"` skips the fanotify probe (debugging). Empty or unknown values are repaired to `"auto"`. |
-| `watcher.maxWatches` | `0` | The hot-set budget. `0` = automatic: half of `fs.inotify.max_user_watches`, capped at 65536. Any negative value = explicitly unlimited (watch every indexed directory). Positive = exactly that many. Irrelevant while fanotify is active. |
+| `watcher.backend` | `"auto"` | Backend selection. `"auto"` uses a whole-filesystem backend where one exists -- fanotify on Linux (see [Enable full-filesystem watching](#enable-full-filesystem-watching-recommended)), FSEvents on macOS (automatic, no privileges) -- and falls back to the per-directory hot set. `"fanotify"` and `"fsevents"` are STRICT: when the named backend cannot start (including on the wrong OS), live watching is disabled outright -- no per-directory fallback; sweeps keep the index converging -- announced loudly in-app and in the log. `"inotify"` skips the whole-filesystem probe and pins the per-directory model on every OS (debugging; the runtime label stays honest: `kqueue` on macOS). `kqueue` is a runtime label, not a config value. Empty or unknown values are repaired to `"auto"`. |
+| `watcher.maxWatches` | `0` | The hot-set budget for the per-directory fallback. `0` = automatic: on Linux half of `fs.inotify.max_user_watches`, capped at 65536; on macOS a sixteenth of the process fd limit, capped at 8192 (kqueue costs one fd per watched dir PLUS one per direct child file, so the budget must leave fds for the app itself). Any negative value = explicitly unlimited (watch every indexed directory; on macOS this can exhaust the fd limit and break the process -- prefer the fsevents backend). Positive = exactly that many. Irrelevant while a whole-filesystem backend is active. |
 | `watcher.sweepMinutes` | `0` | Minutes between reconcile sweeps; `0` = the built-in 20 minutes. |
 | `watcher.sweepDisabled` | `false` | `true` turns the sweep tier off. Directories without a live watch then converge only at full rescans, and the app logs a loud warning at startup saying exactly that. |
 | `watcher.watchExcludes` | `[]` | Patterns (same syntax as `excludes`) applied to live watching ONLY: a matching directory -- and everything beneath it -- never holds a watch but stays fully indexed and swept, so its freshness bound becomes the sweep interval. Use it to keep high-churn trees you still want searchable from consuming watch budget. |
@@ -338,6 +400,22 @@ top of the long-standing `.git`, `node_modules`, `.cache`:
 ```
 .hg .svn __pycache__ .mypy_cache .pytest_cache .ruff_cache .tox .nox .venv
 ```
+
+macOS additionally defaults to its own noise set:
+
+```
+Caches DerivedData _CodeSignature CodeResources /private/var/folders
+```
+
+`Caches` covers `~/Library/Caches` and every app's cache dir,
+`DerivedData` is Xcode's build-product tree, `_CodeSignature` /
+`CodeResources` are per-bundle code-signature manifests (thousands of
+identically named entries with zero search value), and
+`/private/var/folders` is macOS's real per-user temp tree -- the
+`/tmp` and `/var/tmp` system excludes only cover the symlinked
+spellings. Deliberately NOT excluded: `.app`/`.framework` bundle
+internals as a whole and `Application Support` -- those would make
+real files unfindable and await an explicit decision.
 
 They are ordinary `excludes` entries -- delete any of them from
 config.json to index (and watch) those trees again. Existing configs
@@ -360,9 +438,10 @@ buildhost (see [Install](#install)):
       full-path matching (`/etc/hosts`, `etc/ho`; see
       [Search by path](#search-by-path))
 - [x] Live index updates: fanotify whole-filesystem marks where
-      granted, a bounded inotify hot set elsewhere, always-on
-      reconcile sweeps, event debouncing, graceful
-      watch-limit/overflow degradation, optional periodic rescans
+      granted on Linux, an FSEvents stream on macOS, a bounded
+      per-directory hot set elsewhere, always-on reconcile sweeps,
+      event debouncing, graceful watch-limit/overflow degradation,
+      optional periodic rescans
       (see [File watching and freshness](#file-watching-and-freshness))
 - [x] Global hotkey (default Alt+Space) to summon/dismiss the bar
       (XGrabKey on Linux/X11; on Wayland a portal global shortcut,
@@ -390,8 +469,9 @@ buildhost (see [Install](#install)):
       built-in commands (`!rescan`, `!reload`, `!config`, `!version`,
       `!quit`, `!app`) and three documented example plugins
 - [x] Installed apps in normal results: matching apps show up as an
-      async Apps section below the file results for plain queries
-      (exact/prefix/word-start/substring ranking, capped at 6; see
+      async Apps section ABOVE the file results for plain queries
+      (a source-priority placement, not a score hack; engine
+      exact/prefix/word-start/substring ranking, capped at 6; see
       [Apps in normal results](#apps-in-normal-results))
 - [x] Empty-query cheat sheet: an empty bar lists the available
       commands (the same list a bare `!` shows) with no row
@@ -881,9 +961,10 @@ Field reference:
   `retainQueries` `false` logs query text as `""` while keeping paths
   and ranking signals.
 - `watcher` -- the live-watch layer: `backend` (`auto` | `fanotify` =
-  strict, no inotify fallback | `inotify`; unset means `auto`),
-  `maxWatches` (hot-set budget; 0 =
-  auto), `sweepMinutes` (sweep cadence; 0 = 20 minutes),
+  strict, Linux | `fsevents` = strict, macOS | `inotify` = the
+  per-directory model on every OS; unset means `auto`),
+  `maxWatches` (hot-set budget for the per-directory fallback; 0 =
+  auto, per-OS), `sweepMinutes` (sweep cadence; 0 = 20 minutes),
   `sweepDisabled` (kills the sweep tier, loudly) and `watchExcludes`
   (patterns never live-watched but still indexed and swept). The full
   table lives under
@@ -1358,7 +1439,10 @@ and anything dropped is logged with a reason.
 
 Response-wide caps: at most 20 results per response and 1 MiB of
 response body (both transports); control characters in any string are
-replaced with spaces.
+replaced with spaces. The real-image icons on builtin app rows (see
+[App icons](#app-icons)) ride an internal-only resolution key that is
+stripped from every external response: a plugin's `icon` is always a
+builtin name or a short glyph, never an image.
 
 **Ordering**: file results always come first. Plugin sections sort by
 their best result's score (then plugin id); results within a section
@@ -1509,8 +1593,10 @@ and macOS enumeration is best-effort.
 ### Apps in normal results
 
 Installed apps also surface in plain queries -- no bang needed. Typing
-`fire` shows an **Apps** section (below the file results, like any
-plugin section) with Firefox in it; Enter launches the selection
+`fire` shows an **Apps** section ABOVE the file results with Firefox
+in it, auto-selected as row 0 (Spotlight-style: Enter launches the
+app) unless you have already arrowed or hovered into the list, in
+which case your selection stays put. Enter launches the selection
 exactly like `!app` does. This is the fourth built-in provider,
 `apps-search`:
 
@@ -1520,9 +1606,16 @@ exactly like `!app` does. This is the fourth built-in provider,
   substring; ties break alphabetically. The section caps at 6 results
   to stay out of the way -- use `!app` / `!launch` for the full list
   of 15.
+- "Above the files" is a SOURCE PRIORITY, not a score: the section
+  carries priority 1 on its emission (every other section is 0 and
+  keeps rendering below the file results), the UI places priority > 0
+  sections in the zone above the file rows, and the engine's scoring
+  bands are untouched. The priority is stamped by the app for its
+  built-in sources; external plugins cannot set it.
 - Bang routing keeps the two paths mutually exclusive: a `!app ...` /
-  `!launch ...` query dispatches only the targeted launcher, so apps
-  never render twice.
+  `!launch ...` query dispatches only the targeted launcher (in the
+  classic below zone -- there are no file results to outrank on a
+  bang query), so apps never render twice.
 - To turn the untargeted section off (the targeted `!app` / `!launch`
   bangs are unaffected):
 
@@ -1836,6 +1929,39 @@ query is the only command mode), remote icons, plugin-supplied
 HTML/CSS, Wayland focused-window support, and untargeted installed-app
 results.
 
+## App icons
+
+App results show the application's real icon where the platform can
+produce one, with the built-in glyph as the always-available fallback:
+
+- **Linux**: the `.desktop` entry's `Icon=` value is resolved through
+  the freedesktop icon-theme machinery -- your detected GTK theme, its
+  `Inherits` chain, Adwaita/hicolor, then unthemed and pixmap
+  fallbacks -- to a PNG or SVG data URI.
+- **macOS**: the `.app` bundle's `Contents/Info.plist` (both the XML
+  and the binary serialization Xcode writes) names its
+  `CFBundleIconFile`; the referenced `.icns` container's best modern
+  PNG entry is served directly, no image decoding involved. Apps whose
+  icon lives ONLY in an `Assets.car` asset catalog
+  (`CFBundleIconName` without `CFBundleIconFile` -- an estimated
+  5-15% of a typical `/Applications` scan, mostly Mac App Store /
+  Catalyst-era bundles) keep the glyph, as do icns files carrying
+  only legacy RLE or JPEG 2000 entries. The darwin CI job measures
+  the real ratio against the runner's `/Applications` on every push.
+- **Windows**: no `.ico` extraction yet; app rows keep the glyph.
+
+Resolution is lazy and never blocks a query: rows render with the
+glyph instantly, the frontend batches the visible rows' icon keys to
+the Go resolver, and icons fill in when the answer lands (cached both
+sides -- misses too -- so a repeat query costs nothing). Oversized
+sources are skipped (icon files over 1 MiB, icns entries over 512 KB)
+rather than shipped into the UI.
+
+External plugins deliberately do NOT get image-icon powers: their
+`icon` field stays the sanitized builtin-name/glyph contract, and the
+internal resolution key is stripped from every external response --
+image icons are a trusted-builtin-source capability.
+
 ## Open windows
 
 On X11 sessions, typing two or more characters also searches the
@@ -1922,10 +2048,40 @@ Per metric honesty, on Linux:
   busy-percent file, so Intel GPUs show a dash (running a whole
   `intel_gpu_top` pipeline is not worth it here).
 
+On macOS the row is live too, from spawn-free system calls:
+
+- **CPU** comes from the mach host tick counters (`host_statistics`
+  `HOST_CPU_LOAD_INFO`), through the same delta/staleness/wrap
+  machinery as Linux.
+- **Memory** is `hw.memsize` for the total, and the used figure is
+  computed from the `host_statistics64` page counts the way Activity
+  Monitor computes "Memory Used": App Memory (anonymous pages minus
+  purgeable) + wired + compressed. That is the number macOS users
+  will diff the row against -- "total - free" would overstate wildly,
+  because macOS keeps `free_count` tiny by design (file cache).
+- **Swap** is the `vm.swapusage` sysctl. macOS swap is dynamic: while
+  it is empty the total reports 0 and the row shows a dash, exactly
+  like a swapless Linux box.
+- **Network** sums the 64-bit per-interface byte counters from the
+  `NET_RT_IFLIST2` routing sysctl. Loopback and Apple's
+  pseudo-interfaces are excluded (`awdl`/`llw` wireless links, `utun`
+  VPNs incl. iCloud Private Relay, the `ap` hotspot, `bridge`
+  Internet Sharing -- member traffic would double-count -- plus
+  `gif`/`stf`/`anpi`/`pktap`/`feth`/`vmnet`); `en*` (Wi-Fi is `en0`
+  on Macs, Thunderbolt/USB ethernet are `enN`) and `bond*` count.
+- **GPU deliberately shows a dash** on macOS for now. The only
+  spawn-free source is IOKit's IOAccelerator "PerformanceStatistics"
+  registry ("Device Utilization %"), which is a pile of
+  IOKit/CoreFoundation cgo whose key names are not API-stable across
+  macOS releases -- the same honesty call as Intel-on-Linux: a
+  reliable dash beats a fragile number. The startup probe log says
+  `gpu=none`; the IOAccelerator route is the documented future source
+  if the dash ever needs replacing.
+
 Any metric whose source is missing or failing shows a dash instead of
 a stale or fake number, and the failure is logged once, not per
-sample. On Windows and macOS there are no sources wired up yet, so
-the whole row shows dashes there for now.
+sample. On Windows there are no sources wired up yet, so the whole
+row shows dashes there for now.
 
 `stats.disabled` in `config.json` turns the feature off entirely: no
 sampler is built and the row is removed from the bar (not dashes --
@@ -2506,12 +2662,16 @@ These are Wayland design constraints, not bugs:
   cross-compiles and publishes the Windows binary (pure Go) but never
   runs it -- only the Linux build is exercised (the screenshot tests);
   treat it as best-effort until exercised on a real Windows machine.
-- **Watch limits / event overflow**: unless the fanotify tier is
-  granted (see
+- **Watch limits / event overflow**: unless a whole-filesystem tier
+  is active (fanotify on Linux when granted, FSEvents on macOS
+  automatically -- see
   [File watching and freshness](#file-watching-and-freshness)), live
   watching runs on a bounded HOT SET of fsnotify watches (inotify on
-  Linux) -- by default half of `fs.inotify.max_user_watches`, capped
-  at 65536, tunable via `watcher.maxWatches` -- filled with the roots
+  Linux, kqueue on macOS) -- by default half of
+  `fs.inotify.max_user_watches` capped at 65536 on Linux, a sixteenth
+  of the process fd limit capped at 8192 on macOS (kqueue opens one
+  fd per watched dir plus one per direct child file), tunable via
+  `watcher.maxWatches` -- filled with the roots
   first, then the home directory's subtree, then everything else, and
   rotated LRU-style toward recently active directories. Directories
   outside the hot set are NOT stale-forever: an always-on background

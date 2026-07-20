@@ -63,9 +63,16 @@ func (f *fsnotifier) Events() <-chan fsnotify.Event { return f.w.Events }
 func (f *fsnotifier) Errors() <-chan error          { return f.w.Errors }
 func (f *fsnotifier) Close() error                  { return f.w.Close() }
 
+// kind implements backendInfo with the HONEST per-OS label for the
+// per-directory model: fsnotify runs inotify on linux but kqueue on
+// darwin and ReadDirectoryChangesW on windows, and the old blanket
+// "inotify" label had darwin field logs claiming a backend the OS
+// does not have. Never wide: this is the bounded hot-set model.
+func (f *fsnotifier) kind() (string, bool) { return PerDirBackendName(), false }
+
 // noopNotifier is the "none" backend: it accepts everything and
-// delivers nothing. The strict fanotify mode (Options.Backend =
-// "fanotify") installs it when the required backend cannot start, so
+// delivers nothing. The strict modes (Options.Backend = "fanotify" or
+// "fsevents") install it when the required backend cannot start, so
 // the Watcher still runs -- keeping the sweep and rescan wiring alive
 // -- while live watching is plainly OFF: Stats().Backend reports
 // "none", and wideCoverage keeps the hot-set fill and every
@@ -109,18 +116,24 @@ func (n *noopNotifier) kind() (string, bool) { return "none", true }
 
 // newBackendNotifier resolves Options.Backend to the production
 // notifier constructor: "inotify" pins the per-directory fsnotify
-// backend (the fanotify probe is skipped entirely); "fanotify" is
-// STRICT -- fanotify or the no-op "none" notifier, never a silent
-// inotify fallback (newStrictFanotifyNotifier, per-OS); anything else
-// ("", "auto", unrecognized values -- config normalization canonicalizes
-// upstream) is the automatic pick with its clean fanotify-to-fsnotify
-// fallback.
+// backend on every OS (no whole-filesystem probe; the runtime label
+// is still the honest PerDirBackendName); "fanotify" and "fsevents"
+// are STRICT -- the named backend or the no-op "none" notifier, never
+// a silent per-directory fallback (newStrictFanotifyNotifier /
+// newStrictFSEventsNotifier, per-OS: each resolves to the loud
+// unavailable-noop off its own OS); anything else ("", "auto",
+// unrecognized values -- config normalization canonicalizes upstream)
+// is the automatic pick with its clean whole-filesystem-to-fsnotify
+// fallback (fanotify on linux, fsevents on darwin, plain fsnotify
+// elsewhere).
 func newBackendNotifier(backend string, roots []string) func() (notifier, error) {
 	switch backend {
 	case "inotify":
 		return func() (notifier, error) { return newFSNotifier() }
 	case "fanotify":
 		return newStrictFanotifyNotifier(roots)
+	case "fsevents":
+		return newStrictFSEventsNotifier(roots)
 	default:
 		return newAutoNotifier(roots)
 	}

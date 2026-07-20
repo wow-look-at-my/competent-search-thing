@@ -145,9 +145,11 @@ func TestAppsSearchThroughDispatch(t *testing.T) {
 	require.Equal(t, "apps-search", e.Plugin)
 	require.Equal(t, "Apps", e.Name)
 	require.Equal(t, int64(1), e.Gen)
+	require.Equal(t, 1, e.Priority, "the apps section carries source priority 1 (above the file results)")
 	require.Len(t, e.Results, 1)
 	require.Equal(t, "Firefox", e.Results[0].Title)
-	require.Equal(t, float64(73), *e.Results[0].Score)
+	require.Equal(t, float64(73), *e.Results[0].Score,
+		"band integrity: the priority is placement metadata and never leaks into the engine score")
 	require.Equal(t, &Action{Type: ActionRunCommand, Argv: []string{"firefox"}, DesktopID: "firefox.desktop"},
 		e.Results[0].Action, "the desktop id rides along so the app can launch with activation credentials")
 	requireNoEmission(t, ch, 100*time.Millisecond)
@@ -171,7 +173,71 @@ func TestAppsSearchExcludedFromTargetedApp(t *testing.T) {
 	require.Equal(t, TargetInfo{Targeted: true, Plugin: "apps", Name: "Launch", Bang: "app"}, info)
 	e := recvEmission(t, ch)
 	require.Equal(t, "apps", e.Plugin, "a resolved bang dispatches ONLY the targeted provider")
+	require.Zero(t, e.Priority, "the targeted launcher stays unprioritized: bang queries have no files to outrank")
 	requireNoEmission(t, ch, 150*time.Millisecond)
+}
+
+func TestSourcePriorityMetadata(t *testing.T) {
+	// apps-search is the ONE prioritized source; every other builtin
+	// -- and every external provider shape -- defaults to 0.
+	require.Equal(t, sourcePriorityApps, providerPriority(newAppsSearchProvider(nil)))
+	require.Equal(t, 1, sourcePriorityApps)
+	require.Zero(t, providerPriority(newAppsProvider(nil)), "the targeted !app launcher")
+	require.Zero(t, providerPriority(newAppCommandProvider("v1")))
+	require.Zero(t, providerPriority(newWindowsProvider(func() []WindowInfo { return nil })))
+	require.Zero(t, providerPriority(newFirefoxProvider(func() []SiteInfo { return nil }, 0)))
+	require.Zero(t, providerPriority(newTabsProvider(func() []TabInfo { return nil }, 0)))
+
+	// External plugins can NEVER be prioritized: the wire Response has
+	// no priority field and *externalProvider does not implement the
+	// extension, so the registry always stamps 0 for them.
+	_, isPrioritized := any(&externalProvider{}).(prioritized)
+	require.False(t, isPrioritized, "externalProvider must never satisfy prioritized")
+	require.Zero(t, providerPriority(&externalProvider{m: &Manifest{ID: "x"}}))
+	require.Zero(t, providerPriority(&fakeProvider{pid: "fake"}))
+}
+
+func TestExternalEmissionPriorityAlwaysZero(t *testing.T) {
+	// A dispatched external-shaped provider emits Priority 0 no matter
+	// what its response contains -- the field is registry-stamped.
+	ext := &fakeProvider{pid: "ext", name: "Ext", matchFn: matchAll,
+		queryFn: answer("hit", 0)}
+	r, _ := newTestRegistry(t, nil, nil, ext)
+	emit, ch := collectEmissions()
+	r.Dispatch(context.Background(), "hit", 7, nil, emit)
+	e := recvEmission(t, ch)
+	require.Equal(t, "ext", e.Plugin)
+	require.Zero(t, e.Priority)
+}
+
+func TestCheatSheetEmissionPriorityZero(t *testing.T) {
+	r := New(Options{Logf: func(string, ...any) {}})
+	defer r.Close()
+	e := r.CheatSheet()
+	require.NotEmpty(t, e.Results, "the builtin commands populate the sheet")
+	require.Zero(t, e.Priority, "the cheat sheet renders in the classic below-files zone")
+}
+
+func TestPriorityNeverChangesMintedScores(t *testing.T) {
+	// The engine mint through the registry dispatch must be
+	// byte-identical to the direct sourceResults mint: the priority is
+	// carried NEXT TO the results, never inside them.
+	installed := func() []InstalledApp {
+		return []InstalledApp{
+			{Name: "Fire", Exec: "fire"},
+			{Name: "Firefox", Exec: "firefox %u"},
+			{Name: "Campfire", Exec: "campfire"},
+		}
+	}
+	direct := srcResults(t, newAppsSearchProvider(installed), baseRequest("fire", "fire", 1, nil))
+
+	r := New(Options{InstalledApps: installed, Logf: func(string, ...any) {}})
+	defer r.Close()
+	emit, ch := collectEmissions()
+	r.Dispatch(context.Background(), "fire", 1, nil, emit)
+	e := recvEmission(t, ch)
+	require.Equal(t, 1, e.Priority)
+	require.Equal(t, direct, e.Results, "dispatch emissions carry the exact engine mint")
 }
 
 func TestAppsSearchDisabledPerEntry(t *testing.T) {

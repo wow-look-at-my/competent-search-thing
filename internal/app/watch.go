@@ -39,10 +39,11 @@ type watchDegraded struct {
 }
 
 // watchBackend is the eventWatchBackend payload: which notification
-// backend the watch layer runs on ("fanotify" | "inotify" | "none"),
-// whether that is full whole-filesystem coverage (fanotify only), and
-// -- when it is not -- a short user-facing hint the frontend surfaces
-// on the notice chip.
+// backend the watch layer runs on ("fanotify" | "fsevents" |
+// "inotify" | "kqueue" | "windows" | "none"), whether that is full
+// whole-filesystem coverage (fanotify and fsevents only), and -- when
+// it is not -- a short user-facing hint the frontend surfaces on the
+// notice chip.
 type watchBackend struct {
 	Backend string `json:"backend"`
 	Full    bool   `json:"full"`
@@ -52,12 +53,19 @@ type watchBackend struct {
 // The user-facing hints carried by eventWatchBackend when live
 // coverage is not full (empty when it is).
 const (
-	// hintPartialWatch: the bounded inotify hot set is live -- changes
-	// under it show up in ~1s, everything else within one sweep.
+	// hintPartialWatch: the bounded per-directory hot set is live --
+	// changes under it show up in ~1s, everything else within one
+	// sweep. The linux (and windows) flavor points at the fanotify
+	// grant.
 	hintPartialWatch = "Partial file watching: changes outside the hot set appear within the sweep interval. Enable full coverage: see README (fanotify)."
-	// hintWatchOff: the strict watcher.backend="fanotify" mode could
-	// not start fanotify, so live watching is disabled outright.
-	hintWatchOff = "Live file watching is off (fanotify required by config but unavailable). The index refreshes on sweeps only."
+	// hintPartialWatchDarwin: the per-directory kqueue FALLBACK is
+	// live on macOS -- the fsevents backend would cover everything,
+	// so running without it deserves a pointer at the startup log.
+	hintPartialWatchDarwin = "Partial file watching: changes outside the hot set appear within the sweep interval. The fsevents backend provides full coverage on macOS: check the startup log for why it is not active (watcher.backend in config.json)."
+	// hintWatchOff: a strict watcher.backend mode (fanotify or
+	// fsevents) could not start its required backend, so live
+	// watching is disabled outright.
+	hintWatchOff = "Live file watching is off (the configured backend is required but unavailable). The index refreshes on sweeps only."
 	// hintWatchFailed: the watcher itself failed to start (an OS
 	// refusal, e.g. inotify instance exhaustion) -- no live events
 	// from any backend.
@@ -65,15 +73,20 @@ const (
 )
 
 // watchBackendFor maps the watcher's reported backend to the
-// eventWatchBackend payload. fanotify is the only full-coverage
-// backend; everything else carries a hint the frontend must show.
+// eventWatchBackend payload. fanotify (linux) and fsevents (darwin)
+// are the full-coverage backends; everything else carries a hint the
+// frontend must show. Keying off the backend STRING keeps this a free
+// function -- the watch layer already reports the honest per-OS
+// label (watch.PerDirBackendName), so no goos plumbing is needed.
 func watchBackendFor(backend string) watchBackend {
 	switch backend {
-	case "fanotify":
+	case "fanotify", "fsevents":
 		return watchBackend{Backend: backend, Full: true}
 	case "none":
 		return watchBackend{Backend: backend, Hint: hintWatchOff}
-	default: // "inotify": the bounded per-directory hot set
+	case "kqueue":
+		return watchBackend{Backend: backend, Hint: hintPartialWatchDarwin}
+	default: // "inotify" / "windows": the bounded per-directory hot set
 		return watchBackend{Backend: backend, Hint: hintPartialWatch}
 	}
 }
@@ -110,10 +123,11 @@ func watchConfigFrom(cfg *config.Config) watchConfig {
 }
 
 // startWatch starts the live-update layer: the Watcher over the
-// manager's roots (fanotify or the bounded inotify hot set; filtering
-// events through the same Excluder semantics the walks use, honoring
-// the watcher.* budget and watch-only excludes, reporting degradation
-// to the frontend), the Rescanner for periodic and requested full
+// manager's roots (a whole-filesystem backend -- fanotify on linux,
+// fsevents on macOS -- or the bounded per-directory hot set;
+// filtering events through the same Excluder semantics the walks use,
+// honoring the watcher.* budget and watch-only excludes, reporting
+// degradation to the frontend), the Rescanner for periodic and requested full
 // rebuilds, and the Sweeper whose passes converge everything the hot
 // set does not cover (its watermark starts at this call's entry time
 // -- the just-finished initial build vouches for everything older).
@@ -208,8 +222,8 @@ func (a *App) startWatch() {
 	if cfg.rescanEvery > 0 {
 		rescanDesc = cfg.rescanEvery.String()
 	}
-	log.Printf("watch: backend %s: %d/%d dirs live-watched (budget %d); sweep interval %s; full rescan interval %s",
-		st.Backend, st.WatchedDirs, st.IndexedDirs, st.Budget, sweepDesc, rescanDesc)
+	log.Printf("watch: backend %s: %d/%d dirs live-watched (budget %s); sweep interval %s; full rescan interval %s",
+		st.Backend, st.WatchedDirs, st.IndexedDirs, watch.FormatBudget(st.Budget), sweepDesc, rescanDesc)
 
 	// Announce the effective backend to the frontend exactly once. A
 	// non-full backend is a user-visible state, never a silent one:
