@@ -100,9 +100,8 @@ func awaitTabs(t *testing.T, s *Server, want int) []Tab {
 		if len(tabs) == want {
 			return tabs
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("snapshot never reached %d tabs (have %d)", want, len(tabs))
-		}
+		require.False(t, time.Now().After(deadline))
+
 		time.Sleep(5 * time.Millisecond)
 	}
 }

@@ -39,8 +39,13 @@ func ParseToken(s string) (connID, tabID, windowID int64, err error) {
 	}
 	nums := make([]int64, 3)
 	for i, p := range parts {
+		// Digits only: strconv would also accept a leading sign, which
+		// the token grammar does not.
+		if p == "" || strings.ContainsFunc(p, func(r rune) bool { return r < '0' || r > '9' }) {
+			return 0, 0, 0, fmt.Errorf("tab token %q field %d is not a non-negative base-10 integer", s, i)
+		}
 		n, perr := strconv.ParseInt(p, 10, 64)
-		if perr != nil || n < 0 {
+		if perr != nil {
 			return 0, 0, 0, fmt.Errorf("tab token %q field %d is not a non-negative base-10 integer", s, i)
 		}
 		nums[i] = n

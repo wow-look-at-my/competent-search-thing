@@ -78,13 +78,22 @@ type hostConn struct {
 	wmu sync.Mutex // serializes request-line writes
 
 	pmu     sync.Mutex // guards pending
-	pending map[int64]chan inbound
+	pending map[int64]pendingReq
 
 	// tabs/tabsAt are this connection's last-known tab list and when
 	// it arrived -- guarded by the SERVER mutex (snapshot merging
 	// iterates connections under it anyway).
 	tabs   []Tab
 	tabsAt time.Time
+}
+
+// pendingReq is one in-flight request slot. isList marks a listTabs
+// request: its reply's tab dump is stored by serveConn itself, IN
+// ARRIVAL ORDER relative to tabsChanged pushes on the same connection
+// -- a requester-side store could run late and clobber a newer push.
+type pendingReq struct {
+	ch     chan inbound
+	isList bool
 }
 
 // Listen binds the bridge socket at path and starts the accept loop.
@@ -144,7 +153,7 @@ func (s *Server) accept() {
 			return
 		}
 		s.nextConn++
-		hc := &hostConn{id: s.nextConn, conn: c, pending: map[int64]chan inbound{}}
+		hc := &hostConn{id: s.nextConn, conn: c, pending: map[int64]pendingReq{}}
 		s.conns[hc.id] = hc
 		s.wg.Add(2)
 		s.mu.Unlock()
@@ -176,11 +185,18 @@ func (s *Server) serveConn(hc *hostConn) {
 			s.storeTabs(hc, in.Tabs)
 		case in.ID != 0:
 			hc.pmu.Lock()
-			ch := hc.pending[in.ID]
+			p, ok := hc.pending[in.ID]
 			delete(hc.pending, in.ID)
 			hc.pmu.Unlock()
-			if ch != nil {
-				ch <- in // buffered(1); the sole send for this id
+			if ok {
+				// Store a list reply's dump HERE, before handing the
+				// reply over: snapshot updates then happen strictly in
+				// arrival order on this goroutine, so a slow requester
+				// can never overwrite a newer tabsChanged push.
+				if p.isList && in.OK {
+					s.storeTabs(hc, in.Tabs)
+				}
+				p.ch <- in // buffered(1); the sole send for this id
 			}
 		}
 	}
@@ -202,8 +218,8 @@ func (s *Server) dropConn(hc *hostConn) {
 	pend := hc.pending
 	hc.pending = nil
 	hc.pmu.Unlock()
-	for _, ch := range pend {
-		close(ch)
+	for _, p := range pend {
+		close(p.ch)
 	}
 	if present && !closed {
 		s.logf("ffext: extension host disconnected (conn %d)", hc.id)
@@ -300,8 +316,9 @@ func (s *Server) KickRefresh() {
 	}()
 }
 
-// listInto performs one listTabs round-trip on hc and stores the
-// answer; failures keep the previous list (a dead connection drops it
+// listInto performs one listTabs round-trip on hc; the reply's dump is
+// stored by serveConn on arrival (see pendingReq), so this only logs
+// failures -- which keep the previous list (a dead connection drops it
 // via dropConn instead).
 func (s *Server) listInto(hc *hostConn) {
 	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
@@ -313,9 +330,7 @@ func (s *Server) listInto(hc *hostConn) {
 	}
 	if !in.OK {
 		s.logf("ffext: conn %d: listTabs refused: %s", hc.id, in.Error)
-		return
 	}
-	s.storeTabs(hc, in.Tabs)
 }
 
 // Activate routes one tab activation to the owning connection and
@@ -357,7 +372,7 @@ func (s *Server) request(ctx context.Context, hc *hostConn, req request) (inboun
 		hc.pmu.Unlock()
 		return inbound{}, errors.New("host connection closed")
 	}
-	hc.pending[req.ID] = ch
+	hc.pending[req.ID] = pendingReq{ch: ch, isList: req.Type == MsgListTabs}
 	hc.pmu.Unlock()
 	defer func() {
 		hc.pmu.Lock()
