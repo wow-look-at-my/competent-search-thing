@@ -43,11 +43,15 @@ type RunOptions struct {
 
 // env is the state every command builder closes over: the app version,
 // the blocking GUI entry point, and the process stdout for the
-// user-facing notices summon prints (injectable in tests).
+// user-facing notices summon prints (injectable in tests). hostIn and
+// hostOut override the firefox-host relay's stdio in tests; nil means
+// the real os.Stdin/os.Stdout (which Firefox owns in production).
 type env struct {
 	version string
 	runGUI  func(RunOptions) error
 	out     io.Writer
+	hostIn  io.Reader
+	hostOut io.Writer
 }
 
 // stdout returns the notice writer, defaulting to os.Stdout when none
