@@ -303,6 +303,13 @@ func (a *App) QueryPlugins(query string, gen int) plugin.TargetInfo {
 		if a.pluginGen.Load() != next {
 			return // a newer query superseded this generation
 		}
+		// The learned-arbitration cross-source seam: with the layer
+		// off or the activation gate unpassed this returns em
+		// UNTOUCHED (see arbiter.go); active, it re-orders the
+		// section's rows and may promote the section above the file
+		// results -- before the one emit, so the frontend still
+		// paints each section exactly once.
+		em = a.arbitrateEmission(query, em)
 		a.emitEvent(eventPluginResults, em)
 	}
 	return reg.Dispatch(genCtx, query, next, a.pluginRequestContext(), emit)

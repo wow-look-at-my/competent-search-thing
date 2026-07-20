@@ -233,6 +233,8 @@ type SearchConfig struct {
 	Priors PriorsConfig `json:"priors"`
 	// Telemetry configures the opt-in local ranking telemetry log.
 	Telemetry TelemetryConfig `json:"telemetry"`
+	// Arbiter configures the learned composition arbitration layer.
+	Arbiter ArbiterConfig `json:"arbiter"`
 }
 
 // PriorsConfig configures the pick-memory ranking priors: small

@@ -80,6 +80,7 @@ func runGUI(opts cli.RunOptions) error {
 		Frecency:               cfg.Search.Frecency,
 		Priors:                 cfg.Search.Priors,
 		Telemetry:              cfg.Search.Telemetry,
+		Arbiter:                cfg.Search.Arbiter,
 		Preview:                cfg.Preview,
 		WindowWidth:            width,
 		WindowHeight:           height,

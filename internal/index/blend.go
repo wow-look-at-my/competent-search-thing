@@ -111,12 +111,28 @@ type Blend struct {
 	// 0 for every path orders byte-identically to no func at all
 	// (pinned by TestBlendPriorZeroIsNoOp).
 	Prior func(query string) func(path string) float64
+	// Model resolves the learned-arbitration delta for one query (the
+	// app layer injects internal/arbiter's clamped file-row scorer
+	// here; config search.arbiter). Same contract as Prior -- resolved
+	// ONCE per query on the per-query copy -- except the returned func
+	// also receives the candidate's ranking components exactly as they
+	// participated (the ResultSignals shape), because the learned
+	// model scores features the path alone cannot carry. The value
+	// joins the blended score additively, within the effective class
+	// only: effClass stays the primary sort key, so however large the
+	// delta, a class decision can never invert (the caller clamps the
+	// magnitude on top of that -- see arbiter.FileDeltaClamp). A nil
+	// Model, a resolver returning nil, and a func returning 0 for
+	// every candidate are all byte-identical to no model at all
+	// (pinned by the blendmodel_test.go family).
+	Model func(query string) func(path string, sig ResultSignals) float64
 
-	// priorFn is the per-query resolved lookup: QueryWith binds it on
-	// a per-query Blend copy (the handed-over Blend itself stays
-	// immutable), so no scan path or per-mode query function needs the
-	// query string threaded through.
+	// priorFn / modelFn are the per-query resolved lookups: QueryWith
+	// binds them on a per-query Blend copy (the handed-over Blend
+	// itself stays immutable), so no scan path or per-mode query
+	// function needs the query string threaded through.
 	priorFn func(path string) float64
+	modelFn func(path string, sig ResultSignals) float64
 
 	// trace, when non-nil, receives the delivered rows' ranking
 	// components (see signalstrace.go). Only ever set on the
@@ -130,12 +146,13 @@ type Blend struct {
 // Nil, or a zero-value Signals -- frecency disabled in config, or the
 // app never wired a store -- means selectTop takes the exact
 // pre-blend path. A Prior alone activates the blend too (priors can
-// run with frecency disabled).
+// run with frecency disabled), and so does a Model (the arbiter can
+// run with both frecency and priors disabled).
 func (b *Blend) active() bool {
 	if b == nil {
 		return false
 	}
-	return b.Signals.Store != nil || b.Signals.Probe != nil || b.Signals.Cwd != "" || b.Prior != nil
+	return b.Signals.Store != nil || b.Signals.Probe != nil || b.Signals.Cwd != "" || b.Prior != nil || b.Model != nil
 }
 
 // recencyScore maps a last-touch age onto [0, 1], log-scaled so the
@@ -212,12 +229,13 @@ func (s *Store) selectBlended(all []cand, limit int, b *Blend) []Result {
 		if w := b.WeightFrecency; w > 0 {
 			d += w * boost[i]
 		}
+		var recV float64
 		if w := b.WeightRecency; w > 0 && boost[i] == 0 {
 			if ts, ok := rec[paths[i]]; ok {
-				r := recencyScore(nowT.Sub(ts))
-				d += w * r
+				recV = recencyScore(nowT.Sub(ts))
+				d += w * recV
 				if tr != nil {
-					trRec[i] = r
+					trRec[i] = recV
 				}
 			}
 		}
@@ -226,21 +244,41 @@ func (s *Store) selectBlended(all []cand, limit int, b *Blend) []Result {
 		if tr != nil {
 			trCwd[i] = cw
 		}
+		var pen float64
 		if w := b.WeightNoise; w > 0 {
-			p := b.Signals.Penalty(paths[i])
-			d -= w * p
+			pen = b.Signals.Penalty(paths[i])
+			d -= w * pen
 			if tr != nil {
-				trPen[i] = p
+				trPen[i] = pen
 			}
 		}
 		if b.priorFn != nil {
 			d += b.priorFn(paths[i])
 		}
-		blended[i] = d
 		eff[i] = c.class
 		if b.TierJump > 0 && boost[i] > b.TierJump && eff[i] > 0 {
 			eff[i]--
 		}
+		// The learned-arbitration delta joins last, consulted with the
+		// components exactly as they participated above (recV/pen stay
+		// zero when their signals did not run -- the trace stance). It
+		// rides `blended`, so it reorders within an effective class
+		// only; nil modelFn compiles this away.
+		if b.modelFn != nil {
+			d += b.modelFn(paths[i], ResultSignals{
+				Path:     paths[i],
+				Class:    c.class,
+				EffClass: eff[i],
+				Align:    c.score,
+				Boost:    boost[i],
+				Recency:  recV,
+				Cwd:      cw,
+				Penalty:  pen,
+				IsDir:    c.isDir,
+				PathLen:  c.pathLen,
+			})
+		}
+		blended[i] = d
 	}
 
 	ord := make([]int, n)

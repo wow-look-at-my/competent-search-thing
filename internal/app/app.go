@@ -287,6 +287,28 @@ type App struct {
 	tel        *telemetryLayer
 	telWG      sync.WaitGroup
 
+	// Learned arbitration (see arbiter.go in this package): the model
+	// store + impression ring behind the two composition seams, built
+	// at Startup (or a live apply) when config search.arbiter opts in;
+	// nil otherwise -- every hook then no-ops and both seams are
+	// byte-identical to the feature being off. The busy/again pair
+	// single-flights the asynchronous training runs (the priors
+	// refresh pattern); arbPicks counts appended telemetry picks
+	// toward the every-arbiter.RetrainEvery retrain; arbActive
+	// remembers the last gate verdict for flip logging; arbClosed
+	// stops re-arms during Shutdown's arbWG drain.
+	arbOnce    sync.Once
+	arbErrOnce sync.Once
+	arbLogOnce sync.Once
+	arbMu      sync.Mutex // guards arb, arbBusy, arbAgain, arbClosed, arbPicks, arbActive
+	arb        *arbiterLayer
+	arbBusy    bool
+	arbAgain   bool
+	arbClosed  bool
+	arbPicks   int
+	arbActive  bool
+	arbWG      sync.WaitGroup
+
 	// rt and plat are seams over the Wails runtime and the platform
 	// layer. Production fills them in New; unit tests MUST replace
 	// every rt member before driving code that reaches it (the real
@@ -392,6 +414,7 @@ func (a *App) Startup(ctx context.Context) {
 	a.cfgOnce.Do(a.startConfigState)
 	a.priorsOnce.Do(a.startPriors)
 	a.telOnce.Do(a.startTelemetry)
+	a.arbOnce.Do(a.startArbiter)
 	a.themeOnce.Do(a.startThemeWatch)
 	// The progress printer exists before the build kick: the walk's
 	// first tick can arrive immediately.
@@ -633,6 +656,12 @@ func (a *App) Shutdown(_ context.Context) {
 	// bounded file append; a pick recorded moments before quit still
 	// lands in the log.
 	a.telWG.Wait()
+
+	// And for the arbiter's training runs (arbiter.go; bounded local
+	// file reads plus in-memory SGD): the closed flag inside keeps a
+	// finishing run from re-arming behind the drain. After telWG, so
+	// a retrain kicked by the very last pick append is drained too.
+	a.shutdownArbiter()
 
 	// Restore the standard logger LAST: in TTY mode installProgressLog
 	// pointed it at the printer, and keeping that interception through

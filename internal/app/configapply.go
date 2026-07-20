@@ -154,6 +154,11 @@ var sectionAppliers = []sectionApplier{
 		apply:   (*App).applyTelemetry,
 	},
 	{
+		name:    "search.arbiter",
+		changed: func(o, n *config.Config) bool { return o.Search.Arbiter != n.Search.Arbiter },
+		apply:   (*App).applyArbiter,
+	},
+	{
 		name:    "watcher",
 		changed: func(o, n *config.Config) bool { return !reflect.DeepEqual(o.Watcher, n.Watcher) },
 		group:   groupIndexLayer,

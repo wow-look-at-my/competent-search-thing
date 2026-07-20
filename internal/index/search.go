@@ -81,14 +81,20 @@ func (s *Store) QueryWith(q string, limit int, opts QueryOptions) []Result {
 		// false-match across the blob separator.
 		return nil
 	}
-	// Resolve the pick-memory prior for this query ONCE, on a
-	// per-query Blend copy, so selectBlended never needs the query
-	// string threaded through the per-mode scan functions and the
-	// caller's Blend stays immutable. A resolver returning nil (no
-	// learned tables apply) leaves priorFn nil = no term.
-	if pb := opts.Blend; pb != nil && pb.Prior != nil {
+	// Resolve the pick-memory prior and the learned-arbitration model
+	// for this query ONCE, on a per-query Blend copy, so selectBlended
+	// never needs the query string threaded through the per-mode scan
+	// functions and the caller's Blend stays immutable. A resolver
+	// returning nil (no learned tables / gate-inactive model) leaves
+	// its fn nil = no term.
+	if pb := opts.Blend; pb != nil && (pb.Prior != nil || pb.Model != nil) {
 		cp := *pb
-		cp.priorFn = pb.Prior(q)
+		if pb.Prior != nil {
+			cp.priorFn = pb.Prior(q)
+		}
+		if pb.Model != nil {
+			cp.modelFn = pb.Model(q)
+		}
 		opts.Blend = &cp
 	}
 	// A requested signals trace rides a per-query blend copy so every
