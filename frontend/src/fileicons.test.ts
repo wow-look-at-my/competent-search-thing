@@ -102,6 +102,30 @@ describe("isLightBackground", () => {
   });
 });
 
+describe("theme wiring", () => {
+  it("initTheme toggles html.icons-light from the applied bg token", async () => {
+    const { initTheme } = await import("./theme");
+    const rt = { EventsOn: () => () => {} } as unknown as WailsRuntime;
+    const appWith = (bg: string): WailsAppBindings =>
+      ({
+        GetTheme: () => Promise.resolve({ bg }),
+        GetCustomCSS: () => Promise.resolve(""),
+      }) as unknown as WailsAppBindings;
+    const settle = (): Promise<void> =>
+      new Promise((resolve) => setTimeout(resolve, 0));
+    initTheme(appWith("#f7f7f9"), rt); // the light builtin's bg
+    await settle();
+    expect(document.documentElement.classList.contains("icons-light")).toBe(
+      true,
+    );
+    initTheme(appWith("#18181c"), rt); // the dark builtin's bg
+    await settle();
+    expect(document.documentElement.classList.contains("icons-light")).toBe(
+      false,
+    );
+  });
+});
+
 /* --- committed-data integrity -------------------------------------- */
 
 interface RawRule {
