@@ -177,6 +177,21 @@ type App struct {
 	trayOnce sync.Once
 	newTray  func() trayHandle
 
+	// Firefox companion-extension bridge (see ffext.go in this
+	// package): the app-lifetime tab-switching bridge behind the
+	// activate_tab action and the open-tabs live snapshot. newFfext is
+	// a seam over buildFfext so unit tests never create sockets, read
+	// config.json, or probe the real home for a Firefox profile;
+	// registry reloads deliberately never touch the handle (a reload
+	// must not sever the extension's connection).
+	// ffextInactiveOnce guards the one quiet tab-picks-open-the-URL
+	// heads-up when a tab row is picked with no extension connected.
+	ffextOnce         sync.Once
+	newFfext          func() ffextBridge
+	ffextMu           sync.Mutex // guards ffextB
+	ffextB            ffextBridge
+	ffextInactiveOnce sync.Once
+
 	// Icon resolution (see icons.go in this package): the resolver
 	// behind the bound ResolveIcons method. newIcons is a seam over
 	// buildIcons so unit tests resolve nothing.
@@ -346,6 +361,7 @@ func New(m *index.Manager, opt Options) *App {
 	a.newStats = a.buildStats
 	a.newProgress = a.buildProgress
 	a.newIcons = a.buildIcons
+	a.newFfext = a.buildFfext
 	return a
 }
 
@@ -405,6 +421,10 @@ func (a *App) Startup(ctx context.Context) {
 	a.statsOnce.Do(a.startStats)
 	a.iconsOnce.Do(a.startIcons)
 	a.pluginOnce.Do(a.startPlugins)
+	// The bridge follows the plugin layer (its live tabs feed the
+	// open-tabs getter buildRegistry wired; the getter reads the
+	// handle lazily, so the order is cosmetic grouping).
+	a.ffextOnce.Do(a.startFfext)
 	a.previewOnce.Do(a.startPreview)
 	a.histOnce.Do(a.startHistory)
 	a.frecOnce.Do(a.startFrecency)
@@ -532,7 +552,8 @@ func (a *App) buildIndex(ctx context.Context) {
 
 // Shutdown is wired to the Wails OnShutdown hook. It closes the
 // single-instance IPC server first (no new summons during teardown;
-// closing also unlinks the socket), releases the global hotkey
+// closing also unlinks the socket) and the companion-extension bridge
+// beside it (the other owned listener), releases the global hotkey
 // (stopping the native listener, aborting a still-running
 // portal/gsettings backend chain, and closing an active portal
 // shortcut), closes the tray icon (aborting a Start still waiting on
@@ -560,6 +581,11 @@ func (a *App) Shutdown(_ context.Context) {
 			log.Printf("ipc: close: %v", err)
 		}
 	}
+
+	// The companion-extension bridge is the other listener this
+	// process owns; close it beside the IPC server (unlinks its
+	// socket; the host relay simply retries until the next launch).
+	a.shutdownFfext()
 
 	a.mu.Lock()
 	th := a.trayH

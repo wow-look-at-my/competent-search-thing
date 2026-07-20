@@ -13,6 +13,7 @@ import (
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
 	"github.com/wow-look-at-my/competent-search-thing/internal/config"
+	"github.com/wow-look-at-my/competent-search-thing/internal/ffext"
 	"github.com/wow-look-at-my/competent-search-thing/internal/launch"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/plugin"
@@ -161,17 +162,20 @@ func (a *App) appctxCache() *appctx.Cache {
 }
 
 // captureAppContext snapshots the focused app and kicks the async
-// running/installed/open-window refreshes, plus the async frecency
-// cwd derivation off the fresh focused snapshot (see frecency.go).
-// The toggle path runs it BEFORE showing the bar, because the bar
-// window steals focus and the focused app must be the one the user
-// was just using. Safe before Startup (nil cache no-ops).
+// running/installed/open-window refreshes, the async live-Firefox-tab
+// refresh (the bridge's snapshot is then fresh by the time the user
+// finishes typing; see ffext.go), plus the async frecency cwd
+// derivation off the fresh focused snapshot (see frecency.go). The
+// toggle path runs it BEFORE showing the bar, because the bar window
+// steals focus and the focused app must be the one the user was just
+// using. Safe before Startup (nil cache and nil bridge no-op).
 func (a *App) captureAppContext() {
 	c := a.appctxCache()
 	c.CaptureFocused()
 	c.RefreshRunningAsync()
 	c.RefreshWindowsAsync()
 	c.EnsureFreshInstalled(installedAppsTTL)
+	a.kickFfextRefresh()
 	a.captureFrecencyCwd(c)
 }
 
@@ -341,9 +345,9 @@ func (a *App) CheatSheet() plugin.Emission {
 // from a trusted builtin provider), but everything is re-validated
 // here as defense in depth -- the frontend merely echoes them back.
 // Actions that hand off to another program (open_path, open_url,
-// run_command, activate_window, and most builtins) hide the bar on
-// success; copy_text and the version builtin keep it open for the
-// "Copied" feedback.
+// run_command, activate_window, activate_tab, and most builtins) hide
+// the bar on success; copy_text and the version builtin keep it open
+// for the "Copied" feedback.
 func (a *App) RunPluginAction(pluginID string, action plugin.Action) error {
 	switch action.Type {
 	case plugin.ActionCopyText:
@@ -390,6 +394,28 @@ func (a *App) RunPluginAction(pluginID string, action plugin.Action) error {
 		a.logAction(pluginID, action.Type, action.Window)
 		if err := a.plat.activateWindow(id); err != nil {
 			return err
+		}
+		a.Hide()
+		return nil
+	case plugin.ActionActivateTab:
+		// Re-validate BOTH halves the builtin provider minted: the
+		// routing token and the fallback URL (the frontend merely
+		// echoes them back).
+		connID, tabID, windowID, err := ffext.ParseToken(action.Tab)
+		if err != nil {
+			return fmt.Errorf("activate_tab: %w", err)
+		}
+		if !validHTTPURL(action.Value) {
+			return fmt.Errorf("activate_tab: %q is not an http(s) URL", action.Value)
+		}
+		a.logAction(pluginID, action.Type, action.Tab)
+		if err := a.activateTab(connID, tabID, windowID); err != nil {
+			// ANY bridge failure -- not connected, timeout, tab gone --
+			// falls back to today's behavior: open the URL (which
+			// validates again, opens, and hides on success). The pick
+			// never surfaces an error when the fallback works;
+			// activateTab already logged the reason.
+			return a.Open(action.Value)
 		}
 		a.Hide()
 		return nil

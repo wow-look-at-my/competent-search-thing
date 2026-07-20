@@ -40,10 +40,19 @@ interface PluginAction {
     | "run_command"
     | "set_query"
     | "run_builtin"
-    | "activate_window";
-  value?: string; // every type except run_command and activate_window
+    | "activate_window"
+    | "activate_tab";
+  // Every type except run_command and activate_window; for
+  // activate_tab it carries the tab's URL (Go's open-the-URL fallback
+  // when the live tab cannot be reached).
+  value?: string;
   argv?: string[]; // run_command only
   window?: string; // activate_window only: the window id to focus
+  // activate_tab only, set by the builtin Open Tabs provider when the
+  // companion Firefox extension is connected: the live-tab routing
+  // token ("c<conn>:<tab>:<window>"). Echo it back unchanged; Go
+  // re-validates it.
+  tab?: string;
   // run_command only, set by the builtin app launchers: the .desktop
   // entry behind the launch; Go resolves it for launch capabilities
   // (D-Bus activation, startup notification) so the launched app's

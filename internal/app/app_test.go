@@ -241,6 +241,10 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// No Firefox profile discovery against the real home; tests that
 	// exercise the frequent-sites wiring point this at fixtures.
 	a.plat.firefoxBases = func() []string { return nil }
+	// No real home either: the ffext native-manifest install must
+	// never be able to write into ~/.mozilla from a test. Bridge
+	// install tests override this with temp dirs.
+	a.plat.userHome = func() (string, error) { return "", errors.New("no home in tests") }
 	// No real /proc walks: the frecency cwd derivation stays inert
 	// unless a test injects a fake process tree.
 	a.plat.procTree = nil
@@ -261,6 +265,10 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// No icon-theme detection (gsettings exec) or disk lookups:
 	// ResolveIcons answers empty maps. Icon tests inject a fake.
 	a.newIcons = func() iconResolver { return nil }
+	// No bridge socket, no Firefox-profile probe, no native-manifest
+	// writes: the ffext seam yields nothing. Bridge tests inject
+	// recording fakes (see ffext_test.go).
+	a.newFfext = func() ffextBridge { return nil }
 	// The progress printer is inert: non-TTY (never intercepts the
 	// global log output), io.Discard target, dropped non-TTY lines.
 	// Progress tests inject recording printers.

@@ -167,6 +167,11 @@ type platformSeams struct {
 	// frequent-sites discovery probes; production is
 	// firefox.DefaultBaseDirs (the real home), tests pin it.
 	firefoxBases func() []string
+	// userHome resolves the home directory for the Firefox
+	// native-messaging manifest location (ffext.go); production is
+	// os.UserHomeDir, tests pin it so no test can ever write into the
+	// real ~/.mozilla.
+	userHome func() (string, error)
 	// procTree builds a fresh process-tree snapshot for one focused-app
 	// cwd derivation (the frecency cwd boost, see frecency.go); nil
 	// means the platform has no source and the boost stays off.
@@ -220,6 +225,7 @@ func defaultPlatformSeams() platformSeams {
 		activateWindow:    native.ActivateWindow,
 		appSource:         native.AppSource(),
 		firefoxBases:      firefox.DefaultBaseDirs,
+		userHome:          os.UserHomeDir,
 		procTree:          defaultProcTree(goruntime.GOOS),
 		watchSpaceChanges: defaultSpaceWatch(goruntime.GOOS),
 	}
