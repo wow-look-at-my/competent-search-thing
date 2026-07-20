@@ -27,7 +27,20 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Never} for the per-pixel-alpha window; the GPU policy MUST stay
   pinned to Never -- wails' nil-Linux default (#2977 workaround)
   lives only in the nil branch, so an unpinned non-nil Linux block
-  silently flips it to OnDemand -- and with the flag off both fields
+  silently flips it to OnDemand -- plus wailsOpts.Mac =
+  app.MacWindowOptions() (internal/app macwindow.go: fresh
+  config.Load, nil on flag-off/any error; flag-on =
+  {WindowIsTranslucent (the NSVisualEffectView BehindWindow frosted
+  glass -- wails v2.13.0 has NO raw setOpaque:NO passthrough, and
+  Spotlight is vibrancy anyway), WebviewIsTransparent
+  (drawsBackground=NO), Appearance tracking the theme: the light
+  builtin -> NSAppearanceNameVibrantLight, everything else -> the
+  "NSAppearanceNameVibrantDark" literal (wails ships no VibrantDark
+  constant; AppearanceType is a plain string passed verbatim to
+  [NSAppearance appearanceNamed:])}; the pure decision half
+  macWindowOptionsFor is headless-tested, and options.Mac is read
+  ONLY by the darwin frontend so linux behavior cannot change) --
+  and with the flag off all three fields
   stay nil, byte-identical to the pre-flag call (CI screenshots run
   flag-off). runGUI also wires RunOptions.OpenConfig ->
   app Options.OpenConfigOnStartup (the CLI config subcommand's
@@ -268,9 +281,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   show handler: visible = plain re-WindowShow (no capture, no
   reposition), hidden = the same capture+position+show path toggle
   uses. GetTheme re-loads config.json
-  (ONLY the theme field is consumed live) and returns theme.Resolve's
+  (the theme field is consumed live, plus window.translucent for the
+  darwin tuning below) and returns theme.Resolve's
   token map -- errors are logged once per distinct message and fall
-  back to dark; GetCustomCSS returns <configDir>/themes/custom.css
+  back to dark -- then tuneDarwinTranslucent (theme.go) substitutes
+  bg-opacity "0.65" ONLY when goos==darwin AND translucent AND the
+  resolved value still equals a BUILTIN default
+  (builtinDefaultBgOpacity: dark's 0.97 OR light's 0.98 -- light
+  overrides the token, so comparing dark alone misses it; both read
+  opaque over the NSVisualEffectView and defeat the frosted look):
+  any user-customized bg-opacity passes through
+  untouched (a user value equal to a builtin default is
+  indistinguishable and tunes too), and every other platform/flag
+  combination is
+  byte-identical (linux has no compositor blur -- lower alpha there
+  would put text over desktop noise; dark.json itself is untouched,
+  the style.css :root block being sync_test-locked to it);
+  GetCustomCSS returns <configDir>/themes/custom.css
   verbatim when <= 64KB (the unvalidated escape hatch), else "". The
   hotkey callback `toggle` (rate-limited 250ms against key
   autorepeat) hides the bar when visible; a toggle finding the bar
@@ -3030,7 +3057,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   screenshots are best-effort "evidence:" captures (never a SMOKE
   id), copied to smoke-shots/ and uploaded via actions/
   upload-artifact@v4 as `darwin-smoke-<sha>` (`if-no-files-found:
-  ignore` -- the linux screenshots pattern), and the full app-log
+  ignore` -- the linux screenshots pattern) -- including the
+  translucentEvidence run between scenarios A and B: one extra boot
+  with window.translucent=true (startApp's extraCfg param) captured
+  as 03-translucent-macos.png, EVERY failure swallowed as an
+  "evidence: ... unavailable" line, no SMOKE ids -- and the full
+  app-log
   dumps print only on failure (green runs get the
   hotkey:/index:/watch:/panic summary lines); hands off the
   darwin/arm64 app binary the same way) and `publish` (needs: [linux,

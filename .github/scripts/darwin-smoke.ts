@@ -237,14 +237,15 @@ interface App {
 }
 const apps: Array<[string, App]> = [];
 
-function startApp(name: string, roots: string[]): App {
+function startApp(name: string, roots: string[], extraCfg: Record<string, unknown> = {}): App {
   const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), `css-cfg-${name}-`));
   // Minimal valid config; Load normalizes everything else (custom roots
   // survive the rootsVersion migration untouched -- only the legacy home
   // default gets rewritten). rescanIntervalMinutes 0 = no interval rescans.
+  // extraCfg lets a scenario opt into more (the translucent evidence run).
   fs.writeFileSync(
     path.join(cfgDir, "config.json"),
-    JSON.stringify({ roots, hotkey: "alt+space", rescanIntervalMinutes: 0 }, null, 2),
+    JSON.stringify({ roots, hotkey: "alt+space", rescanIntervalMinutes: 0, ...extraCfg }, null, 2),
   );
   // SHORT socket path: darwin sun_path caps at ~104 bytes and $TMPDIR on
   // macOS is a long /var/folders/... path, so use /tmp explicitly.
@@ -609,6 +610,40 @@ async function scenarioA(): Promise<void> {
   await stopApp(app);
 }
 
+// ---- translucent evidence run (best-effort, NEVER a gate) ---------------------
+// Boots one extra app with window.translucent=true (the macOS frosted-glass
+// path: Mac.WindowIsTranslucent + WebviewIsTransparent + vibrant appearance)
+// and captures a screenshot for the darwin-smoke artifact. EVIDENCE ONLY:
+// no SMOKE ids, every failure is logged as "evidence: ... unavailable" and
+// swallowed -- the real acceptance test for the frosted look is the user's
+// own screen, and screencapture flattens/TCC-blocks on some runner images
+// anyway.
+async function translucentEvidence(): Promise<void> {
+  core.info("---- translucent evidence (best-effort, no gates) ----");
+  const t0 = Date.now();
+  try {
+    const fixture = makeFixtureTree();
+    const app = startApp("translucent", [fixture], { window: { translucent: true } });
+    apps.push(["T", app]);
+    await pollFor("translucent app json ping", BOOT_DEADLINE_MS, POLL_MS, async () => {
+      if (app.proc.exitCode !== null) {
+        throw new Error(`app exited early (code ${app.proc.exitCode}); log tail:\n${logTail(app, 15)}`);
+      }
+      if (!fs.existsSync(app.sock)) return undefined;
+      const r = jsonSend(app.sock, "ping", BOOT_PING_MS);
+      return r.obj !== undefined && r.obj.ok === true ? true : undefined;
+    });
+    const show = cliSend(app, "show");
+    if (show.code !== 0) throw new Error(`show failed: exit=${show.code ?? "none"} ${show.stderr}`);
+    await expectWindow(app, true, WINDOW_DEADLINE_MS);
+    await screenshotBestEffort("03-translucent-macos.png");
+    await stopApp(app);
+    core.info(`evidence: translucent boot + capture completed in ${Date.now() - t0}ms`);
+  } catch (err) {
+    core.info(`evidence: translucent capture unavailable: ${errMsg(err)}`);
+  }
+}
+
 // ---- scenario B: mid-index (big root; the user-reported failure window) -------
 function pickBigRoot(): string {
   try {
@@ -794,6 +829,7 @@ try {
   core.info(`winlist probe compiled in ${Date.now() - tCompile}ms`);
 
   await scenarioA();
+  await translucentEvidence();
   await scenarioB();
 
   if (failures.length > 0) {

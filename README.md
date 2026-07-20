@@ -2932,3 +2932,23 @@ Notes, all verified on this codebase (Wails v2.13.0, WebKitGTK 4.1):
   types, so the flag is *expected* to behave like the verified
   compositor rows -- if your GNOME session disagrees, file an issue
   with a screenshot.
+
+On **macOS** the same flag means the Spotlight look: frosted glass,
+not a hole in the screen.
+
+- The window gains an `NSVisualEffectView` blurring whatever is
+  behind it (that is also exactly what Spotlight is; wails v2.13.0
+  has no raw see-through-window path, and vibrancy is the better
+  look anyway).
+- The material tracks the configured theme: vibrant dark for `dark`
+  and custom themes, vibrant light for `light`.
+- The bar's own background drops to `bg-opacity` 0.65 so the frost
+  actually shows -- the stock values (dark 0.97, light 0.98) read
+  opaque. Only a builtin default is swapped: set your own
+  `bg-opacity` in a theme file and it wins verbatim -- unless it
+  equals a builtin default, which is indistinguishable (the blur
+  behind the window comes from macOS, not the CSS `blur` token).
+- To verify on your Mac: set `"window": {"translucent": true}`,
+  relaunch (this is the one next-launch knob), summon over a busy
+  desktop -- the bar body should show the wallpaper frosted through
+  it. Compare against Spotlight side by side.
