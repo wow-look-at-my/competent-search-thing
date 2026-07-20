@@ -254,12 +254,18 @@ func TestNonJSONRequestsAreRejected(t *testing.T) {
 }
 
 // TestJSONWireShapes pins the responses at the wire level: one JSON
-// object per line, in exactly the documented shapes.
+// object per line, in exactly the documented shapes. The build stamp
+// is pinned explicitly -- the plain Listen wrapper derives it from the
+// test binary's own (environment-dependent) vcs stamp, which must
+// never decide a wire assertion.
 func TestJSONWireShapes(t *testing.T) {
-	s, path := listen(t, "1.2.3-test")
+	path := testSocket(t)
+	s, err := ListenWith(path, "1.2.3-test", ListenOptions{Build: "wire-build-42"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
 
 	require.JSONEq(t, `{"ok":true}`, rawExchange(t, path, `{"cmd":"ping"}`))
-	require.JSONEq(t, `{"ok":true,"version":"1.2.3-test"}`, rawExchange(t, path, `{"cmd":"version"}`))
+	require.JSONEq(t, `{"ok":true,"version":"1.2.3-test","build":"wire-build-42"}`, rawExchange(t, path, `{"cmd":"version"}`))
 	require.JSONEq(t, `{"ok":false,"error":"not ready"}`, rawExchange(t, path, `{"cmd":"toggle"}`))
 	require.JSONEq(t, `{"ok":false,"error":"unknown command"}`, rawExchange(t, path, `{"cmd":"bogus"}`))
 	require.JSONEq(t, `{"ok":false,"error":"invalid request"}`, rawExchange(t, path, `{not json`),
@@ -340,22 +346,28 @@ func TestParseReplyMappings(t *testing.T) {
 		{
 			name: "accepted command",
 			line: `{"ok":true,"accepted":"toggle"}`,
-			want: Reply{OK: true, Accepted: "toggle", Raw: `{"ok":true,"accepted":"toggle"}`},
+			want: Reply{OK: true, Accepted: "toggle", Raw: `{"ok":true,"accepted":"toggle"}`, Parsed: true},
 		},
 		{
 			name: "version answer",
 			line: `{"ok":true,"version":"1.2.3"}`,
-			want: Reply{OK: true, Version: "1.2.3", Raw: `{"ok":true,"version":"1.2.3"}`},
+			want: Reply{OK: true, Version: "1.2.3", Raw: `{"ok":true,"version":"1.2.3"}`, Parsed: true},
+		},
+		{
+			name: "version answer with build stamp",
+			line: `{"ok":true,"version":"1.2.3","build":"abcdef123456"}`,
+			want: Reply{OK: true, Version: "1.2.3", Build: "abcdef123456",
+				Raw: `{"ok":true,"version":"1.2.3","build":"abcdef123456"}`, Parsed: true},
 		},
 		{
 			name: "json with unknown fields is tolerated",
 			line: `{"ok":true,"accepted":"toggle","future":1}`,
-			want: Reply{OK: true, Accepted: "toggle", Raw: `{"ok":true,"accepted":"toggle","future":1}`},
+			want: Reply{OK: true, Accepted: "toggle", Raw: `{"ok":true,"accepted":"toggle","future":1}`, Parsed: true},
 		},
 		{
 			name: "json error shape",
 			line: `{"ok":false,"error":"not ready"}`,
-			want: Reply{Err: "not ready", Raw: `{"ok":false,"error":"not ready"}`},
+			want: Reply{Err: "not ready", Raw: `{"ok":false,"error":"not ready"}`, Parsed: true},
 		},
 		{
 			name: "legacy ok line is garbage now",

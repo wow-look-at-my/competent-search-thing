@@ -79,6 +79,22 @@ func TestStartupWiresIPCBeforeHotkey(t *testing.T) {
 		"a summon arriving during hotkey registration is acked, not answered not-ready")
 }
 
+func TestIPCQuitReachesRuntimeQuit(t *testing.T) {
+	// The version-skew handshake's graceful half: {"cmd":"quit"} is
+	// acked and then runs the same runtime-quit path as the !quit
+	// builtin.
+	srv, path := newTestIPC(t)
+	a, r := newTestApp(t, nil, Options{IPC: srv})
+	a.Startup(context.Background())
+
+	rep, err := ipc.Send(path, ipc.CmdQuit, time.Second)
+	require.NoError(t, err)
+	require.True(t, rep.OK)
+	require.Equal(t, ipc.CmdQuit, rep.Accepted, "the ack names the accepted command")
+	require.Eventually(t, func() bool { return r.has("quit") },
+		5*time.Second, 5*time.Millisecond, "the ipc quit command reaches the runtime quit seam")
+}
+
 func TestShutdownClosesIPC(t *testing.T) {
 	srv, path := newTestIPC(t)
 	a, _ := newTestApp(t, nil, Options{IPC: srv})

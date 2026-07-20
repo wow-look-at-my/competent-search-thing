@@ -48,10 +48,18 @@ type RunOptions struct {
 // the real os.Stdin/os.Stdout (which Firefox owns in production).
 type env struct {
 	version string
+	// build is the version-skew discriminator (the binary's vcs
+	// stamp); empty derives it lazily via ipc.OwnBuild. Tests set it
+	// to pin skew scenarios deterministically.
+	build   string
 	runGUI  func(RunOptions) error
 	out     io.Writer
 	hostIn  io.Reader
 	hostOut io.Writer
+	// listenFn overrides the production socket acquisition in tests
+	// (which MUST script ipc.ListenOptions.Kill: in-process fake
+	// daemons report the test's own pid as the socket owner).
+	listenFn func(path string) (*ipc.Server, error)
 }
 
 // stdout returns the notice writer, defaulting to os.Stdout when none
@@ -61,6 +69,26 @@ func (e *env) stdout() io.Writer {
 		return e.out
 	}
 	return os.Stdout
+}
+
+// buildID resolves this binary's build identity once.
+func (e *env) buildID() string {
+	if e.build == "" {
+		e.build = ipc.OwnBuild()
+	}
+	return e.build
+}
+
+// listen acquires the single-instance socket. ipc.ListenWith's probe
+// classifies whatever holds it and self-heals every unhealthy case
+// (dead file, wedged or mid-death holder, pre-JSON legacy daemon,
+// version skew); the one non-Server outcome left is ErrAlreadyRunning
+// -- a healthy instance of this same version+build.
+func (e *env) listen(path string) (*ipc.Server, error) {
+	if e.listenFn != nil {
+		return e.listenFn(path)
+	}
+	return ipc.ListenWith(path, e.version, ipc.ListenOptions{Logf: log.Printf, Build: e.buildID()})
 }
 
 // commandBuilders collects the subcommand constructors. Each
@@ -99,16 +127,17 @@ func newRoot(e *env) *cobra.Command {
 }
 
 // runRoot is the bare-invocation GUI path: acquire the single-instance
-// socket, then run the GUI. When another instance already holds the
-// socket, ask it to show its bar and report what actually happened;
-// when the socket cannot be created at all, run the GUI without IPC
-// rather than not at all.
+// socket, then run the GUI. e.listen's probe self-heals every
+// unhealthy socket holder, so ErrAlreadyRunning here means a healthy
+// same-version instance: ask it to show its bar and report what
+// actually happened. When the socket cannot be created at all, run
+// the GUI without IPC rather than not at all.
 func runRoot(cmd *cobra.Command, e *env) error {
 	path := ipc.SocketPath(os.Getenv)
-	srv, err := ipc.Listen(path, e.version)
+	srv, err := e.listen(path)
 	if err != nil {
 		if errors.Is(err, ipc.ErrAlreadyRunning) {
-			return showRunningInstance(cmd, path)
+			return showRunningInstance(cmd, e, path)
 		}
 		log.Printf("ipc: %v (running without single-instance IPC)", err)
 		srv = nil
@@ -117,59 +146,164 @@ func runRoot(cmd *cobra.Command, e *env) error {
 }
 
 // showRunningInstance is the second-launch path: deliver "show" to the
-// instance holding the socket and report honestly -- "showing it" only
-// on a confirmed acknowledgement, a still-starting notice on a
-// not-ready reply, and a nonzero exit when the instance did not answer
-// at all.
-func showRunningInstance(cmd *cobra.Command, path string) error {
+// healthy instance the listen probe just confirmed and report honestly
+// -- "showing it" only on a confirmed acknowledgement, a still-starting
+// notice on a not-ready reply. When even this exchange gets no JSON
+// answer (the instance died in the gap -- the probe-to-show death
+// race), ONE bounded re-listen self-heals: its probe classifies the
+// corpse, takes the socket over, and this process becomes the
+// instance instead of asking the user to clean anything up.
+func showRunningInstance(cmd *cobra.Command, e *env, path string) error {
 	rep, err := ipc.Send(path, ipc.CmdShow, sendTimeout)
-	if err == nil {
-		switch {
-		case rep.OK:
-			fmt.Fprintln(cmd.OutOrStdout(), "competent-search-thing is already running; showing it")
-			return nil
-		case rep.NotReady():
-			fmt.Fprintln(cmd.OutOrStdout(), "competent-search-thing is already running (still starting up)")
-			return nil
-		default:
-			err = fmt.Errorf("unexpected reply %q", rep.Raw)
-		}
+	if err == nil && rep.Parsed {
+		return showReply(cmd, rep)
 	}
-	// Print the failure ourselves and keep cobra from adding its
-	// "Error:" line on top (the hide subcommand's pattern).
+	if err != nil {
+		log.Printf("ipc: the running instance stopped answering mid-show (%v); re-acquiring the socket", err)
+	} else {
+		log.Printf("ipc: the running instance answered show with the non-JSON line %q; re-acquiring the socket", rep.Raw)
+	}
+	srv, lerr := e.listen(path)
+	if lerr != nil {
+		if errors.Is(lerr, ipc.ErrAlreadyRunning) {
+			// A healthy instance (re)appeared in the gap (e.g. another
+			// launcher won the takeover): one final delivery, honest
+			// reporting, no loop.
+			rep, serr := ipc.Send(path, ipc.CmdShow, sendTimeout)
+			if serr == nil && rep.Parsed {
+				return showReply(cmd, rep)
+			}
+			if serr == nil {
+				serr = fmt.Errorf("unexpected reply %q", rep.Raw)
+			}
+			return reportNoResponse(cmd, serr)
+		}
+		log.Printf("ipc: %v (running without single-instance IPC)", lerr)
+		srv = nil
+	}
+	return e.runGUI(RunOptions{Server: srv})
+}
+
+// showReply maps the second-launch show exchange's parsed reply.
+func showReply(cmd *cobra.Command, rep ipc.Reply) error {
+	switch {
+	case rep.OK:
+		fmt.Fprintln(cmd.OutOrStdout(), "competent-search-thing is already running; showing it")
+		return nil
+	case rep.NotReady():
+		fmt.Fprintln(cmd.OutOrStdout(), "competent-search-thing is already running (still starting up)")
+		return nil
+	default:
+		// A parsed reply from a responsive instance that still refused
+		// the show: report it honestly, never kill a responsive daemon.
+		return reportNoResponse(cmd, fmt.Errorf("unexpected reply %q", rep.Raw))
+	}
+}
+
+// reportNoResponse prints the second-launch failure ourselves and
+// keeps cobra from adding its "Error:" line on top (the hide
+// subcommand's pattern).
+func reportNoResponse(cmd *cobra.Command, err error) error {
 	cmd.SilenceErrors = true
 	err = fmt.Errorf("competent-search-thing is already running but did not respond: %v", err)
 	fmt.Fprintln(cmd.ErrOrStderr(), err)
 	return err
 }
 
-// summon delivers cmdName (toggle or show) to the running instance;
-// when no instance is running it starts the GUI in this process with
-// the bar shown once the frontend is ready.
-func summon(e *env, cmdName string) error {
+// instanceState buckets what one version exchange proved about the
+// socket's holder.
+type instanceState int
+
+const (
+	// instanceHealthy: a live JSON daemon of this same version+build.
+	instanceHealthy instanceState = iota
+	// instanceReplace: a live JSON daemon of another vintage -- new
+	// instance wins.
+	instanceReplace
+	// instanceAbsent: nothing healthy answered (not running, refused,
+	// reset, EOF, timeout, or a pre-JSON raw line).
+	instanceAbsent
+)
+
+// classifyInstance probes the running instance with one version
+// exchange. Refused, reset, EOF, timeout and non-JSON garbage all
+// classify UNIFORMLY as instanceAbsent -- "no healthy instance" -- per
+// the self-heal contract; only a parsed JSON reply proves a
+// responsive daemon (a "not ready" answer is a RESPONSIVE booting
+// daemon and lands in instanceHealthy's proceed path, never in a
+// takeover).
+func classifyInstance(e *env, path string) instanceState {
+	rep, err := ipc.Send(path, ipc.CmdVersion, sendTimeout)
+	switch {
+	case err != nil && ipc.IsNotRunning(err):
+		// The ordinary cold start: nothing to log loudly about.
+		return instanceAbsent
+	case err != nil:
+		log.Printf("ipc: the instance behind %s did not answer a version probe (%v); treating it as gone", path, err)
+		return instanceAbsent
+	case !rep.Parsed:
+		log.Printf("ipc: the instance behind %s answered the version probe with the non-JSON line %q (pre-JSON protocol); new instance wins", path, rep.Raw)
+		return instanceAbsent
+	case rep.OK && (rep.Version != e.version || rep.Build != e.buildID()):
+		log.Printf("ipc: the running instance is version %s build %q, this binary is %s %q; replacing it",
+			rep.Version, rep.Build, e.version, e.buildID())
+		return instanceReplace
+	default:
+		return instanceHealthy
+	}
+}
+
+// logNoAnswer records why a command exchange against a
+// just-classified-healthy instance still failed (the death race
+// between the version probe and the command).
+func logNoAnswer(path, cmdName string, rep ipc.Reply, err error) {
+	if err != nil {
+		log.Printf("ipc: the instance behind %s stopped answering mid-%s (%v); taking over", path, cmdName, err)
+		return
+	}
+	log.Printf("ipc: the instance behind %s answered %s with the non-JSON line %q; taking over", path, cmdName, rep.Raw)
+}
+
+// becomeInstance starts the GUI in this process after acquiring the
+// single-instance socket (e.listen's probe replaces dead, wedged,
+// legacy and skewed holders on the way). The one losing outcome is
+// ErrAlreadyRunning -- a healthy same-version winner of a startup
+// race -- where raceCmd is delivered to the winner instead (once,
+// no loop) and its reply mapped by raceReply.
+func becomeInstance(e *env, raceCmd string, opts RunOptions, raceReply func(*env, ipc.Reply) error) error {
 	path := ipc.SocketPath(os.Getenv)
-	rep, err := ipc.Send(path, cmdName, sendTimeout)
-	if err == nil {
-		return summonReply(e, rep)
-	}
-	if !ipc.IsNotRunning(err) {
-		return err
-	}
-	// No instance: become it.
-	srv, lerr := ipc.Listen(path, e.version)
-	if lerr != nil {
-		if errors.Is(lerr, ipc.ErrAlreadyRunning) {
-			// Lost a startup race; the winner shows the bar instead.
-			rep, serr := ipc.Send(path, ipc.CmdShow, sendTimeout)
+	srv, err := e.listen(path)
+	if err != nil {
+		if errors.Is(err, ipc.ErrAlreadyRunning) {
+			rep, serr := ipc.Send(path, raceCmd, sendTimeout)
 			if serr != nil {
 				return serr
 			}
-			return summonReply(e, rep)
+			return raceReply(e, rep)
 		}
-		log.Printf("ipc: %v (running without single-instance IPC)", lerr)
+		log.Printf("ipc: %v (running without single-instance IPC)", err)
 		srv = nil
 	}
-	return e.runGUI(RunOptions{Server: srv, ShowOnStartup: true})
+	opts.Server = srv
+	return e.runGUI(opts)
+}
+
+// summon delivers cmdName (toggle or show) to the running instance
+// when a healthy same-build one answers a version probe; in every
+// other state -- not running, unresponsive, reset mid-exchange,
+// pre-JSON, or version-skewed -- it becomes the instance itself
+// (listen's probe handling any replacement) and starts the GUI with
+// the bar shown once the frontend is ready.
+func summon(e *env, cmdName string) error {
+	path := ipc.SocketPath(os.Getenv)
+	if classifyInstance(e, path) == instanceHealthy {
+		rep, err := ipc.Send(path, cmdName, sendTimeout)
+		if err == nil && rep.Parsed {
+			return summonReply(e, rep)
+		}
+		logNoAnswer(path, cmdName, rep, err)
+	}
+	return becomeInstance(e, ipc.CmdShow, RunOptions{ShowOnStartup: true}, summonReply)
 }
 
 // summonReply maps a summon exchange's parsed reply to its result. A
@@ -187,9 +321,10 @@ func summonReply(e *env, rep ipc.Reply) error {
 // not-ready reply counts as success: the instance is booting and
 // shows the bar itself once the frontend is ready. The reply parsing
 // itself lives entirely in ipc.Send; this layer only maps outcomes
-// to exit behavior (a non-JSON reply -- e.g. from a still-running
-// pre-JSON daemon -- arrives in-band via Raw and lands in the
-// unexpected-reply error below).
+// to exit behavior. On the summon paths a non-JSON reply never gets
+// here (it classifies as no-healthy-instance and self-heals); hide --
+// which by contract never starts, takes over, or kills anything --
+// still lands such a reply in the unexpected-reply error below.
 func checkReply(rep ipc.Reply) error {
 	if rep.OK || rep.NotReady() {
 		return nil
@@ -207,7 +342,13 @@ func Execute(version string, runGUI func(RunOptions) error) int {
 
 // execute is Execute with the process bits injectable for tests.
 func execute(version string, runGUI func(RunOptions) error, args []string, out, errOut io.Writer) int {
-	root := newRoot(&env{version: version, runGUI: runGUI, out: out})
+	return executeEnv(&env{version: version, runGUI: runGUI, out: out}, args, out, errOut)
+}
+
+// executeEnv is execute over a caller-built env (tests that script the
+// listen seam or pin the build stamp construct their own).
+func executeEnv(e *env, args []string, out, errOut io.Writer) int {
+	root := newRoot(e)
 	root.SetArgs(args)
 	root.SetOut(out)
 	root.SetErr(errOut)
