@@ -194,18 +194,23 @@ func TestNormalize(t *testing.T) {
 	require.Equal(t, WatcherBackendAuto, empty.Watcher.Backend, "an empty watcher.backend means auto")
 	require.Equal(t, DefaultTelemetryMaxSizeKB, empty.Search.Telemetry.MaxSizeKB,
 		"zero telemetry maxSizeKB repairs to the default")
-	require.False(t, empty.Search.Telemetry.Enabled, "telemetry stays opt-in: never enabled by repair")
+	require.False(t, empty.Search.Priors.Disabled,
+		"the learned layers are on by default: the zero value stays on and repair never flips a switch")
+	require.False(t, empty.Search.Arbiter.Disabled, "the arbiter defaults on")
 
 	negTel := Config{Search: SearchConfig{Telemetry: TelemetryConfig{MaxSizeKB: -5}}}
 	negTel.Normalize()
 	require.Equal(t, DefaultTelemetryMaxSizeKB, negTel.Search.Telemetry.MaxSizeKB,
 		"negative telemetry maxSizeKB repairs to the default")
 
-	keepTel := Config{Search: SearchConfig{Telemetry: TelemetryConfig{Enabled: true, MaxSizeKB: 64, RetainQueries: true}}}
+	keepTel := Config{Search: SearchConfig{
+		Telemetry: TelemetryConfig{MaxSizeKB: 64},
+		Priors:    PriorsConfig{Disabled: true},
+	}}
 	keepTel.Normalize()
 	require.Equal(t, 64, keepTel.Search.Telemetry.MaxSizeKB, "a configured telemetry size cap is preserved")
-	require.True(t, keepTel.Search.Telemetry.Enabled)
-	require.True(t, keepTel.Search.Telemetry.RetainQueries)
+	require.True(t, keepTel.Search.Priors.Disabled,
+		"an explicit opt-out (the debug escape hatch) is never repaired away")
 
 	allEmpty := Config{Roots: []string{""}}
 	allEmpty.Normalize()

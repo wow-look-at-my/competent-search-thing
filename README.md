@@ -625,21 +625,25 @@ Delete the file to reset the learning; set
 `"search": { "frecency": { "disabled": true } }` to never record
 anything.
 
-### Pick-memory priors (opt-in)
+### Pick-memory priors
 
-`search.priors.enabled` (default `false`) adds one more learned
-layer on top of the blend: priors derived from which results you
-actually PICK.
+`search.priors` (on by default) adds one more learned layer on top
+of the blend: priors derived from which results you actually PICK.
 
 ```json
-"search": { "priors": { "enabled": true } }
+"search": { "priors": { "disabled": true } }
 ```
+
+turns it off -- a debug escape hatch for reproducing the
+deterministic ranking baseline (or a kill switch if the learned
+layer ever misbehaves), not a privacy option: everything involved
+is local to this machine either way.
 
 How priors learn: the layer only READS two local files that already
 exist for other features --
 
 - `<configDir>/telemetry.jsonl` (+ its rotated `.1` generation), the
-  opt-in ranking telemetry log (`search.telemetry.enabled`). Each
+  local [ranking log](#ranking-log) (always on). Each
   logged pick teaches three small tables: an exact-query pick memory
   (picked `report_q3.md` for the query `rep` before, and `rep` pins
   that row near the top of its match class -- decaying with a 14-day
@@ -647,45 +651,45 @@ exist for other features --
   per-folder-prefix pick rate (the first three path components).
   The rates are smoothed and applied as small nudges on the same
   scale as the recency/noise signals; the exact-query memory is the
-  strong signal and outweighs them. NOTE: pick data only accrues
-  once the ranking telemetry feature is present and
-  `search.telemetry` is enabled; until then the bootstrap below is
-  the only signal.
-- `<configDir>/frecency.json` as the BOOTSTRAP: while the telemetry
+  strong signal and outweighs them.
+- `<configDir>/frecency.json` as the BOOTSTRAP: while the ranking
   log holds few picks, the extension/folder tables are seeded from
   the decayed open counts instead ("this user opens `.md` files
-  under `~/notes` a lot"), so enabling the knob nudges from day one
-  and keeps learning from ordinary opens even without telemetry.
+  under `~/notes` a lot"), so the layer nudges from day one and
+  keeps learning from ordinary opens too.
 
 The tables rebuild asynchronously at startup and after successful
 activations (no timers, no background polling while idle), are
 hard-capped well under 1 MiB of memory, and only ever REORDER
 results within their match class -- exact matches still beat prefix
-matches, recall is untouched, and disabling the knob restores
-today's ordering exactly. Everything stays on this machine: the
+matches, recall is untouched, and the escape hatch restores the
+pre-learning ordering exactly. Everything stays on this machine: the
 priors layer writes nothing and sends nothing.
 
-### Learned arbitration (opt-in)
+### Learned arbitration
 
-`search.arbiter.enabled` (default `false`) adds the cross-SOURCE
-learned layer: when the same name matches a file, a browser tab, and
-an app, which did YOU mean? Type `jira` and the bar shows a file
-named `jira-notes.md`, the open "JIRA - Sprint 12" Firefox tab, and
-maybe an app -- today the files always render first. If you keep
+`search.arbiter` (on by default) adds the cross-SOURCE learned
+layer: when the same name matches a file, a browser tab, and an
+app, which did YOU mean? Type `jira` and the bar shows a file named
+`jira-notes.md`, the open "JIRA - Sprint 12" Firefox tab, and maybe
+an app -- out of the box the files always render first. If you keep
 picking the tab, the arbiter learns that and floats the tabs section
 above the file results for queries shaped like that; if you keep
 picking `.md` files over their `.txt` siblings, file rows get a
 small learned nudge too.
 
 ```json
-"search": { "arbiter": { "enabled": true } }
+"search": { "arbiter": { "disabled": true } }
 ```
+
+turns it off -- the same debug escape hatch / kill switch stance as
+`search.priors.disabled`, and equally not a privacy option.
 
 What it is: a small pairwise model (a single weight vector -- class,
 alignment, frecency/recency/noise signals, extension and depth
 buckets, result source, engine score, and query-shape features like
 length/spaces/time-of-day) trained ONLY on your own recorded picks
-in the local telemetry log. It re-orders and places exactly what the
+in the local ranking log. It re-orders and places exactly what the
 deterministic engine already delivered, before anything paints:
 
 - Within the file list it adds a clamped nudge -- strictly less than
@@ -695,57 +699,78 @@ deterministic engine already delivered, before anything paints:
   section (tabs, apps, sites) above the file results when its best
   row outscores the best file row for that query.
 
-The ACTIVATION GATE is what makes enabling this safe to try: the
-model participates only once **at least 200 picks** exist in the
-telemetry log AND it demonstrably predicts your newest picks better
-than the current result order does (a time-split holdout check --
-the oldest 80% of picks train, the newest 20% validate). Until both
-hold -- and whenever they stop holding -- the arbiter is completely
-inert and ordering is byte-identical to the feature being off. It
-retrains in the background at startup and after every 50 new picks;
-nothing runs on the keystroke path beyond a few microseconds of
-arithmetic.
+The ACTIVATION GATE is what makes default-on safe: the model
+participates only once **at least 200 picks** exist in the ranking
+log AND it demonstrably predicts your newest picks better than the
+current result order does (a time-split holdout check -- the oldest
+80% of picks train, the newest 20% validate). Until both hold --
+and whenever they stop holding -- the arbiter is completely inert
+and ordering is byte-identical to the feature being off. It retrains
+in the background at startup and after every 50 new picks; nothing
+runs on the keystroke path beyond a few microseconds of arithmetic.
 
-Prerequisite: the model learns from `<configDir>/telemetry.jsonl`,
-so `search.telemetry.enabled` must also be on for picks to accrue
-(enable both and the gate typically opens after a week or two of
-normal use). Privacy: everything is local -- the arbiter only READS
-the telemetry log, writes nothing, and sends nothing anywhere;
-disabling the knob (or deleting the log) restores today's ordering
-exactly.
+The model learns from `<configDir>/telemetry.jsonl`, so with both
+defaults untouched picks accrue from day one and the gate typically
+opens after a week or two of normal use. Everything is local -- the
+arbiter only READS the ranking log, writes nothing, and sends
+nothing anywhere; the escape hatch (or deleting the log) restores
+the deterministic ordering exactly.
 
-## Ranking telemetry
+## Ranking log
 
-Ranking telemetry (`search.telemetry.enabled`, **off by default**)
-records, locally only, which results were shown and which one you
-activated -- the query text, the delivered result paths, and the
-ranking signals behind each row -- to a size-capped log at
-`<configDir>/telemetry.jsonl` (mode 0600). Nothing is ever uploaded
-or shared; it exists so ranking can learn from your own picks, and
-deleting the file (or disabling the option) erases/stops it at any
-time.
+The ranking log (`search.telemetry`, always on) records which
+results were shown and which one you activated -- the query text,
+the delivered rows, and the ranking signals behind each row -- to a
+size-capped log at `<configDir>/telemetry.jsonl` (mode 0600).
+
+It is a LOG, not telemetry in the phone-home sense: it never leaves
+this machine -- nothing is ever uploaded, and the only place it goes
+is a debugging chat if you paste it there. It exists so the learned
+ranking layers ([priors](#pick-memory-priors) and the
+[arbiter](#learned-arbitration)) can learn from your own picks, and
+so ranking bugs can be diagnosed from what the bar actually did.
+Deleting the file erases everything at any time.
 
 What one record holds (one JSON line per *activated* result -- plain
 keystrokes, abandoned queries, and zero-result queries are never
-logged):
+logged), everything in full:
 
-- the query (logged as `""` when `retainQueries` is `false`; paths
-  and signals are still recorded),
+- the query text,
 - every delivered row in order: file rows with their path and the
   ranking components at impression time (match class, fuzzy
   alignment, frecency boost, recency, working-directory proximity,
-  noise penalty, depth, extension); plugin rows with the provider id
-  and engine score only -- plugin titles, subtitles, clipboard
-  contents, preview queries/answers, and file contents are
-  deliberately never logged,
+  noise penalty, depth, extension); plugin rows with the provider
+  id, engine score, and the row title as rendered,
 - which row was activated and the action kind (open, reveal,
   copy_text, ...).
 
-Size is bounded: when the log would cross `maxSizeKB` (default 4096
-KiB) it rotates once to `telemetry.jsonl.1`, so at most two
-generations (~8 MiB) ever exist. The feature is behaviorally
-invisible either way -- result ordering is byte-identical with it on
-or off; it only observes.
+Size is bounded: when the log would cross `maxSizeKB` (default
+65536 KiB = 64 MiB) it rotates once to `telemetry.jsonl.1`, so at
+most two generations (~128 MiB) ever exist. Bounded disk is
+engineering, not redaction -- the cap decides when old records age
+out, never what gets recorded. The log is behaviorally invisible:
+result ordering is byte-identical with it on or off; it only
+observes.
+
+There is deliberately NO off switch. The log is private by staying
+on the machine: if you value your privacy, don't manually upload
+your log files onto the internet -- otherwise they stay on your
+computer, private. The honest escape hatch is the file itself:
+deleting `telemetry.jsonl` (and `.jsonl.1`) is always safe --
+everything recorded so far is erased and recording simply starts
+fresh. `maxSizeKB` is the one knob, and it applies live.
+
+Reading the log (its audience is debugging sessions -- paste the
+interesting lines into the chat). It lives next to `config.json`:
+`~/.config/competent-search-thing/telemetry.jsonl` on Linux (or
+under `$COMPETENT_SEARCH_CONFIG_DIR` when set), the platform config
+dir elsewhere:
+
+```sh
+LOG=~/.config/competent-search-thing/telemetry.jsonl
+tail -n 5 "$LOG" | jq .                # the last five records, pretty
+jq -c '{ts, query, picked: (.picked.path // .picked.plugin)}' "$LOG" | tail -n 20
+```
 
 ## Rewrite rules
 
@@ -919,8 +944,9 @@ badges:
   an enabled priors layer survives the rebuild);
 - `search.priors`: the pick-memory layer starts or stops on the spot
   (its tables rebuild from the local files it already reads);
-- `search.telemetry`: the opt-in ranking log starts or stops on the
-  spot (the log file itself is kept; delete it to erase);
+- `search.telemetry.maxSizeKB`: the ranking log's size bound
+  applies on the spot (the log file itself is kept; delete it to
+  erase);
 - `stats.disabled` / `tray.disabled`: the sampler/icon stops or
   starts on the spot;
 - `history.persistDisabled`: the store flips persistence without
@@ -1003,7 +1029,7 @@ configs gain it on their next save):
 {
   "$schema": "./config.schema.json",
   "roots": ["/"],
-  "rootsVersion": 3,
+  "rootsVersion": 6,
   "excludes": [".git", "node_modules", ".cache", ".hg", ".svn", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox", ".venv", "/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"],
   "hotkey": "alt+space",
   "rescanIntervalMinutes": 0,
@@ -1019,12 +1045,9 @@ configs gain it on their next save):
       "weightNoise": 1,
       "tierJumpCount": 3
     },
-    "priors": { "enabled": false },
-    "telemetry": {
-      "enabled": false,
-      "maxSizeKB": 4096,
-      "retainQueries": true
-    }
+    "priors": { "disabled": false },
+    "telemetry": { "maxSizeKB": 65536 },
+    "arbiter": { "disabled": false }
   },
   "watcher": { "maxWatches": 0, "sweepMinutes": 0, "sweepDisabled": false, "watchExcludes": [] },
   "theme": "dark",
@@ -1077,9 +1100,12 @@ Field reference:
   filesystem mountpoints under a root are skipped automatically; list
   such a mountpoint here explicitly to index it anyway.
 - `rootsVersion` -- the roots-defaults version stamp the app writes
-  (currently `3`). Older stamps trigger the one-time migrations
-  described under [Indexing scope](#indexing-scope). Not a knob --
-  leave it alone unless you want the migration to run again.
+  (currently `6`). Older stamps trigger the one-time migrations
+  described under [Indexing scope](#indexing-scope) plus, below 6,
+  the ranking-defaults flip (the always-on ranking log and the
+  on-by-default learned layers -- see [Ranking log](#ranking-log)).
+  Not a knob -- leave it alone unless you want the migration to run
+  again.
 - `excludes` -- patterns pruned from indexing (default `.git`,
   `node_modules`, `.cache`, the high-churn noise directories `.hg`,
   `.svn`, `__pycache__`, `.mypy_cache`, `.pytest_cache`,
@@ -1123,14 +1149,14 @@ Field reference:
   `tierJumpCount` (default 3) is the decayed-open-count threshold for
   competing one match tier up. For every frecency number, `0` means
   "use the default" and a NEGATIVE value turns that one signal off.
-  `priors.enabled` (default `false`) turns the opt-in pick-memory
-  priors on -- see [Pick-memory priors](#pick-memory-priors-opt-in).
-  `telemetry` configures the opt-in, local-only ranking telemetry log
-  described under [Ranking telemetry](#ranking-telemetry): `enabled`
-  (default `false` -- nothing is recorded until you opt in),
-  `maxSizeKB` (default 4096) is the log rotation threshold, and
-  `retainQueries` `false` logs query text as `""` while keeping paths
-  and ranking signals.
+  `priors.disabled` and `arbiter.disabled` (default `false` -- both
+  learned layers are on) are debug escape hatches / kill switches,
+  not privacy options -- see [Pick-memory priors](#pick-memory-priors)
+  and [Learned arbitration](#learned-arbitration). `telemetry`
+  bounds the always-on local [ranking log](#ranking-log):
+  `maxSizeKB` (default 65536 = 64 MiB) is the rotation threshold and
+  the section's only knob -- there is deliberately no off switch
+  (the log never leaves this machine; delete the file to erase it).
 - `watcher` -- the live-watch layer: `backend` (`auto` | `fanotify` =
   strict, Linux | `fsevents` = strict, macOS | `inotify` = the
   per-directory model on every OS; unset means `auto`),

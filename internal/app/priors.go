@@ -12,11 +12,13 @@ import (
 // The pick-memory priors wiring: internal/priors' lookup tables built
 // from the LOCAL data files and injected into the ranking blend as
 // the index.Blend.Prior resolver (the blend itself is internal/index
-// blend.go; the knob config search.priors -- OPT-IN, zero value =
-// OFF, the preview.enabled privacy precedent).
+// blend.go; the knob config search.priors -- ON by default, zero
+// value = on per the tray.disabled convention; the off switch is a
+// debug escape hatch for a deterministic ranking baseline, not a
+// privacy option).
 //
 //   - Data sources, both read-only: <configDir>/telemetry.jsonl (+
-//     .jsonl.1), the opt-in search.telemetry pick log, and
+//     .jsonl.1), the local search.telemetry pick log, and
 //     <configDir>/frecency.json as the bootstrap while the log is
 //     still thin. Nothing is ever written and nothing leaves the
 //     machine.
@@ -25,18 +27,21 @@ import (
 //     paths -- the moments new pick data can exist), single-flight
 //     with one pending re-run coalescing a burst. No timers: an idle
 //     app re-reads nothing.
-//   - Disabled = nothing: no store, no file reads, no goroutines, and
-//     the Manager's blend never carries a Prior, so ordering is
-//     byte-identical to today (pinned in internal/index).
+//   - Disabled (the escape hatch) = nothing: no store, no file reads,
+//     no goroutines, and the Manager's blend never carries a Prior,
+//     so ordering is byte-identical to the layer not existing (pinned
+//     in internal/index).
 const priorsTelemetryLog = "telemetry.jsonl"
 
-// startPriors builds the priors store once at Startup, installs its
-// resolver on the blend (piggybacking on the frecency blend when that
-// layer is enabled; a prior-only blend otherwise), and kicks the
-// initial asynchronous table build. Best-effort throughout: an
-// unresolvable config dir logs one line and leaves the feature off.
+// startPriors builds the priors store once at Startup (unless config
+// search.priors.disabled opted out), installs its resolver on the
+// blend (piggybacking on the frecency blend when that layer is
+// enabled; a prior-only blend otherwise), and kicks the initial
+// asynchronous table build. Best-effort throughout: an unresolvable
+// config dir logs one line and leaves the feature off.
 func (a *App) startPriors() {
-	if !a.opt.Priors.Enabled {
+	if a.opt.Priors.Disabled {
+		log.Printf("priors: pick-memory priors disabled in config (debug escape hatch)")
 		return
 	}
 	dir, err := config.Dir()
@@ -74,7 +79,7 @@ func (a *App) startPriors() {
 // for the feature, so the save/apply report should say why it
 // stayed off.
 func (a *App) applyPriors(next *config.Config) error {
-	if !next.Search.Priors.Enabled {
+	if next.Search.Priors.Disabled {
 		a.priorsMu.Lock()
 		was := a.priorsStore != nil
 		a.priorsStore = nil
@@ -91,7 +96,7 @@ func (a *App) applyPriors(next *config.Config) error {
 					a.manager.SetBlend(nil)
 				}
 			}
-			log.Printf("priors: pick-memory priors disabled")
+			log.Printf("priors: pick-memory priors disabled (debug escape hatch)")
 		}
 		return nil
 	}

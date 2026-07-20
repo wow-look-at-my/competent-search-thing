@@ -58,18 +58,21 @@ func pickReportFor(a *App, query string) telemetry.PickReport {
 	}
 }
 
-func TestTelemetryDisabledByDefault(t *testing.T) {
+// TestTelemetryAlwaysOn pins the design: the zero-value config
+// brings the ranking log up -- there is no off switch, so the layer
+// exists whenever a config dir does.
+func TestTelemetryAlwaysOn(t *testing.T) {
 	a, path := telTestApp(t, config.TelemetryConfig{})
-	require.Nil(t, a.telLayer(), "the zero value keeps the feature off (opt-in)")
+	require.NotNil(t, a.telLayer(), "the zero value brings the always-on ranking log up")
 
-	// Search takes the plain Manager.Query path and RecordPick no-ops.
+	// Recording is pick-driven: bringing the log up writes nothing by
+	// itself (no picks = no records = no file).
 	require.Len(t, a.Search("report"), 2)
-	require.NoError(t, a.RecordPick(pickReportFor(a, "report")))
-	require.NoFileExists(t, path, "disabled telemetry never touches the disk")
+	require.NoFileExists(t, path, "no record exists until an activation is reported")
 }
 
 func TestSearchStashesImpressionWhenEnabled(t *testing.T) {
-	a, _ := telTestApp(t, config.TelemetryConfig{Enabled: true, MaxSizeKB: 64})
+	a, _ := telTestApp(t, config.TelemetryConfig{MaxSizeKB: 64})
 	l := a.telLayer()
 	require.NotNil(t, l)
 
@@ -86,9 +89,9 @@ func TestSearchStashesImpressionWhenEnabled(t *testing.T) {
 }
 
 func TestRecordPickWritesJoinedRecord(t *testing.T) {
-	a, path := telTestApp(t, config.TelemetryConfig{Enabled: true, MaxSizeKB: 64, RetainQueries: true})
+	a, path := telTestApp(t, config.TelemetryConfig{MaxSizeKB: 64})
 	rep := pickReportFor(a, "report")
-	rep.Shown = append(rep.Shown, telemetry.ShownRef{Kind: telemetry.KindPlugin, Plugin: "apps-search", Score: 90})
+	rep.Shown = append(rep.Shown, telemetry.ShownRef{Kind: telemetry.KindPlugin, Plugin: "apps-search", Score: 90, Title: "Reports App"})
 	require.NoError(t, a.RecordPick(rep))
 
 	recs := readTelemetryRecords(t, a, path)
@@ -114,6 +117,7 @@ func TestRecordPickWritesJoinedRecord(t *testing.T) {
 	require.Equal(t, "plugin", last["kind"])
 	require.Equal(t, "apps-search", last["plugin"])
 	require.Equal(t, float64(90), last["score"])
+	require.Equal(t, "Reports App", last["title"], "plugin-row titles are logged in full")
 	require.NotContains(t, last, "path", "plugin rows carry no file fields")
 
 	picked, ok := rec["picked"].(map[string]any)
@@ -127,7 +131,7 @@ func TestRecordPickWritesJoinedRecord(t *testing.T) {
 }
 
 func TestRecordPickBlendActiveAndSignalsFlow(t *testing.T) {
-	a, path := telTestApp(t, config.TelemetryConfig{Enabled: true, MaxSizeKB: 64, RetainQueries: true})
+	a, path := telTestApp(t, config.TelemetryConfig{MaxSizeKB: 64})
 	// Wire an ACTIVE blend with recorded opens so the trace carries a
 	// real boost for the file the pick reports.
 	st := frecency.New("", frecency.Options{})
@@ -155,18 +159,8 @@ func TestRecordPickBlendActiveAndSignalsFlow(t *testing.T) {
 	require.Greater(t, boosted["boost"].(float64), 3.0, "the impression-time boost is joined into the record")
 }
 
-func TestRecordPickRetainQueriesFalseLogsEmptyQuery(t *testing.T) {
-	a, path := telTestApp(t, config.TelemetryConfig{Enabled: true, MaxSizeKB: 64, RetainQueries: false})
-	require.NoError(t, a.RecordPick(pickReportFor(a, "report")))
-	rec := readTelemetryRecords(t, a, path)[0]
-	require.Equal(t, "", rec["query"], "retainQueries false blanks the query text")
-	require.Equal(t, true, rec["joined"], "the ring join still uses the real query")
-	shown := rec["shown"].([]any)
-	require.NotEmpty(t, shown[0].(map[string]any)["path"], "paths are still logged")
-}
-
 func TestRecordPickUnknownQueryLogsUnjoined(t *testing.T) {
-	a, path := telTestApp(t, config.TelemetryConfig{Enabled: true, MaxSizeKB: 64, RetainQueries: true})
+	a, path := telTestApp(t, config.TelemetryConfig{MaxSizeKB: 64})
 	rep := telemetry.PickReport{
 		Query:  "never-searched",
 		Shown:  []telemetry.ShownRef{{Kind: telemetry.KindFile, Path: "/notes/report-q3.md"}},
@@ -181,7 +175,7 @@ func TestRecordPickUnknownQueryLogsUnjoined(t *testing.T) {
 }
 
 func TestRecordPickValidatesEchoedData(t *testing.T) {
-	a, path := telTestApp(t, config.TelemetryConfig{Enabled: true, MaxSizeKB: 64, RetainQueries: true})
+	a, path := telTestApp(t, config.TelemetryConfig{MaxSizeKB: 64})
 	base := pickReportFor(a, "report")
 
 	blank := base
@@ -201,34 +195,36 @@ func TestRecordPickValidatesEchoedData(t *testing.T) {
 }
 
 func TestStartTelemetryUnresolvableConfigDirDisables(t *testing.T) {
-	a, _ := newTestApp(t, index.NewManager(nil, nil, 0), Options{Telemetry: config.TelemetryConfig{Enabled: true}})
+	a, _ := newTestApp(t, index.NewManager(nil, nil, 0), Options{})
 	t.Setenv(config.EnvConfigDir, "")
 	t.Setenv("HOME", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	a.telOnce.Do(a.startTelemetry)
-	require.Nil(t, a.telLayer(), "no config dir means telemetry stays off")
+	require.Nil(t, a.telLayer(), "no config dir means the ranking log stays off")
 	require.NoError(t, a.RecordPick(telemetry.PickReport{Query: "x"}))
 }
 
-func TestApplyConfigTelemetryTogglesLive(t *testing.T) {
+// TestApplyConfigTelemetryAppliesMaxSize: search.telemetry's one
+// remaining knob (the size bound) hot-applies by rebuilding the
+// layer; the impression ring restarts empty (the documented,
+// harmless eviction behavior).
+func TestApplyConfigTelemetryAppliesMaxSize(t *testing.T) {
 	a, _ := newTestApp(t, index.NewManager(nil, nil, 0), Options{})
+	a.telOnce.Do(a.startTelemetry)
+	before := a.telLayer()
+	require.NotNil(t, before)
+	before.stash("rep", false, nil)
 	seedBaseline(a, config.Default())
-	require.Nil(t, a.telLayer(), "default config keeps telemetry off")
 
 	next := config.Default()
-	next.Search.Telemetry.Enabled = true
-	next.Search.Telemetry.RetainQueries = false
+	next.Search.Telemetry.MaxSizeKB = 128
 	res := a.applyConfig(&next, "test")
 	require.Contains(t, res.Applied, "search.telemetry")
 	require.Empty(t, res.Errors)
-	l := a.telLayer()
-	require.NotNil(t, l, "enabling search.telemetry builds the layer live")
-	require.False(t, l.retainQueries, "the incoming config's knobs reach the fresh layer")
-
-	off := config.Default()
-	res = a.applyConfig(&off, "test")
-	require.Contains(t, res.Applied, "search.telemetry")
-	require.Nil(t, a.telLayer(), "disabling search.telemetry drops the layer live")
+	after := a.telLayer()
+	require.NotNil(t, after)
+	require.NotSame(t, before, after, "the size-bound change rebuilds the layer")
+	require.Nil(t, after.lookup("rep"), "the fresh layer's ring starts empty")
 }
 
 func TestApplyConfigTelemetryUnresolvableDirErrors(t *testing.T) {
@@ -239,12 +235,12 @@ func TestApplyConfigTelemetryUnresolvableDirErrors(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 
 	next := config.Default()
-	next.Search.Telemetry.Enabled = true
+	next.Search.Telemetry.MaxSizeKB = 128
 	res := a.applyConfig(&next, "test")
-	require.NotEmpty(t, res.Errors, "asking for telemetry without a config dir is a reported apply error")
+	require.NotEmpty(t, res.Errors, "rebuilding the ranking log without a config dir is a reported apply error")
 	require.Contains(t, res.Errors[0], "search.telemetry: ")
 	require.NotContains(t, res.Applied, "search.telemetry")
-	require.Nil(t, a.telLayer(), "the layer stays off when it cannot be built")
+	require.Nil(t, a.telLayer(), "the layer goes dark when it cannot be built")
 }
 
 func TestTelemetryRingEvictsOldest(t *testing.T) {

@@ -68,7 +68,10 @@ func searchPaths(a *App, q string) []string {
 
 func TestStartPriorsDisabledIsInert(t *testing.T) {
 	m, _, _ := priorsFixture(t)
-	a, _ := newTestApp(t, m, Options{Frecency: config.DefaultFrecency()})
+	a, _ := newTestApp(t, m, Options{
+		Frecency: config.DefaultFrecency(),
+		Priors:   config.PriorsConfig{Disabled: true},
+	})
 	a.Startup(context.Background())
 	require.False(t, a.priorsConfigured())
 	b := m.Blend()
@@ -85,7 +88,6 @@ func TestStartPriorsPinsPickedRow(t *testing.T) {
 	m, one, two := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{
 		Frecency: config.DefaultFrecency(),
-		Priors:   config.PriorsConfig{Enabled: true},
 	})
 	seedTelemetry(t, 2, two, one)
 	a.Startup(context.Background())
@@ -109,7 +111,6 @@ func TestStartPriorsWithFrecencyDisabled(t *testing.T) {
 	m, one, two := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{
 		Frecency: config.FrecencyConfig{Disabled: true},
-		Priors:   config.PriorsConfig{Enabled: true},
 	})
 	seedTelemetry(t, 2, two, one)
 	a.Startup(context.Background())
@@ -130,7 +131,6 @@ func TestOpenKicksPriorsRefresh(t *testing.T) {
 	m, one, two := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{
 		Frecency: config.FrecencyConfig{Disabled: true},
-		Priors:   config.PriorsConfig{Enabled: true},
 	})
 	a.Startup(context.Background())
 	require.Eventually(t, a.priorsConfigured, time.Second, 5*time.Millisecond)
@@ -154,7 +154,7 @@ func TestOpenKicksPriorsRefresh(t *testing.T) {
 // TestPriorsRefreshCoalesces: kicks while a rebuild runs coalesce
 // into one pending re-run, and Shutdown stops re-arms.
 func TestPriorsRefreshCoalesces(t *testing.T) {
-	a, _ := newTestApp(t, nil, Options{Priors: config.PriorsConfig{Enabled: true}})
+	a, _ := newTestApp(t, nil, Options{})
 	a.Startup(context.Background())
 	require.Eventually(t, a.priorsConfigured, time.Second, 5*time.Millisecond)
 	for i := 0; i < 20; i++ {
@@ -179,7 +179,7 @@ func TestPriorsRefreshCoalesces(t *testing.T) {
 // garbage telemetry log) log once and leave the layer running with
 // whatever parsed.
 func TestPriorsCorruptSourcesDegrade(t *testing.T) {
-	a, _ := newTestApp(t, nil, Options{Priors: config.PriorsConfig{Enabled: true}})
+	a, _ := newTestApp(t, nil, Options{})
 	dir, err := config.Dir()
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
@@ -198,27 +198,27 @@ func TestPriorsCorruptSourcesDegrade(t *testing.T) {
 }
 
 // TestApplyConfigPriorsTogglesLive: the search.priors sectionAppliers
-// row -- enabling in a live pass builds the layer and installs the
-// blend Prior; disabling drops both.
+// row -- clearing the escape hatch in a live pass builds the layer
+// and installs the blend Prior; setting it drops both.
 func TestApplyConfigPriorsTogglesLive(t *testing.T) {
 	m, _, _ := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{Frecency: config.DefaultFrecency()})
 	a.frecOnce.Do(a.startFrecency)
-	seedBaseline(a, config.Default())
+	off := config.Default()
+	off.Search.Priors.Disabled = true
+	seedBaseline(a, off)
 	require.False(t, a.priorsConfigured())
 
 	next := config.Default()
-	next.Search.Priors.Enabled = true
 	res := a.applyConfig(&next, "test")
 	require.Contains(t, res.Applied, "search.priors")
 	require.Empty(t, res.Errors)
-	require.True(t, a.priorsConfigured(), "enabling search.priors builds the layer live")
+	require.True(t, a.priorsConfigured(), "clearing search.priors.disabled builds the layer live")
 	require.NotNil(t, m.Blend().Prior, "the live enable installs the blend resolver")
 
-	off := config.Default()
 	res = a.applyConfig(&off, "test")
 	require.Contains(t, res.Applied, "search.priors")
-	require.False(t, a.priorsConfigured(), "disabling search.priors drops the layer live")
+	require.False(t, a.priorsConfigured(), "the escape hatch drops the layer live")
 	if b := m.Blend(); b != nil {
 		require.Nil(t, b.Prior, "the resolver is detached on disable")
 	}
@@ -233,10 +233,11 @@ func TestApplyConfigFrecencyPreservesPrior(t *testing.T) {
 	m, _, _ := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{Frecency: config.DefaultFrecency()})
 	a.frecOnce.Do(a.startFrecency)
-	seedBaseline(a, config.Default())
+	priorsOff := config.Default()
+	priorsOff.Search.Priors.Disabled = true
+	seedBaseline(a, priorsOff)
 
 	on := config.Default()
-	on.Search.Priors.Enabled = true
 	a.applyConfig(&on, "test")
 	require.NotNil(t, m.Blend().Prior)
 

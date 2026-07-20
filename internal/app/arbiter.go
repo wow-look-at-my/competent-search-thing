@@ -15,9 +15,10 @@ import (
 )
 
 // The learned-arbitration wiring: internal/arbiter's pairwise pick
-// model, trained from the LOCAL telemetry log and applied at the two
-// composition seams (config search.arbiter -- OPT-IN, zero value =
-// OFF, the preview.enabled privacy precedent):
+// model, trained from the LOCAL ranking log and applied at the two
+// composition seams (config search.arbiter -- ON by default, zero
+// value = on per the tray.disabled convention; the off switch is a
+// debug escape hatch / kill switch, not a privacy option):
 //
 //   - Within the file list: the blend's Model resolver
 //     (index.Blend.Model, riding the SAME frecBlend the priors and
@@ -42,9 +43,10 @@ import (
 // answers nil per query, and ordering is byte-identical to the
 // feature being off. Retraining runs asynchronously at Startup/apply
 // and after every arbiter.RetrainEvery successfully appended picks
-// (the priors single-flight refresh pattern). New picks only exist
-// while search.telemetry is also enabled -- the log is the only
-// data source, and everything stays on this machine.
+// (the priors single-flight refresh pattern). New picks only accrue
+// while the search.telemetry ranking log is also on (both are, by
+// default) -- the log is the only data source, and everything stays
+// on this machine.
 const arbiterLogName = "telemetry.jsonl"
 
 // arbImpression is one stashed file-row impression: the trimmed
@@ -98,7 +100,8 @@ func (l *arbiterLayer) lookup(query string) *arbImpression {
 // an unresolvable config dir logs one line and leaves the feature
 // off.
 func (a *App) startArbiter() {
-	if !a.opt.Arbiter.Enabled {
+	if a.opt.Arbiter.Disabled {
+		log.Printf("arbiter: learned arbitration disabled in config (debug escape hatch)")
 		return
 	}
 	dir, err := config.Dir()
@@ -119,7 +122,7 @@ func (a *App) startArbiter() {
 // startArbiter's quiet degrade -- the user just asked for the
 // feature, so the save/apply report should say why it stayed off.
 func (a *App) applyArbiter(next *config.Config) error {
-	if !next.Search.Arbiter.Enabled {
+	if next.Search.Arbiter.Disabled {
 		a.arbMu.Lock()
 		was := a.arb != nil
 		a.arb = nil
@@ -137,7 +140,7 @@ func (a *App) applyArbiter(next *config.Config) error {
 					a.manager.SetBlend(nil)
 				}
 			}
-			log.Printf("arbiter: learned arbitration disabled")
+			log.Printf("arbiter: learned arbitration disabled (debug escape hatch)")
 		}
 		return nil
 	}

@@ -1,11 +1,15 @@
-// Package telemetry is the opt-in ranking telemetry log: one
+// Package telemetry is the local ranking log (on by default): one
 // JSON-line record per PICK -- the query, the whole delivered result
 // list with its ranking signals at impression time, and which row was
 // activated -- appended to a size-capped, LOCAL-ONLY file at
-// <configDir>/telemetry.jsonl. Nothing here ever touches the network;
-// the log exists so future ranking work (per-user priors, a learned
-// re-ranker) can train and evaluate offline on the user's own picks,
-// and deleting the file erases everything at any time.
+// <configDir>/telemetry.jsonl. It is a log, not telemetry in the
+// phone-home sense: nothing here ever touches the network, and the
+// only place the file goes is a debugging chat if the user pastes it.
+// The log exists so the ranking layers (per-user priors, the learned
+// arbiter) can train and evaluate offline on the user's own picks;
+// deleting the file erases everything at any time, and config
+// search.telemetry.disabled is the debug escape hatch that stops
+// recording.
 //
 // Storage is append-only JSONL, a deliberate divergence from
 // internal/history's whole-file rewrite: records are a few KB each,
@@ -53,17 +57,21 @@ const (
 	recordVersion = 1
 	// defaultMaxSizeKB is the rotation threshold used when the caller
 	// passes a non-positive one (config.Normalize repairs the knob
-	// too; this is the defensive twin).
-	defaultMaxSizeKB = 4096
+	// too; this is the defensive twin): 64 MiB live plus one rotated
+	// generation -- generous on purpose, the cap bounds disk, it
+	// never trims what is recorded.
+	defaultMaxSizeKB = 65536
 	// MaxShownRows caps one report's delivered list. The real flat
 	// list tops out around ~70 rows (50 file rows plus the capped
 	// plugin sections); the headroom tolerates config changes without
 	// ever accepting an unbounded payload.
 	MaxShownRows = 256
-	// maxQueryBytes / maxPathBytes bound the string fields a report
-	// may carry.
+	// maxQueryBytes / maxPathBytes / maxTitleBytes bound the string
+	// fields a report may carry -- wire-abuse defense (a bounded
+	// payload), never a redaction of what gets recorded.
 	maxQueryBytes = 4096
 	maxPathBytes  = 4096
+	maxTitleBytes = 4096
 )
 
 // pluginIDPattern is the plugin-id shape a report may reference
@@ -81,9 +89,8 @@ var pluginActionPattern = regexp.MustCompile(`^[a-z_]{1,32}$`)
 type Record struct {
 	V  int    `json:"v"`
 	TS string `json:"ts"` // RFC3339 UTC
-	// Query is the trimmed query text, or "" when config
-	// search.telemetry.retainQueries opted query strings out of the
-	// log (paths and signals are still recorded).
+	// Query is the trimmed query text, always recorded in full (the
+	// log is local-only).
 	Query string `json:"query"`
 	// BlendActive reports whether the frecency blend participated in
 	// this impression's ordering -- whether the Boost/Recency/Cwd/
@@ -102,10 +109,10 @@ type Record struct {
 }
 
 // ShownRow is one delivered row. File rows carry the feature vector
-// at impression time; plugin rows deliberately carry only the plugin
-// id, wire score, and rank (titles can hold computed sensitive values
-// and are never logged). MarshalJSON emits exactly the fields that
-// belong to the row's kind.
+// at impression time; plugin rows carry the plugin id, wire score,
+// rank, and the row title as rendered (full-fidelity capture -- the
+// log is local-only, so nothing is redacted). MarshalJSON emits
+// exactly the fields that belong to the row's kind.
 type ShownRow struct {
 	Rank int
 	Kind string
@@ -126,6 +133,7 @@ type ShownRow struct {
 	// Plugin rows.
 	Plugin string
 	Score  int
+	Title  string
 }
 
 // fileRowJSON / pluginRowJSON are the per-kind wire shapes.
@@ -150,6 +158,7 @@ type pluginRowJSON struct {
 	Kind   string `json:"kind"`
 	Plugin string `json:"plugin"`
 	Score  int    `json:"score"`
+	Title  string `json:"title"`
 }
 
 // MarshalJSON emits the kind-appropriate field set: plugin rows never
@@ -158,7 +167,7 @@ type pluginRowJSON struct {
 // ambiguous with an omitted value.
 func (r ShownRow) MarshalJSON() ([]byte, error) {
 	if r.Kind == KindPlugin {
-		return json.Marshal(pluginRowJSON{Rank: r.Rank, Kind: r.Kind, Plugin: r.Plugin, Score: r.Score})
+		return json.Marshal(pluginRowJSON{Rank: r.Rank, Kind: r.Kind, Plugin: r.Plugin, Score: r.Score, Title: r.Title})
 	}
 	return json.Marshal(fileRowJSON{
 		Rank: r.Rank, Kind: r.Kind, Path: r.Path,
@@ -191,12 +200,16 @@ type PickReport struct {
 }
 
 // ShownRef is one delivered row's identity as the frontend reports
-// it; the slice index is the rank.
+// it; the slice index is the rank. Plugin rows also carry the title
+// as rendered -- the one row field only the frontend knows (file-row
+// FEATURE values still never ride the wire; the app joins those from
+// its own ring).
 type ShownRef struct {
 	Kind   string `json:"kind"`
 	Path   string `json:"path,omitempty"`   // file rows
 	Plugin string `json:"plugin,omitempty"` // plugin rows
 	Score  int    `json:"score,omitempty"`  // plugin rows: the engine wire score
+	Title  string `json:"title,omitempty"`  // plugin rows: the rendered title
 }
 
 // PickedRef names the activated row and what ran.
@@ -230,7 +243,7 @@ func ValidatePickReport(r PickReport) error {
 			if len(row.Path) > maxPathBytes {
 				return fmt.Errorf("telemetry: shown[%d]: path longer than %d bytes", i, maxPathBytes)
 			}
-			if row.Plugin != "" || row.Score != 0 {
+			if row.Plugin != "" || row.Score != 0 || row.Title != "" {
 				return fmt.Errorf("telemetry: shown[%d]: file row carries plugin fields", i)
 			}
 		case KindPlugin:
@@ -242,6 +255,9 @@ func ValidatePickReport(r PickReport) error {
 			}
 			if row.Score < 0 || row.Score > 100 {
 				return fmt.Errorf("telemetry: shown[%d]: score %d outside 0..100", i, row.Score)
+			}
+			if len(row.Title) > maxTitleBytes {
+				return fmt.Errorf("telemetry: shown[%d]: title longer than %d bytes", i, maxTitleBytes)
 			}
 		default:
 			return fmt.Errorf("telemetry: shown[%d]: unknown row kind %q", i, row.Kind)
@@ -282,7 +298,7 @@ type Store struct {
 
 // New creates a store appending to the JSONL file at path, rotating
 // it to path+".1" when an append would cross maxSizeKB KiB
-// (non-positive selects the 4096 default).
+// (non-positive selects the 65536 default).
 func New(path string, maxSizeKB int) *Store {
 	if maxSizeKB <= 0 {
 		maxSizeKB = defaultMaxSizeKB

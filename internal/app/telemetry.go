@@ -11,15 +11,18 @@ import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/telemetry"
 )
 
-// The ranking telemetry wiring: config search.telemetry (OPT-IN, zero
-// value = off -- the preview.enabled precedent, because behavioral
-// data is privacy-sensitive) gates a local-only impression/pick log
-// at <configDir>/telemetry.jsonl (internal/telemetry).
+// The ranking-log wiring: config search.telemetry bounds the
+// ALWAYS-ON local impression/pick log at <configDir>/telemetry.jsonl
+// (internal/telemetry). There is deliberately no off switch -- the
+// log is private by staying on the machine, and deleting the file is
+// always safe (recording just starts fresh); the only way the layer
+// stays nil is the unresolvable-config-dir degrade (a log with
+// nowhere to live).
 //
-//   - Search, telemetry enabled, requests the ranking-signals trace
-//     (index.ResultSignals via Manager.QueryTraced) and stashes the
-//     delivered impression in a small query ring; disabled, Search is
-//     exactly Manager.Query -- today's code path, byte for byte.
+//   - Search requests the ranking-signals trace (index.ResultSignals
+//     via Manager.QueryTraced) and stashes the delivered impression
+//     in a small query ring; with a nil layer (the degrade path),
+//     Search is exactly Manager.Query, byte for byte.
 //   - The frontend calls RecordPick after an activation actually ran
 //     (beside its commitHistory calls); the report carries row
 //     IDENTITIES only, and the app re-validates everything echoed
@@ -47,63 +50,49 @@ type telImpression struct {
 	byPath      map[string]index.ResultSignals
 }
 
-// telemetryLayer is the enabled feature's state: the append-only
-// store plus the impression ring. Built once by startTelemetry; nil
-// while the feature is off.
+// telemetryLayer is the running log's state: the append-only store
+// plus the impression ring. Built once by startTelemetry; nil only
+// on the unresolvable-config-dir degrade path.
 type telemetryLayer struct {
-	store         *telemetry.Store
-	retainQueries bool
+	store *telemetry.Store
 
 	mu   sync.Mutex
 	ring [telemetryRingSize]*telImpression
 	next int
 }
 
-// startTelemetry brings the layer up once, at Startup, when config
-// opted in. An unresolvable config dir disables the feature with one
-// log line (a telemetry log with nowhere to live is pointless).
+// startTelemetry brings the always-on layer up once, at Startup. An
+// unresolvable config dir degrades the log to off with one line (a
+// log with nowhere to live is pointless) -- the ONLY path that
+// leaves the layer nil.
 func (a *App) startTelemetry() {
 	tc := a.opt.Telemetry
-	if !tc.Enabled {
-		return
-	}
 	dir, err := config.Dir()
 	if err != nil {
-		log.Printf("telemetry: %v (ranking telemetry disabled)", err)
+		log.Printf("telemetry: %v (ranking log disabled)", err)
 		return
 	}
 	l := &telemetryLayer{
-		store:         telemetry.New(filepath.Join(dir, telemetryFileName), tc.MaxSizeKB),
-		retainQueries: tc.RetainQueries,
+		store: telemetry.New(filepath.Join(dir, telemetryFileName), tc.MaxSizeKB),
 	}
 	a.telMu.Lock()
 	a.tel = l
 	a.telMu.Unlock()
-	log.Printf("telemetry: ranking telemetry enabled (local-only log at %s)", l.store.Path())
+	log.Printf("telemetry: ranking log on (local-only, never leaves this machine; %s)", l.store.Path())
 }
 
 // applyTelemetry is the live-apply engine's search.telemetry hook
-// (the applyStats teardown-plus-rebuild shape): drop the current
-// layer, then bring a fresh one up from the incoming config when it
-// opts in. The impression ring restarts empty, so a pick racing the
-// apply logs Joined=false -- the documented, harmless eviction
-// behavior -- and in-flight async appends hold their own store
-// reference, draining through telWG as before. An unresolvable
-// config dir is a real apply error here (unlike startTelemetry's
-// quiet degrade): the user just asked for the feature, so the
-// save/apply report should say why it stayed off.
+// (the applyStats teardown-plus-rebuild shape): rebuild the
+// always-on layer with the incoming size bound -- maxSizeKB is the
+// section's only knob now. The impression ring restarts empty, so a
+// pick racing the apply logs Joined=false -- the documented,
+// harmless eviction behavior -- and in-flight async appends hold
+// their own store reference, draining through telWG as before. An
+// unresolvable config dir is a real apply error here (unlike
+// startTelemetry's quiet degrade): the save/apply report should say
+// why the log went dark.
 func (a *App) applyTelemetry(next *config.Config) error {
 	tc := next.Search.Telemetry
-	if !tc.Enabled {
-		a.telMu.Lock()
-		was := a.tel != nil
-		a.tel = nil
-		a.telMu.Unlock()
-		if was {
-			log.Printf("telemetry: ranking telemetry disabled")
-		}
-		return nil
-	}
 	dir, err := config.Dir()
 	if err != nil {
 		a.telMu.Lock()
@@ -112,18 +101,17 @@ func (a *App) applyTelemetry(next *config.Config) error {
 		return err
 	}
 	l := &telemetryLayer{
-		store:         telemetry.New(filepath.Join(dir, telemetryFileName), tc.MaxSizeKB),
-		retainQueries: tc.RetainQueries,
+		store: telemetry.New(filepath.Join(dir, telemetryFileName), tc.MaxSizeKB),
 	}
 	a.telMu.Lock()
 	a.tel = l
 	a.telMu.Unlock()
-	log.Printf("telemetry: ranking telemetry enabled (local-only log at %s)", l.store.Path())
+	log.Printf("telemetry: ranking log rebuilt (size cap %d KiB; local-only at %s)", tc.MaxSizeKB, l.store.Path())
 	return nil
 }
 
-// telLayer returns the telemetry layer; nil before Startup or while
-// config keeps the feature off.
+// telLayer returns the telemetry layer; nil before Startup or after
+// the unresolvable-config-dir degrade.
 func (a *App) telLayer() *telemetryLayer {
 	a.telMu.Lock()
 	defer a.telMu.Unlock()
@@ -185,15 +173,16 @@ func (l *telemetryLayer) lookup(query string) *telImpression {
 }
 
 // RecordPick logs one delivered-impression-plus-pick record to the
-// opt-in ranking telemetry log. The frontend calls it fire-and-forget
-// after an activation actually ran (beside AddHistory); with the
-// feature off (nil layer) or a blank query it is a silent no-op, so
-// the frontend needs no config fetch and always calls it. Everything
-// the frontend echoes back is re-validated here (defense in depth,
-// like RunPluginAction), the file rows are joined to their
+// local ranking log. The frontend calls it fire-and-forget after an
+// activation actually ran (beside AddHistory); with a nil layer (the
+// config-dir degrade) or a blank query it is a silent no-op, so the
+// frontend needs no config fetch and always calls it.
+// Everything the frontend echoes back is re-validated here (defense
+// in depth, like RunPluginAction), the file rows are joined to their
 // impression-time ranking signals from the query ring -- the report
-// itself can never inject feature values -- and the append runs async
-// off the activation path.
+// itself can never inject feature values (plugin-row titles, which
+// only the frontend knows, are the one display field it contributes)
+// -- and the append runs async off the activation path.
 func (a *App) RecordPick(rep telemetry.PickReport) error {
 	l := a.telLayer()
 	if l == nil {
@@ -237,9 +226,6 @@ func (l *telemetryLayer) buildRecord(q string, rep telemetry.PickReport) telemet
 		Joined:      imp != nil,
 		Shown:       make([]telemetry.ShownRow, len(rep.Shown)),
 	}
-	if !l.retainQueries {
-		rec.Query = ""
-	}
 	for i, ref := range rep.Shown {
 		row := telemetry.ShownRow{Rank: i, Kind: ref.Kind}
 		if ref.Kind == telemetry.KindFile {
@@ -261,6 +247,7 @@ func (l *telemetryLayer) buildRecord(q string, rep telemetry.PickReport) telemet
 		} else {
 			row.Plugin = ref.Plugin
 			row.Score = ref.Score
+			row.Title = ref.Title
 		}
 		rec.Shown[i] = row
 	}
