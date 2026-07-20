@@ -866,7 +866,19 @@ mode (the same single window -- no second window, no dialog).
 
 The editor is rendered ENTIRELY from the shipped JSON Schema
 (`schemas/config.schema.json`), so every setting appears with its
-real type and its full documentation:
+real type and its full documentation.
+
+Navigation works like VS Code's settings page: a table-of-contents
+sidebar on the left lists every section in order -- one entry per
+top-level section (`search`, `watcher`, `window`, ...), indented
+sub-entries for nested groups (`search.frecency`, `preview.kagi`,
+...), and a "General" entry collecting the top-level settings that
+belong to no section (`roots`, `excludes`, `hotkey`, `theme`, ...).
+Clicking an entry (or Tab to it and Enter) jumps the settings column
+to that section, and scrolling the column highlights the entry whose
+section is at the top. While you type in the filter box, entries
+with no matching settings dim and the rest show a match count;
+clicking a dimmed entry clears the filter and jumps there.
 
 - booleans are toggles, enums dropdowns, numbers spinners carrying
   the schema's bounds, strings text fields; every control shows the
@@ -891,9 +903,14 @@ launch" note (see below), and any apply errors, then re-fetches so
 the app-repaired values are what you see. Esc (or Close) leaves the
 editor; with unsaved edits the first press warns and a second within
 two seconds discards them. Hiding the bar mid-edit (hotkey, tray,
-`hide`) keeps the unsaved working copy in memory: the next summon is
-the normal search bar, and reopening the editor in the same run
-restores the edits with the unsaved-changes note showing. While the
+`hide`) does NOT lose your place: the next summon restores the
+editor exactly as you left it -- same scroll position, same focused
+setting, unsaved edits intact with the unsaved-changes note showing
+-- so you can close with the hotkey, look something up, and summon
+straight back into the setting you were on (in memory for the app
+run; leaving via Esc/Close instead makes the next summon a normal
+search bar, and reopening the editor then still restores unsaved
+edits). While the
 editor is up, alt-tabbing away does NOT hide the window (the normal
 focus-loss auto-hide is suspended so you can check things mid-edit).
 
@@ -939,7 +956,10 @@ badges:
   and the window follows `preview.enabled`'s size;
 - `window.width` / `window.height`: the bar window resizes live (on
   Linux via a native GTK path that also moves the fixed-size floor,
-  so shrinking below the boot size works).
+  so shrinking below the boot size works). These two (and the preview
+  pair) are normally set by DRAGGING the bar's edges (next section)
+  and are therefore hidden from the settings editor; hand edits in
+  `config.json` still hot-apply.
 
 ONE deliberate exception: `window.translucent` takes effect at the
 next launch -- the per-pixel-alpha window visual can only be chosen
@@ -952,6 +972,46 @@ app watches the file (the theme hot-reload watcher) and re-applies
 external changes on save, so editing the file by hand is just as
 live as the GUI.
 
+### Resizing the bar (drag the edges)
+
+The window is resized by dragging its edges, frameless as it is:
+grab the LEFT, RIGHT, or BOTTOM edge (or a bottom corner) -- the
+cursor changes when you are on one -- and drag. One deliberate
+yield: where a scrollbar hugs the right edge (a long results list,
+the settings editor), the scrollbar wins that strip -- scrolling is
+never hijacked -- so grab the left or bottom edge there instead. Horizontal drags
+resize ABOUT CENTER: the bar stays horizontally centered on its
+display while the dragged edge follows the pointer (the opposite
+edge mirrors it). Vertical drags grow downward from the bar's
+anchored top. The top edge is not a handle -- it hosts the query row
+and is the bar's anchor. There is deliberately no width/height row
+in the settings editor; the drag IS the setting.
+
+Releasing the drag persists the final size to `config.json` in one
+atomic write: `window.width`/`window.height` normally, or
+`preview.windowWidth`/`preview.windowHeight` while the preview pane
+is mounted -- the dragged size describes the layout you are looking
+at. Nothing is written per frame.
+
+On Wayland the compositor owns window placement, so drags resize
+without the centering shift (the window grows in place); everything
+else works the same.
+
+### Clamp to screen
+
+Whatever size is configured -- or produced by enabling the preview
+pane -- the window as SHOWN never exceeds the usable area of the
+display it appears on (the work area: screen minus panels/taskbars,
+via the platform display info, or the toolkit's own monitor probe on
+Wayland). The clamp is re-evaluated on every summon, so moving
+between monitors re-fits -- and re-grows -- the window per display.
+Only the display is clamped: a hand-set `window.width: 5000` stays
+in `config.json` (it will win on a monitor that fits it); dragging
+an edge, by contrast, persists the size you actually dragged. With
+the preview pane mounted on a small screen, the layout shrinks to
+fit: the results column keeps its configured width while it fits and
+the pane takes the remainder.
+
 Config lives at the platform config dir (set the
 `COMPETENT_SEARCH_CONFIG_DIR` environment variable to point at a
 different directory):
@@ -960,10 +1020,18 @@ different directory):
 - macOS: `~/Library/Application Support/competent-search-thing/config.json`
 - Windows: `%APPDATA%\competent-search-thing\config.json`
 
-The file is created with defaults on first run:
+The file is created with defaults on first run, and next to it the
+app maintains a `config.schema.json` sidecar: the JSON Schema for
+the config, refreshed at every startup so it version-matches the
+running binary. The config's first key, `"$schema":
+"./config.schema.json"`, points editors at it -- VS Code and friends
+then validate and complete `config.json` out of the box. The key is
+reserved (never validated, hand-set values kept verbatim; existing
+configs gain it on their next save):
 
 ```json
 {
+  "$schema": "./config.schema.json",
   "roots": ["/"],
   "rootsVersion": 6,
   "excludes": [".git", "node_modules", ".cache", ".hg", ".svn", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox", ".venv", "/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"],

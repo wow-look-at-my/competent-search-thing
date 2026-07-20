@@ -125,10 +125,13 @@ func TestApplyTableCoversEveryConfigSection(t *testing.T) {
 	//   rootsVersion -- app-managed (SaveConfig forces the on-disk
 	//   stamp, the Load migrations own it); it can never legitimately
 	//   differ between two loaded configs (see the table comment).
+	//   $schema -- a RESERVED editor hint, not a setting: the app
+	//   ignores its value entirely (Normalize stamps it, the sidecar
+	//   it points at is app-managed), so there is nothing to apply.
 	// window.translucent is NOT excluded: the "window" section has a
 	// row, and the translucent knob's next-launch handling lives in
 	// applyConfig's ruled NextLaunch block.
-	excluded := map[string]bool{"rootsVersion": true}
+	excluded := map[string]bool{"rootsVersion": true, "$schema": true}
 
 	rows := map[string]bool{}
 	subRows := map[string]bool{} // top-level keys applied at "key.sub" grain

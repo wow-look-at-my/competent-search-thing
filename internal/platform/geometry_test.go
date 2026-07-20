@@ -117,3 +117,40 @@ func TestWailsPosition(t *testing.T) {
 	require.Equal(t, 2600, x, "windows offsets by the work-area origin")
 	require.Equal(t, 350, y)
 }
+
+func TestUsableRect(t *testing.T) {
+	withWork := Display{
+		Rect: Rect{X: 0, Y: 0, W: 1920, H: 1080},
+		Work: Rect{X: 0, Y: 40, W: 1920, H: 1040},
+	}
+	require.Equal(t, withWork.Work, withWork.UsableRect(), "a real work area wins")
+
+	noWork := Display{Rect: Rect{X: -800, Y: 0, W: 800, H: 600}}
+	require.Equal(t, noWork.Rect, noWork.UsableRect(), "a zero-valued Work falls back to the full geometry")
+}
+
+func TestClampSize(t *testing.T) {
+	small := Rect{X: 0, Y: 0, W: 800, H: 600}
+	tests := []struct {
+		name         string
+		area         Rect
+		w, h         int
+		wantW, wantH int
+	}{
+		{"fits untouched", small, 780, 550, 780, 550},
+		{"exact fit untouched", small, 800, 600, 800, 600},
+		{"absurd hand-set values clamp to the area", small, 5000, 5000, 800, 600},
+		{"one axis over", small, 5000, 400, 800, 400},
+		{"negative-origin display clamps by extent, not origin", Rect{X: -2560, Y: -200, W: 1024, H: 768}, 5000, 5000, 1024, 768},
+		{"floors win over a pathological tiny area", Rect{X: 0, Y: 0, W: 200, H: 100}, 780, 550, 320, 240},
+		{"floors raise tiny requests too", small, 10, 10, 320, 240},
+		{"zero-area axis leaves that axis unclamped", Rect{}, 5000, 5000, 5000, 5000},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w, h := ClampSize(tc.area, tc.w, tc.h, 320, 240)
+			require.Equal(t, tc.wantW, w)
+			require.Equal(t, tc.wantH, h)
+		})
+	}
+}

@@ -113,6 +113,13 @@ type platformSeams struct {
 	// the Wails runtime setSize, which is sufficient on
 	// darwin/windows).
 	setWindowSize func(w, h int) bool
+	// windowWorkArea reports the usable area of the monitor the bar
+	// window currently sits on, straight from the toolkit -- the
+	// clamp-to-screen source when the display list is unavailable, and
+	// the ONLY one on Wayland (production native.WindowWorkArea: gdk
+	// on the GTK thread, linux only; false elsewhere, where
+	// cursorInfo's Work rects cover the clamp).
+	windowWorkArea func() (platform.Rect, bool)
 	// lstat probes the disk for the outside-roots hint (hint.go) and
 	// the launch path's directory check; production is os.Lstat, tests
 	// pin it so no real IO happens.
@@ -212,6 +219,7 @@ func defaultPlatformSeams() platformSeams {
 		moveWindow:      native.MoveWindow,
 		configurePanel:  native.ConfigurePanel,
 		setWindowSize:   native.SetWindowSize,
+		windowWorkArea:  native.WindowWorkArea,
 		lstat:           os.Lstat,
 		open:            launcher.OpenEnv,
 		reveal:          launcher.RevealEnv,
@@ -317,9 +325,13 @@ func (a *App) Hide() {
 	a.lastHide = a.plat.now()
 	// A hide also cancels a show that has not executed yet (e.g. an
 	// IPC hide racing a pre-DomReady summon): the ordered outcome is
-	// hidden. A latched summon-into-config dies with it.
+	// hidden. A latched summon-into-config dies with it -- and so does
+	// an in-flight drag-resize anchor (the next drag re-latches).
 	a.pendingShow = false
 	a.pendingConfig = false
+	a.dragActive = false
+	a.dragDispOK = false
+	a.dragPosOK = false
 	a.mu.Unlock()
 	// The stats sampler goes idle with the bar (a flag flip, no IO;
 	// runs even pre-Startup, where it is a nil-safe no-op).
@@ -436,11 +448,16 @@ func (a *App) showIfHidden() {
 // showOnCursorDisplay positions the bar on the display the cursor is
 // on (falling back to centering when the platform cannot say), marks
 // it visible, shows it, and tells the frontend so it can focus the
-// input. A no-op before Startup. On a Wayland session the
-// cursor-display positioning is skipped entirely: the app is a native
-// Wayland client there, gtk_window_move and friends are silent no-ops,
-// and the compositor owns placement -- centering is requested
-// best-effort and the situation is logged once.
+// input. A no-op before Startup. Every path first clamps the desired
+// window size to the hosting display's usable area (clamp-to-screen,
+// re-evaluated per summon so multi-monitor moves re-fit -- and
+// re-grow -- the window; the config value itself is never touched).
+// On a Wayland session the cursor-display positioning is skipped
+// entirely: the app is a native Wayland client there, gtk_window_move
+// and friends are silent no-ops, and the compositor owns placement --
+// centering is requested best-effort and the situation is logged
+// once; the clamp still applies, through the toolkit's own work-area
+// probe (the one source Wayland has).
 func (a *App) showOnCursorDisplay() {
 	ctx := a.runtimeCtx()
 	if ctx == nil {
@@ -450,8 +467,10 @@ func (a *App) showOnCursorDisplay() {
 		a.waylandPlaceOnce.Do(func() {
 			log.Printf("hotkey: wayland session: window placement is decided by the compositor")
 		})
+		a.clampForFallbackShow(ctx)
 		a.rt.center(ctx)
 	} else if !a.positionOnCursorDisplay(ctx) {
+		a.clampForFallbackShow(ctx)
 		a.rt.center(ctx)
 	}
 	a.mu.Lock()
@@ -466,14 +485,36 @@ func (a *App) showOnCursorDisplay() {
 	a.emitEvent(eventShown)
 }
 
+// clampForFallbackShow applies the clamp-to-screen rule on the show
+// paths that have no picked display (the Wayland show and the
+// center fallback): the toolkit work-area probe decides, and when
+// even that is unavailable the size is left alone -- there is nothing
+// to clamp against.
+func (a *App) clampForFallbackShow(ctx context.Context) {
+	if a.plat.windowWorkArea == nil {
+		return
+	}
+	area, ok := a.plat.windowWorkArea()
+	if !ok {
+		return
+	}
+	w, h := a.clampWindowSize(area, true)
+	a.applySizeIfChanged(ctx, w, h)
+}
+
 // positionOnCursorDisplay implements the positioning flow; false means
-// the caller should center instead. Wails' WindowSetPosition is
+// the caller should center instead. The window size is the configured
+// (desired) size clamped to the summon display's usable area, resized
+// natively when that differs from what the window currently has --
+// the clamp-to-screen rule, re-evaluated against the display the bar
+// appears on. Wails' WindowSetPosition is
 // relative to the monitor the window is CURRENTLY on (verified in the
 // v2.13.0 sources, all platforms), so absolute target coordinates are
 // translated against that monitor (platform.WailsPosition) on Linux
 // and Windows -- WindowGetPosition IS absolute there -- while macOS
 // moves the window natively (its Cocoa coordinate flip cannot be
-// expressed as a translation).
+// expressed as a translation). Successful placements are remembered
+// (notePlacement) as the drag-resize anchor.
 func (a *App) positionOnCursorDisplay(ctx context.Context) bool {
 	cx, cy, displays, ok := a.plat.cursorInfo()
 	if !ok {
@@ -483,10 +524,15 @@ func (a *App) positionOnCursorDisplay(ctx context.Context) bool {
 	if !ok {
 		return false
 	}
-	winW, winH := a.windowSize()
+	winW, winH := a.clampWindowSize(target.UsableRect(), true)
+	a.applySizeIfChanged(ctx, winW, winH)
 	x, y := platform.BarPosition(target, winW, winH)
 	if a.plat.goos == "darwin" {
-		return a.plat.moveWindow(x, y)
+		if !a.plat.moveWindow(x, y) {
+			return false
+		}
+		a.notePlacement(x, y)
+		return true
 	}
 	wx, wy := a.rt.getPos(ctx)
 	cur, ok := platform.DisplayForWindow(displays, wx, wy, winW, winH)
@@ -495,5 +541,17 @@ func (a *App) positionOnCursorDisplay(ctx context.Context) bool {
 	}
 	rx, ry := platform.WailsPosition(a.plat.goos, cur, x, y)
 	a.rt.setPos(ctx, rx, ry)
+	a.notePlacement(x, y)
 	return true
+}
+
+// notePlacement records the last absolute top-left position the app
+// gave the window -- the drag-resize anchor (reading the position
+// back is not an option on darwin, and the app is the only thing
+// that ever moves this frameless window).
+func (a *App) notePlacement(x, y int) {
+	a.mu.Lock()
+	a.placedX, a.placedY = x, y
+	a.placedOK = true
+	a.mu.Unlock()
 }

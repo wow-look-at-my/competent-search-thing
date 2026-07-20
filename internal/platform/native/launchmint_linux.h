@@ -50,4 +50,10 @@ void cs_mint_free(char *id);
  * thread only. 1 = a toplevel was found and asked to resize. */
 int cs_set_window_size(int w, int h);
 
+/* Fill the workarea of the monitor the bar window is currently on
+ * (gdk_monitor_get_workarea -- the one probe that works on Wayland,
+ * where the X display list is unavailable). GTK main thread only.
+ * 1 = a realized toplevel with a monitor was found. */
+int cs_get_workarea(int *x, int *y, int *w, int *h);
+
 #endif /* CS_LAUNCHMINT_LINUX_H */

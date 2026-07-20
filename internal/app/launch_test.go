@@ -429,6 +429,13 @@ func TestAnnounceLaunch(t *testing.T) {
 	a.Startup(context.Background())
 	a.Startup(context.Background()) // once only
 	require.True(t, prepared)
+	// Drain a's async layers before touching the shared buffer: the
+	// always-on priors/arbiter/telemetry goroutines log through the
+	// global logger, and a bytes.Buffer read or Reset racing one of
+	// those writes corrupts the buffer (a Reset can even resurrect
+	// pre-Reset content). Shutdown waits all of them out and is
+	// idempotent under the Cleanup-registered second call.
+	a.Shutdown(context.Background())
 	require.Equal(t, 1, strings.Count(buf.String(), "launch: activation credentials enabled (session=unknown)"))
 
 	buf.Reset()
@@ -437,6 +444,7 @@ func TestAnnounceLaunch(t *testing.T) {
 	b.plat.prepareLaunch = func() { br.call("prepareLaunch") }
 	b.Startup(context.Background())
 	require.False(t, br.has("prepareLaunch"), "non-linux: no native prep")
+	b.Shutdown(context.Background()) // same drain before the final read
 	require.NotContains(t, buf.String(), "activation credentials enabled")
 }
 

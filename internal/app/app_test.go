@@ -195,6 +195,9 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 		r.call(fmt.Sprintf("setWindowSize:%dx%d", w, h))
 		return false
 	}
+	// The toolkit work-area probe answers "unknown" (the production
+	// value would eat runOnGTKThread's 2s timeout headlessly).
+	a.plat.windowWorkArea = func() (platform.Rect, bool) { return platform.Rect{}, false }
 	// The hint probe answers "nothing exists" so Search never touches
 	// the real disk; hint tests override it (some with the real
 	// os.Lstat over temp trees).
@@ -301,6 +304,9 @@ func TestStartupLogsConfigNotesOnce(t *testing.T) {
 	a.Startup(context.Background())
 	a.Startup(context.Background()) // a second Startup must not repeat them
 
+	// Drain the async layer goroutines (priors/arbiter/telemetry log
+	// through the global logger) before reading the shared buffer.
+	a.Shutdown(context.Background())
 	out := buf.String()
 	require.Equal(t, 1, strings.Count(out, "config: index roots upgraded to the whole-filesystem default (/)"),
 		"each migration note is logged exactly once, config-prefixed")

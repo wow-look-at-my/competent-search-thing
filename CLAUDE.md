@@ -322,20 +322,52 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   CLEARS the boost rather than leaving it stale) -- the bar window
   steals focus, so this precedes showing), then
   `showOnCursorDisplay`: platform.CursorDisplays -> PickDisplay ->
-  BarPosition (absolute coords), then darwin = native.MoveWindow,
+  CLAMP-TO-SCREEN (the desired winW/winH limited to the picked
+  display's UsableRect + the 320x240 floors via platform.ClampSize,
+  re-evaluated EVERY summon so multi-monitor moves re-fit and
+  re-grow; applySizeIfChanged in size.go dedupes against the
+  appliedW/H tracker -- seeded from the construction size in New --
+  so a fitting size issues zero native calls; the DESIRED winW/winH
+  is never clamped away, a hand-set 5000 stays for a bigger monitor)
+  -> BarPosition (absolute coords, the CLAMPED size), then darwin =
+  native.MoveWindow,
   linux/windows = translate via DisplayForWindow + WailsPosition (Wails
   WindowSetPosition is RELATIVE to the window's current monitor -- and
   to the WORK AREA origin on Windows -- while WindowGetPosition is
-  absolute; verified in the v2.13.0 sources), any failure -> WindowCenter;
+  absolute; verified in the v2.13.0 sources), successful placements
+  recorded via notePlacement (placedX/Y, the drag-resize anchor --
+  darwin cannot read positions back), any failure ->
+  clampForFallbackShow (the plat.windowWorkArea probe) + WindowCenter;
   then WindowShow + "app:shown". EXCEPTION: on a detected Wayland
   session (platform.DetectSession via the detectSession seam, cached
   once per process) the whole cursor-display flow is skipped --
   Wails is a native Wayland client there and gtk_window_move /
   keep-above are silent no-ops, the compositor owns placement -- so
-  the show path is WindowCenter (best-effort) + WindowShow, with a
+  the show path is clampForFallbackShow (plat.windowWorkArea =
+  native.WindowWorkArea, cs_get_workarea: gdk_monitor_get_workarea on
+  the GTK thread, the ONE clamp source Wayland has) + WindowCenter
+  (best-effort) + WindowShow, with a
   once-per-run "placement is decided by the compositor" log; the
   X11/unknown path is untouched (CI's Xvfb has DISPLAY set and no
-  XDG_SESSION_TYPE, which detects as x11). `QueryPlugins(query string, gen
+  XDG_SESSION_TYPE, which detects as x11). DRAG-EDGE RESIZING
+  (resize.go): the bound `ResizeDrag(w, h)` (per animation frame) +
+  `ResizeCommit(w, h)` (once, on release) implement the frontend's
+  edge drags -- dragAnchor latches per drag (the hosting display +
+  the anchored top y from placedX/Y, rt.getPos as the linux/windows
+  fallback; Hide and the commit clear it), every frame clamps to the
+  display UsableRect + floors (anchored-top growth additionally stops
+  at the area bottom), horizontal resizes recenter about the
+  display's horizontal center (moveTo, placement-deduped; skipped on
+  Wayland -- compositor placement -- and when the position is
+  unknown), and ONLY the commit persists: config.Load -> the dragged
+  size into window.width/height (base) or preview.windowWidth/Height
+  (pane mounted -- the dragged size describes the CURRENT layout) ->
+  lastSavedSum recorded BEFORE the atomic Save (self-write
+  suppression) -> the cfgCurrent baseline patched in place (no
+  applier pass -- the size is already live; base-mode commits also
+  update resultsW); a failed Load skips persistence rather than
+  rewriting a file it could not read. maxDragDimension (32767)
+  bounds frontend-echoed values. `QueryPlugins(query string, gen
   int) plugin.TargetInfo` stores gen (atomic), cancels the previous
   generation's context (aborting plugin subprocesses/HTTP/debounces;
   empty query or nil registry = cancel only, zero TargetInfo),
@@ -549,8 +581,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   previewCfg swap under previewMu + dispatcher rebuild;
   GetPreviewConfig answers from live state), window.width/height
   (groupWindowSize = applyWindowSize, fed by the window AND preview
-  rows: stores the live winW/winH/resultsW the positioning math and
-  GetPreviewConfig read, then resizes via plat.setWindowSize --
+  rows: stores the live DESIRED winW/winH/resultsW the positioning
+  math and GetPreviewConfig read, then applies the desired size
+  CLAMPED to the current display (currentDisplayArea: the display
+  list via cursorInfo + DisplayForWindow/PickDisplay -- never probed
+  on Wayland -- else the plat.windowWorkArea toolkit probe; the
+  preview-mount growth on a small screen renders clamped, the
+  reported field bug) through applySizeIfChanged -- dedup against
+  appliedW/H, then plat.setWindowSize --
   production native.SetWindowSize, linux-only GTK-thread
   gtk_window_set_default_size + gtk_window_resize, because for a
   DisableResize window GTK3 pins min=max to MAX(default size,
@@ -1086,6 +1124,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   wholesale .app/.framework internals and Application Support are
   DELIBERATELY not excluded -- they change search semantics and
   await an owner decision).
+  THE $SCHEMA RESERVED KEY: Config's FIRST field is `Schema` (json
+  `$schema,omitempty`), so Save/Encode emit `"$schema":
+  "./config.schema.json"` (config.SchemaRef) as the document's first
+  key -- Default() carries it, Normalize stamps an EMPTY value
+  (existing configs gain it on their next save; a hand-set value
+  passes through verbatim), the loader never validates it, the GUI
+  strict decode accepts it, UnknownKeys knows it (never reported),
+  and the editor hides it (x-editor-hidden). The referenced sidecar
+  <configDir>/config.schema.json is written by internal/app's
+  schemasidecar.go at every Startup (embedded
+  schemas.ConfigSchemaJSON, byte-equal = skip, atomic temp+rename,
+  before the config-dir watcher comes up; its file name never
+  matches the config.json hot-apply path, so no watcher loop).
   rootsVersion (0 = legacy, current
   6) drives the one-shot Load migration (migrateRootsFor; goos and
   the RAW file bytes are parameters so tests cover the darwin shape
@@ -2376,7 +2427,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   `BarPosition` = centered, top at H/3 - winH/3, clamped;
   `DisplayForWindow` by window center; `WailsPosition` translating
   absolute coords to Wails' current-monitor-relative
-  WindowSetPosition); open/reveal argv construction (`OpenCommands` /
+  WindowSetPosition; `Display.UsableRect` = Work when it has area
+  else Rect (linux Xinerama fills Work with the full geometry), and
+  `ClampSize(area, w, h, minW, minH)` = the ONE clamp-to-screen rule
+  every window-sizing path shares -- area-capped per axis, floors
+  win over a pathological tiny area, zero-area axes unclamped); open/reveal argv construction (`OpenCommands` /
   `RevealCommands`: linux xdg-open / dbus-send --print-reply
   FileManager1.ShowItems with xdg-open-parent fallback, darwin open /
   open -R, windows rundll32 FileProtocolHandler / explorer /select,)
@@ -2507,7 +2562,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (gtk-3-24 gtk_window_update_fixed_size), making the construction
   default a permanent shrink floor for the Wails runtime's bare
   gtk_window_resize; moving the default moves the floor (verified
-  end-to-end under Xvfb: 780x550 -> 900x600 -> 640x480) -- and
+  end-to-end under Xvfb: 780x550 -> 900x600 -> 640x480) -- and by
+  `WindowWorkArea()` (same files; windowsize_other.go = always
+  false), the clamp-to-screen work-area probe: cs_get_workarea =
+  cs_find_toplevel -> gdk_display_get_monitor_at_window ->
+  gdk_monitor_get_workarea on the GTK thread -- the ONE source that
+  answers on Wayland (darwin/windows report work areas through
+  CursorDisplays' Work rects instead) -- and
   cs_mint(desktop_id) --
   the mint DESCRIBES the launch with a real GAppInfo (the resolved
   handler's desktop entry, else a synthesized commandline appinfo
@@ -2594,10 +2655,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (spinner + #preview-body + command strip with the web/AI buttons
   and the pane flash) as one more #bar child, display:none unless
   body.with-preview; #config-pane (header with #config-title +
-  #config-filter, #config-notices, #config-body, #config-strip with
+  #config-filter, #config-notices, then #config-main = the ToC
+  sidebar nav #config-toc beside the scrollable #config-body --
+  sidebar before body, so Tab runs filter -> ToC -> controls --
+  and #config-strip with
   flash + dirty note + Open config.json / Close / Save buttons) as
   the last #bar child, display:none unless body.with-config -- all
-  editor rows/controls are built dynamically by config.ts, so no
+  editor rows/controls/ToC entries are built dynamically by
+  config.ts, so no
   templates; <template>s for
   folder/file icons AND plugin section/row skeletons) + `src/main.ts`
   (search as-you-type: 15ms debounce + sequence-number stale-response
@@ -2699,13 +2764,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (config.ts): in config mode the document keydown handler
   early-returns entirely (arrows/Enter/Tab must behave like form
   keys; config.ts's own window handler owns Esc + Ctrl/Cmd+S) and the
-  blur auto-hide is suppressed (users alt-tab away mid-edit) -- the
-  ONLY two main.ts config gates; runtime events: "app:shown" -> CLEAR
+  blur auto-hide is suppressed (users alt-tab away mid-edit) --
+  those two plus the app:shown focus skip below are the ONLY three
+  main.ts config gates; runtime events: "app:shown" -> CLEAR
   the input (the bar always summons empty; the pre-hide text is
   deliberately dropped) + reset histCursor + focus + refresh (renders
   the cheat sheet; plugins re-query through the same path) + a
   refreshStats re-render (GetStats is the instant cached snapshot;
-  the summon's fresh samples follow as events),
+  the summon's fresh samples follow as events) -- the reset runs
+  even when config.ts is RESTORING the editor (hide-while-editing;
+  see its app:shown handler) so the search layer underneath stays
+  fresh for the eventual Esc-out, but the inputEl.focus() steal is
+  skipped while configModeActive() (the restored editor re-asserts
+  its own focused control),
   "index:progress" -> status text, "watch:degraded" -> warning chip,
   "watch:backend" -> the PERSISTENT #backend-chip when full=false
   ("Partial file watching" for inotify / "File watching off" for
@@ -2817,7 +2888,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the left column (query row/results/status/stats row exactly as
   before; four explicit rows, the pane spans 1 / 5 and a hidden
   #stats collapses its row to zero) keeps the FLAG-OFF bar width via
-  var(--preview-results-col, 680px), the custom property preview.ts
+  minmax(0, min(var(--preview-results-col, 680px), 100%)) -- the
+  min() cap makes the column give way instead of overflowing when
+  the clamp-to-screen rule or a drag shrinks the window below the
+  configured column width, the pane taking whatever remains -- the
+  custom property preview.ts
   sets on <body> from GetPreviewConfig.resultsWidth (= config
   window.width; the 680px fallback is the pre-knob constant), pane
   in the rest behind
@@ -2864,7 +2939,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Go validates, opens, hides the bar), ai (answer + model/cached
   badges + a Copy button through copy_text, <= 8 KiB Go-side, with a
   "Copied"/error flash in the pane strip), error card) +
-  `src/config.ts` + `src/config.css` (the CONFIG EDITOR MODE --
+  `src/config.ts` + `src/config.css` + `src/toc.ts` (the CONFIG
+  EDITOR MODE --
   initConfig wires from wire(), everything else is lazy on the first
   "config:open": fetch + cache GetConfigSchema (embedded, immutable)
   and JSON.parse GetConfigForEdit's configJson into a WORKING COPY,
@@ -2873,7 +2949,28 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   regardless of bundle order; #config-pane fills the bar as flex
   child OR spanning grid item), render the whole settings UI from
   the schema's top-level properties IN SCHEMA ORDER and focus the
-  filter. The renderer is a generic schema walk (resolve() follows
+  filter. LAYOUT (VS Code settings pattern): #config-main = the ToC
+  sidebar #config-toc (~176px, own scroll) beside the controls
+  column #config-body; the ToC is generated by the SAME walk that
+  renders the controls (makeSection is the one registration point,
+  so sidebar and column can never disagree): one entry per top-level
+  section in schema order + indented sub-entries for nested object
+  sections (search.frecency/priors/telemetry/arbiter,
+  firefox.frequentSites/openTabs, preview.kagi/openai), while
+  top-level LEAF settings group under a synthetic "General" section
+  (leading run; a leaf after the first real section -- rewrites --
+  gets its own group named after itself, schema order never
+  reshuffled). Entries are buttons (ids config-toc-<dotted>; Tab
+  order filter -> ToC -> controls, Enter/Space jumps): click =
+  INSTANT scroll of #config-body to the section (never smooth --
+  WebKitGTK's animator, the main.ts wheel-handler enemy), and the
+  scroll listener highlights the entry whose section sits at the
+  viewport top via toc.ts activeSectionIndex -- a PURE function over
+  (offsets, scrollTop, viewport, contentHeight) with a
+  bottom-of-scroll rule so a short trailing section can win;
+  vitest-pinned (toc.test.ts), rAF-coalesced, measured through
+  getBoundingClientRect. The renderer is a generic schema walk
+  (resolve() follows
   "#/$defs/" refs; classify() picks the control): object-with-
   properties = nested section (dotted-path header + title +
   description note), boolean = checkbox, string enum = select,
@@ -2886,9 +2983,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   are all strings = key/value row editor with add/remove
   (bangs.aliases); EVERYTHING else (plugins.entries, rewrites, any
   future shape) = raw-JSON textarea that must JSON.parse before save
-  ("invalid JSON" marks + blocks). rootsVersion and "$schema" are
-  hidden (app-managed / hint). The filter hides rows by dotted path
-  + description, then sections left empty. Controls write through
+  ("invalid JSON" marks + blocks). HIDING is schema-annotation
+  driven: a node carrying "x-editor-hidden": true -- checked on the
+  property node AND its resolved $ref target (editorHidden) -- is
+  skipped, leaf or whole subtree, at every depth; rootsVersion,
+  "$schema", window.width/height, and preview.windowWidth/
+  windowHeight carry the annotation in schemas/config.schema.json --
+  the window sizes are set by DRAGGING the bar's edges (resize.ts),
+  so editor rows would fight the drag (no
+  hard-coded key list; vendor keys are invisible to the lockstep
+  schema tests, which compare property-NAME lists only; toc.test.ts
+  pins all six annotations). The filter
+  hides rows by dotted path
+  + description, then sections left empty -- and mirrors into the
+  ToC: zero-match entries dim (.config-toc-dim), matching entries
+  show a visible-row count badge (parent counts include their
+  sub-sections); clicking a dimmed entry whose section the filter
+  hid clears the filter first, then jumps. Controls write through
   setVal -> setPath into the working copy (dirty note + accent Save
   button); Save (button/Ctrl+S) = SaveConfig(JSON.stringify(doc)) ->
   error strips verbatim on failure, else "Saved" flash + notices
@@ -2905,18 +3016,52 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   only; open + clean = silent re-fetch/re-render + transient
   "changed on disk -- reloaded" flash + the event's own summary;
   open + dirty = keep the edits, show a "changed on disk" strip
-  with a Reload button; event error = error strip, doc kept. MODE
-  EXITS: Esc/Close clean = leave + focus #query (previous bar state
-  byte-identical); dirty = first press flashes "unsaved changes --
-  press Esc again to discard", second within 2s discards; every
-  "app:shown" drops the mode (hide from ANY path -> next summon is
-  a normal bar) while PRESERVING an unsaved working copy in memory
-  -- the next config:open this run restores it with the dirty note
-  + "restored unsaved edits" flash (a clean editor re-fetches
-  fresh). Own window keydown handler (Esc + Ctrl/Cmd+S, mode-gated);
+  with a Reload button (also while HIDDEN with the editor latched:
+  the strip is waiting on re-show, edits never clobbered); event
+  error = error strip, doc kept. MODE
+  EXITS vs HIDE/SHOW RESTORE: Esc/Close are the ONLY mode exits --
+  clean = leave + focus #query (previous bar state byte-identical);
+  dirty = first press flashes "unsaved changes --
+  press Esc again to discard", second within 2s discards. Hiding
+  the bar WHILE the editor is up (hotkey toggle, IPC hide, tray,
+  darwin Space switch) leaves `active` latched and the next
+  "app:shown" RESTORES the editor exactly -- mode, #config-body
+  scrollTop, focused control (a focusin listener on #config-pane
+  tracks the last focused id; re-asserted plus scroll plus ToC
+  highlight one nextFrame later -- rAF with a setTimeout fallback
+  for jsdom), and unsaved dirty edits -- in memory for the app run
+  (config.test.ts pins the round-trip). After an Esc/Close exit the
+  next summon is a fresh search bar, with an unsaved working copy
+  still PRESERVED and restored on the next config:open this run
+  (dirty note + "restored unsaved edits" flash; a clean editor
+  re-fetches fresh). Own window keydown handler (Esc + Ctrl/Cmd+S,
+  mode-gated);
   configModeActive() is the export main.ts gates on. All DOM is
   text-node-only; config.css consumes existing --sb-* tokens with
   literal dark fallbacks -- NO new --sb-* token, no :root block) +
+  `src/resize.ts` (DRAG-EDGE WINDOW RESIZING, wired by wire()'s
+  initResize: deliberately ELEMENT-FREE -- document-level pointer
+  listeners classify positions against ~6px left/right/bottom bands
+  + L-shaped bottom corners (edgeZone, pure + vitest-pinned in
+  resize.test.ts; the top edge is excluded, it hosts the query row
+  and the anchor), so NO overlay strips exist to intercept wheel/
+  hover/selection/preview/sidebar events (WebKitGTK dispatches no
+  DOM pointer events for native scrollbar interaction, so the
+  results scrollbar at the right edge stays usable -- and the flip
+  side is a documented yield: where a scrollbar hugs the right edge
+  (overflowing results, the config editor body) it owns that strip
+  and right-edge drags yield to it; left/bottom always work); hover
+  swaps
+  documentElement.style.cursor (ew/ns/nesw/nwse-resize), a
+  capture-phase pointerdown inside a band preventDefault+
+  stopPropagation-claims the drag + pointer capture (guarded --
+  jsdom has none), pointermove computes ABSOLUTE targets from the
+  drag-start size (dragTarget: horizontal = 2x the travel, about
+  center; vertical = 1:1 downward; no accumulation across dropped
+  frames) rAF-coalesced into ResizeDrag(w, h), and pointerup/cancel
+  commits ONCE via ResizeCommit (moveless edge clicks commit
+  nothing); drags stay active in config-editor mode -- they
+  manipulate the window, not the search UI) +
   `src/highlight.ts` (hljs lib/core + explicitly registered grammars
   covering every LangHint name in the hljs distribution plus
   shell/plaintext -- never import the full highlight.js bundle;
@@ -2943,7 +3088,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   methods, plus the config-editor contract ConfigForEdit/ConfigSaveResult/
   ConfigChangedEvent (Go nil slices arrive as null -- the applied/
   pending fields are `string[] | null`) and the four config bound
-  methods GetConfigSchema/GetConfigForEdit/SaveConfig/OpenConfigFile,
+  methods GetConfigSchema/GetConfigForEdit/SaveConfig/OpenConfigFile
+  plus the drag-resize pair ResizeDrag/ResizeCommit,
   and the telemetry report contract
   Telemetry{PickReport,ShownRef,PickedRef} and RecordPick -- keep in
   sync with internal/app + internal/plugin + internal/preview +

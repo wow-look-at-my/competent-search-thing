@@ -351,6 +351,15 @@ interface WailsAppBindings {
   GetConfigForEdit(): Promise<ConfigForEdit>;
   SaveConfig(raw: string): Promise<ConfigSaveResult>;
   OpenConfigFile(): Promise<void>;
+  // Drag-edge window resizing (internal/app resize.go, driven by
+  // resize.ts). ResizeDrag applies one rAF-coalesced drag frame
+  // (clamped, centered, never persisted); ResizeCommit applies the
+  // final geometry and persists it to config.json in ONE atomic,
+  // self-write-suppressed save. Go owns clamping and which config
+  // fields a drag writes (window.* or preview.window* while the
+  // preview pane is mounted).
+  ResizeDrag(w: number, h: number): Promise<void>;
+  ResizeCommit(w: number, h: number): Promise<void>;
 }
 
 // The subset of the Wails runtime API this app uses (see the wails v2
