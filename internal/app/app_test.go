@@ -299,6 +299,10 @@ func TestStartupLogsConfigNotesOnce(t *testing.T) {
 	a.Startup(context.Background())
 	a.Startup(context.Background()) // a second Startup must not repeat them
 
+	// Drain the async layer goroutines (priors/arbiter/telemetry log
+	// through the global logger) before reading the shared buffer;
+	// Shutdown is idempotent under the Cleanup-registered second call.
+	a.Shutdown(context.Background())
 	out := buf.String()
 	require.Equal(t, 1, strings.Count(out, "config: index roots upgraded to the whole-filesystem default (/)"),
 		"each migration note is logged exactly once, config-prefixed")

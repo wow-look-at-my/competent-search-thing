@@ -14,7 +14,11 @@
 // (capture-phase preventDefault + pointer capture confine it).
 // WebKitGTK never dispatches DOM pointer events for native scrollbar
 // interaction, so the results scrollbar at the right edge stays
-// fully usable.
+// fully usable -- with the honest flip side that WHERE a scrollbar
+// hugs the right edge (an overflowing results list, the config
+// editor body), the scrollbar owns that strip and right-edge drags
+// yield to it; the left and bottom handles are always available
+// (documented in the README).
 //
 // Per-frame geometry goes to Go as ResizeDrag(w, h) --
 // rAF-coalesced, absolute target sizes derived from the drag-start

@@ -2847,7 +2847,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   and the anchor), so NO overlay strips exist to intercept wheel/
   hover/selection/preview/sidebar events (WebKitGTK dispatches no
   DOM pointer events for native scrollbar interaction, so the
-  results scrollbar at the right edge stays usable); hover swaps
+  results scrollbar at the right edge stays usable -- and the flip
+  side is a documented yield: where a scrollbar hugs the right edge
+  (overflowing results, the config editor body) it owns that strip
+  and right-edge drags yield to it; left/bottom always work); hover
+  swaps
   documentElement.style.cursor (ew/ns/nesw/nwse-resize), a
   capture-phase pointerdown inside a band preventDefault+
   stopPropagation-claims the drag + pointer capture (guarded --

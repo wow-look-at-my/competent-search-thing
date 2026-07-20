@@ -975,7 +975,10 @@ live as the GUI.
 
 The window is resized by dragging its edges, frameless as it is:
 grab the LEFT, RIGHT, or BOTTOM edge (or a bottom corner) -- the
-cursor changes when you are on one -- and drag. Horizontal drags
+cursor changes when you are on one -- and drag. One deliberate
+yield: where a scrollbar hugs the right edge (a long results list,
+the settings editor), the scrollbar wins that strip -- scrolling is
+never hijacked -- so grab the left or bottom edge there instead. Horizontal drags
 resize ABOUT CENTER: the bar stays horizontally centered on its
 display while the dragged edge follows the pointer (the opposite
 edge mirrors it). Vertical drags grow downward from the bar's
