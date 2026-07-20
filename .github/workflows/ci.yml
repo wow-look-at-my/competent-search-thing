@@ -7,7 +7,7 @@ permissions:
   # id-token lets the buildhost actions (the deb steps and the publish job)
   # mint the OIDC token they authenticate to pazer.build with.
   id-token: write
-  contents: read
+  contents: write
   actions: read
 
 jobs:
