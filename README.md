@@ -2189,14 +2189,12 @@ On macOS the row is live too, from spawn-free system calls:
   Internet Sharing -- member traffic would double-count -- plus
   `gif`/`stf`/`anpi`/`pktap`/`feth`/`vmnet`); `en*` (Wi-Fi is `en0`
   on Macs, Thunderbolt/USB ethernet are `enN`) and `bond*` count.
-- **GPU deliberately shows a dash** on macOS for now. The only
-  spawn-free source is IOKit's IOAccelerator "PerformanceStatistics"
-  registry ("Device Utilization %"), which is a pile of
-  IOKit/CoreFoundation cgo whose key names are not API-stable across
-  macOS releases -- the same honesty call as Intel-on-Linux: a
-  reliable dash beats a fragile number. The startup probe log says
-  `gpu=none`; the IOAccelerator route is the documented future source
-  if the dash ever needs replacing.
+- **GPU** is IOKit's IOAccelerator `PerformanceStatistics` registry
+  read (`Device Utilization %`, `Renderer Utilization %` fallback;
+  busiest accelerator wins): in-process, spawn-free, no special
+  entitlements, works on Apple Silicon. The probe log says
+  `gpu=ioaccelerator`. Hardware publishing no utilization figures
+  (VM paravirtual GPUs) keeps the honest dash, logged once.
 
 Any metric whose source is missing or failing shows a dash instead of
 a stale or fake number, and the failure is logged once, not per

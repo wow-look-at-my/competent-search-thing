@@ -1279,12 +1279,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (Options.darwin, else newDarwinReaders -- binding only, zero IO at
   probe time) + its own accurate source line ("cpu=host_statistics
   mem=vm_statistics64+hw.memsize swap=vm.swapusage net=sysctl(iflist2)
-  gpu=none"), while a readers value with nothing bound (the !darwin
+  gpu=ioaccelerator" -- gpu=none when the gpu reader member is nil),
+  while a readers value with nothing bound (the !darwin
   stub) degrades to the placeholders path. DARWIN LAYOUT (the
   fixture tests must keep running on BOTH CI jobs, so the split is
   VALUE-driven, build tags confined to the thin readers): darwin.go
   is UNTAGGED pure logic -- the darwinReaders struct (cpuTicks/
-  memTotal/vmStat/swapRaw/ifRIB/ifNames; nil member = that metric
+  memTotal/vmStat/swapRaw/ifRIB/ifNames/gpuStats; nil member = that
+  metric
   degrades alone), cpuCountersFromTicks (busy=user+system+nice,
   total=busy+idle; uint32 tick wraps take the linux skip-one-update
   path), memFromVMStat = Activity Monitor's "Memory Used"
@@ -1298,21 +1300,35 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   ibytes/obytes@96/104; malformed lengths error, zero usable records
   error -- never a silent zero), the SEPARATE darwin iface filter
   (skip lo/gif/stf/awdl/llw/utun/ap/bridge/anpi/pktap/feth/vmnet;
-  keep en* -- Wi-Fi IS en0 on Macs -- and bond*), and the
-  sampleCPUDarwin/sampleMemDarwin/sampleNetDarwin bodies;
+  keep en* -- Wi-Fi IS en0 on Macs -- and bond*), the IOAccelerator
+  utilization selection (gpuUtilKeys "Device Utilization %" preferred
+  then "Renderer Utilization %" per accelerator -- the two
+  widely-attested PerformanceStatistics keys -- and gpuPctFromStats =
+  busiest accelerator, clamped 0..100, ok=false when nothing
+  published), and the sampleCPUDarwin/sampleMemDarwin/
+  sampleNetDarwin/sampleGPUDarwin bodies;
   readers_darwin.go (the package's ONE cgo file, darwin-only) binds
   host_statistics/host_statistics64+host_page_size (mach ports
   deallocated per call) + unix.SysctlUint64("hw.memsize") +
   unix.SysctlRaw("vm.swapusage") + syscall.RouteRIB(NET_RT_IFLIST2)
   (deprecated-but-kept: x/net/route exposes NO darwin byte counters
-  -- verified) + net.Interfaces; readers_other.go (!darwin) binds
-  nothing. sampleCPU/sampleMem/sampleNet dispatch on s.dwn != nil
+  -- verified) + net.Interfaces + the IOAccelerator
+  PerformanceStatistics reader (cs_gpu_perf: IOKit port 0 = the
+  default port on every macOS version, the matching dict consumed by
+  IOServiceGetMatchingServices so it is never CFReleased, every
+  created object released, re-matched per read -- no cached service
+  handles; `-framework IOKit -framework CoreFoundation` LDFLAGS, the
+  package's only framework link); readers_other.go (!darwin) binds
+  nothing. sampleCPU/sampleMem/sampleNet/sampleGPU dispatch on
+  s.dwn != nil
   and share the extracted updateCPURate/updateNetRate with linux
-  (byte-identical linux behavior); sampleGPU is untouched -- darwin
-  GPU is the DELIBERATE dash (GPUOK false, gpu=none in the probe
-  log; the IOKit IOAccelerator "PerformanceStatistics" route is the
-  documented future source, the "intel: deliberately absent"
-  precedent). THE invariant: nothing outside the
+  (byte-identical linux behavior); sampleGPUDarwin rides the fast
+  loop like the linux amdgpu sysfs read (an in-process registry
+  call, no subprocess -- the nvidia slow-goroutine pattern is
+  deliberately not used), and a nil gpu reader is the silent dash
+  while a failed read or a registry publishing no utilization key
+  (VM paravirtual GPUs) = GPUOK false + one log line = the honest
+  dash. THE invariant: nothing outside the
   sampler goroutines ever does IO -- Snapshot() is a mutex-guarded
   copy, SetVisible(v) is a flag flip (+ non-blocking 1-buffered kick
   send on true), and while hidden the loops sample NOTHING, so the
@@ -1325,7 +1341,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   store value+timestamp; the fast loop folds it in and expires it to
   GPUOK=false past 3*GPUInterval; no summon kick here by design, an
   exec has no business on the summon path). A kick = immediate
-  baseline sample (point-in-time mem/swap/amdgpu published; previous
+  baseline sample (point-in-time mem/swap/amdgpu/ioaccelerator
+  published; previous
   RATE values kept, never blanked) then a one-shot follow-up at
   Interval/5 (~300ms) so cpu/net rates turn fresh right away. Rates
   (cpu pct, net Bps) come from counter deltas ONLY when the stored
@@ -1355,8 +1372,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the nil-seam stub expectation is runtime.GOOS-gated);
   readers_darwin_test.go (darwin-only) real-calls every production
   reader on the mac runner (tick monotonicity, memsize/vm_stat
-  sanity, real-RIB decode against the documented offsets, and a
-  two-real-samples end-to-end with live cpu/net + the GPU dash).
+  sanity, real-RIB decode against the documented offsets, the swap
+  pipeline gate -- decode + sampleMem SwapOK=true whatever the total,
+  the SWP field-report regression pin -- the GPU reader's clean
+  semantics -- the registry match never errors, 0..100 when a
+  utilization key is published, graceful ok=false on VM runners
+  whose paravirtual GPU publishes nothing -- and a two-real-samples
+  end-to-end with live cpu/net + the GPU either live in 0..100 or
+  the logged honest dash).
   Consumed by internal/app's stats.go.
 - `internal/theme` -- design-token resolution. WARNING: the 22
   `TokenNames` (bg, bg-elevated, fg, fg-dim, accent, accent-fg,
