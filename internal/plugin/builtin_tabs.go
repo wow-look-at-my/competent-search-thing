@@ -34,6 +34,12 @@ type TabInfo struct {
 	// LastAccessed orders ties: milliseconds since the Unix epoch, 0
 	// when unknown.
 	LastAccessed int64
+	// Token is the live-tab routing token when the companion-extension
+	// bridge supplied this row (internal/ffext's "c<conn>:<tab>:<window>"
+	// shape); empty for sessionstore-snapshot rows. A tokened row's
+	// action SWITCHES to the existing tab (activate_tab, URL kept as
+	// the fallback); a token-less row keeps the open-the-URL action.
+	Token string
 }
 
 // allQueriesMatch implements the all_queries trigger contract with the
@@ -51,8 +57,10 @@ func allQueriesMatch(query string) (string, int, bool) {
 // tabsProvider is the open-tabs section: an all-queries builtin (no
 // bangs) matching the user's currently-open Firefox tabs against the
 // query. It searches the snapshot supplied by the tabs getter; a
-// result's action re-OPENS the URL in the default browser (it cannot
-// focus the existing tab -- see the README's honesty note).
+// row carrying a bridge token SWITCHES to the existing tab
+// (activate_tab -- the companion extension focuses the exact tab and
+// its window), while a sessionstore-snapshot row re-OPENS the URL in
+// the default browser (see the README's tab-switching section).
 type tabsProvider struct {
 	builtinBase
 	tabs func() []TabInfo
@@ -89,11 +97,18 @@ func (p *tabsProvider) candidates(_ context.Context, _ Request) ([]match.Candida
 	out := make([]match.Candidate, 0, len(tabs))
 	for _, tb := range tabs {
 		host := strings.TrimPrefix(strings.ToLower(tb.Host), "www.")
+		action := &Action{Type: ActionOpenURL, Value: tb.URL}
+		if tb.Token != "" {
+			// A live-bridge row: switch to the exact tab; Value keeps
+			// the URL so the app can fall back to opening it when the
+			// tab is gone or the bridge died mid-flight.
+			action = &Action{Type: ActionActivateTab, Tab: tb.Token, Value: tb.URL}
+		}
 		res := Result{
 			Title:    tabTitle(tb),
 			Subtitle: tb.URL,
 			Icon:     "link", // "globe" belongs to frequent-sites
-			Action:   &Action{Type: ActionOpenURL, Value: tb.URL},
+			Action:   action,
 		}
 		if tb.Pinned {
 			res.Badge = tabPinnedBadge

@@ -118,27 +118,33 @@ type Field struct {
 }
 
 // Action describes what activating a result does. Value carries the
-// payload for open_path/open_url/copy_text/set_query/run_builtin;
-// Argv carries the command line for run_command; Window carries the
-// window id (a decimal string, so it survives JSON round-trips
-// unmangled) for activate_window. DesktopID is internal-only (the
-// builtin app launchers set it alongside a run_command Argv): the
-// .desktop entry behind the launch, which the app resolves for
-// launch capabilities (D-Bus activation, startup notification) so
-// launching an already-running single-instance app focuses its
-// window; SanitizeResponse clears it on every external action.
+// payload for open_path/open_url/copy_text/set_query/run_builtin --
+// and, for activate_tab, the tab's URL (the open-the-URL fallback when
+// the live tab cannot be reached); Argv carries the command line for
+// run_command; Window carries the window id (a decimal string, so it
+// survives JSON round-trips unmangled) for activate_window. Tab is
+// internal-only (the builtin open-tabs provider sets it on
+// activate_tab actions): the live-tab routing token
+// ("c<conn>:<tab>:<window>", see internal/ffext), re-validated by the
+// app before any activation; SanitizeResponse clears it on every
+// external action. DesktopID is internal-only too (the builtin app
+// launchers set it alongside a run_command Argv): the .desktop entry
+// behind the launch, which the app resolves for launch capabilities
+// (D-Bus activation, startup notification) so launching an
+// already-running single-instance app focuses its window.
 type Action struct {
 	Type      string   `json:"type"`
 	Value     string   `json:"value,omitempty"`
 	Argv      []string `json:"argv,omitempty"`
 	Window    string   `json:"window,omitempty"`
+	Tab       string   `json:"tab,omitempty"`
 	DesktopID string   `json:"desktop_id,omitempty"`
 }
 
 // Action types. The first four may be returned by external plugins;
-// set_query, run_builtin and activate_window are internal-only
-// (produced by builtin providers) and are always stripped from
-// external plugin responses by SanitizeResponse.
+// set_query, run_builtin, activate_window and activate_tab are
+// internal-only (produced by builtin providers) and are always
+// stripped from external plugin responses by SanitizeResponse.
 const (
 	ActionOpenPath       = "open_path"
 	ActionOpenURL        = "open_url"
@@ -147,6 +153,7 @@ const (
 	ActionSetQuery       = "set_query"
 	ActionRunBuiltin     = "run_builtin"
 	ActionActivateWindow = "activate_window"
+	ActionActivateTab    = "activate_tab"
 )
 
 // Sanitizer limits (see the design doc's response schema).
@@ -289,10 +296,10 @@ func sanitizeResult(r Result, idx int, allowRunCommand bool) (clean Result, reas
 // the run_command permission gate does that).
 func sanitizeAction(a Action, idx int, allowRunCommand bool) (act *Action, reason string, dropResult bool) {
 	switch a.Type {
-	case ActionSetQuery, ActionRunBuiltin, ActionActivateWindow:
+	case ActionSetQuery, ActionRunBuiltin, ActionActivateWindow, ActionActivateTab:
 		return nil, fmt.Sprintf("result %d: internal-only action type %q stripped", idx, a.Type), false
 	case ActionOpenPath:
-		a.Argv, a.Window, a.DesktopID = nil, "", ""
+		a.Argv, a.Window, a.Tab, a.DesktopID = nil, "", "", ""
 		a.Value = stripControl(a.Value)
 		if a.Value == "" || len(a.Value) > maxActionPathBytes || !filepath.IsAbs(a.Value) {
 			return nil, fmt.Sprintf(
@@ -301,7 +308,7 @@ func sanitizeAction(a Action, idx int, allowRunCommand bool) (act *Action, reaso
 		}
 		return &a, "", false
 	case ActionOpenURL:
-		a.Argv, a.Window, a.DesktopID = nil, "", ""
+		a.Argv, a.Window, a.Tab, a.DesktopID = nil, "", "", ""
 		a.Value = stripControl(a.Value)
 		if len(a.Value) > maxActionURLBytes || !validHTTPURL(a.Value) {
 			return nil, fmt.Sprintf(
@@ -310,7 +317,7 @@ func sanitizeAction(a Action, idx int, allowRunCommand bool) (act *Action, reaso
 		}
 		return &a, "", false
 	case ActionCopyText:
-		a.Argv, a.Window, a.DesktopID = nil, "", ""
+		a.Argv, a.Window, a.Tab, a.DesktopID = nil, "", "", ""
 		a.Value = stripControl(a.Value)
 		if a.Value == "" || len(a.Value) > maxActionCopyBytes {
 			return nil, fmt.Sprintf(
@@ -324,7 +331,7 @@ func sanitizeAction(a Action, idx int, allowRunCommand bool) (act *Action, reaso
 				"result %d: run_command action but the manifest does not set allow_run_command; result dropped",
 				idx), true
 		}
-		a.Value, a.Window, a.DesktopID = "", "", ""
+		a.Value, a.Window, a.Tab, a.DesktopID = "", "", "", ""
 		if len(a.Argv) == 0 || len(a.Argv) > maxArgvEntries {
 			return nil, fmt.Sprintf(
 				"result %d: run_command action needs 1..%d argv entries; action stripped",

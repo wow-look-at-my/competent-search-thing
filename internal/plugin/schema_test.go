@@ -263,9 +263,9 @@ func TestSanitizeFields(t *testing.T) {
 }
 
 func TestSanitizeActionInternalTypesStripped(t *testing.T) {
-	for _, typ := range []string{ActionSetQuery, ActionRunBuiltin, ActionActivateWindow} {
+	for _, typ := range []string{ActionSetQuery, ActionRunBuiltin, ActionActivateWindow, ActionActivateTab} {
 		t.Run(typ, func(t *testing.T) {
-			r := Result{Title: "t", Action: &Action{Type: typ, Value: "x", Window: "42"}}
+			r := Result{Title: "t", Action: &Action{Type: typ, Value: "x", Window: "42", Tab: "c1:2:3"}}
 			results, dropped := SanitizeResponse(&Response{Results: []Result{r}}, true)
 			require.Len(t, results, 1, "result survives with action stripped")
 			require.Nil(t, results[0].Action)
@@ -277,15 +277,15 @@ func TestSanitizeActionInternalTypesStripped(t *testing.T) {
 }
 
 func TestSanitizeActionClearsStrayWindow(t *testing.T) {
-	// A window id or desktop id smuggled onto an external action type
-	// is cleared, exactly like a stray argv on a value-carrying action:
-	// both fields are internal-only and only the builtin providers may
-	// set them.
+	// A window id, tab token, or desktop id smuggled onto an external
+	// action type is cleared, exactly like a stray argv on a
+	// value-carrying action: all three fields are internal-only and
+	// only the builtin providers may set them.
 	cases := []Action{
-		{Type: ActionOpenPath, Value: "/tmp/x", Window: "42", DesktopID: "x.desktop"},
-		{Type: ActionOpenURL, Value: "https://example.com/", Window: "42", DesktopID: "x.desktop"},
-		{Type: ActionCopyText, Value: "x", Window: "42", DesktopID: "x.desktop"},
-		{Type: ActionRunCommand, Argv: []string{"true"}, Window: "42", DesktopID: "x.desktop"},
+		{Type: ActionOpenPath, Value: "/tmp/x", Window: "42", Tab: "c1:2:3", DesktopID: "x.desktop"},
+		{Type: ActionOpenURL, Value: "https://example.com/", Window: "42", Tab: "c1:2:3", DesktopID: "x.desktop"},
+		{Type: ActionCopyText, Value: "x", Window: "42", Tab: "c1:2:3", DesktopID: "x.desktop"},
+		{Type: ActionRunCommand, Argv: []string{"true"}, Window: "42", Tab: "c1:2:3", DesktopID: "x.desktop"},
 	}
 	for _, a := range cases {
 		t.Run(a.Type, func(t *testing.T) {
@@ -296,6 +296,8 @@ func TestSanitizeActionClearsStrayWindow(t *testing.T) {
 			require.Len(t, results, 1)
 			require.NotNil(t, results[0].Action)
 			require.Empty(t, results[0].Action.Window)
+			require.Empty(t, results[0].Action.Tab,
+				"an external plugin must never route a live-tab activation")
 			require.Empty(t, results[0].Action.DesktopID,
 				"an external plugin must never steer the credentialed launch path")
 		})

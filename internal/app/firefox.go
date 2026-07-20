@@ -87,16 +87,25 @@ func (a *App) frequentSites(fs config.FrequentSitesConfig, dir string) func() []
 }
 
 // openTabs builds the open-tabs source over the resolved profile
-// directory: a session-snapshot cache bound to the same firefox
-// context (freshness is mtime- and TTL-gated inside the cache; there
-// is no config cadence knob), adapted to the plugin wire type like
-// frequentSites.
+// directory. The getter PREFERS the companion-extension bridge's live
+// snapshot -- rows then carry the activation token that switches to
+// the exact tab -- whenever a host is connected and the snapshot is
+// fresh (ffextTabTTL; see liveTabs in ffext.go), and otherwise falls
+// back to the sessionstore cache exactly as before the bridge
+// existed: a session-snapshot cache bound to the same firefox context
+// (freshness is mtime- and TTL-gated inside the cache; there is no
+// config cadence knob), adapted to the plugin wire type like
+// frequentSites. The bridge handle is read lazily per call, so
+// registry reloads keep working against the app-lifetime bridge.
 func (a *App) openTabs(dir string) func() []plugin.TabInfo {
 	cache := firefox.NewTabCache(a.firefoxContext(), firefox.TabCacheOptions{
 		ProfileDir: dir,
 		Logf:       log.Printf,
 	})
 	return func() []plugin.TabInfo {
+		if live, ok := a.liveTabs(); ok {
+			return live
+		}
 		tabs := cache.Tabs()
 		if len(tabs) == 0 {
 			return nil

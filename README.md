@@ -1724,11 +1724,13 @@ action is dropped entirely (and logged). Because the manifest lives on
 the user's disk, a plugin response can never grant itself local
 execution.
 
-Two more action types exist -- `set_query` (replace the search input)
-and `run_builtin` (app commands) -- but they are **internal-only**,
-produced by the built-in providers; the sanitizer strips them from
-external plugin responses. Every action is re-validated in Go when it
-is executed, so a malformed action is rejected, never run.
+More action types exist -- `set_query` (replace the search input),
+`run_builtin` (app commands), `activate_window` (focus an open
+window) and `activate_tab` (switch to a live Firefox tab) -- but they
+are **internal-only**, produced by the built-in providers; the
+sanitizer strips them from external plugin responses. Every action is
+re-validated in Go when it is executed, so a malformed action is
+rejected, never run.
 
 ### Bangs
 
@@ -1941,24 +1943,57 @@ open in Firefox. Matches appear as an "Open Tabs" section, each row
 showing the tab title (or its host when untitled), the full URL, a
 link icon, and a `pinned` badge on pinned tabs.
 
-**Honesty note -- activating a row re-OPENS the URL, it does not focus
-the existing tab.** The app hands the URL to your default browser,
-which in a running Firefox almost always means a NEW tab of the same
-page. Actually switching to the already-open tab is not possible from
-the outside: Firefox exposes no such command to other processes, so
-true tab focusing would require a companion browser extension. That is
-a possible future option, deliberately out of scope here. Use the
-section to find and re-open what you already have; do not expect it to
-de-duplicate your tab bar.
+**How activation behaves.** With the companion extension connected
+(next subsection), picking a row SWITCHES to that exact tab: Firefox
+selects it and raises its window -- no duplicate. Without it (or when
+the tab vanished before the switch), the app falls back to handing
+the URL to your default browser, which in a running Firefox means a
+NEW tab of the same page; switching from the outside is impossible
+(Firefox exposes no such command to other processes), which is
+exactly why the extension exists.
 
-**Privacy**: the tab list is read locally from your own profile's
-crash-recovery session snapshot
-(`<profile>/sessionstore-backups/recovery.jsonlz4`), by the app
-running on your machine. Nothing is transmitted anywhere, and no
-browser extension is involved. Private windows never appear -- Firefox
-does not persist them into the snapshot at all.
+**Privacy**: everything stays on your machine either way. Without the
+extension the list is read from your profile's crash-recovery
+snapshot (`<profile>/sessionstore-backups/recovery.jsonlz4`); with it,
+the extension reports the live list over a local user-only socket.
+Private windows never appear: Firefox does not persist them into the
+snapshot, and extensions do not see them unless you explicitly allow
+that in `about:addons`.
 
-How it works, and what "current" means here:
+#### Tab switching (companion extension)
+
+The repo ships a tiny WebExtension (`webextension/`) that holds a
+native-messaging port to a relay process (`competent-search-thing
+firefox-host`, spawned by Firefox through a wrapper script) and
+performs the switch inside Firefox. The app installs the
+native-messaging manifest and wrapper automatically at startup
+whenever a Firefox profile exists -- no configuration, no knob.
+
+Install the extension once:
+
+- **Try it now (dev)**: `about:debugging` > This Firefox > Load
+  Temporary Add-on > pick `webextension/manifest.json`. Lasts until
+  Firefox restarts.
+- **Durable install**: release Firefox only runs signed extensions;
+  `web-ext sign --channel unlisted` (free
+  [AMO API keys](https://addons.mozilla.org/developers/addon/api/key/),
+  usually minutes) yields an installable `.xpi`.
+- **Verify**: the app log prints `ffext: extension host connected`;
+  tab picks now switch instead of re-opening.
+
+Honest limits:
+
+- **Snap/flatpak Firefox**: the sandbox blocks native messaging.
+  Ubuntu's snap works through its patched WebExtensions portal
+  (22.04+); flatpak needs manual overrides. Picks fall back to
+  open-the-URL.
+- **Wayland**: the tab always switches, but focus-stealing prevention
+  (GNOME, newer KDE) may flash Firefox's taskbar entry instead of
+  raising the window.
+- **Firefox or app restarts** reconnect automatically; while
+  disconnected, picks open the URL (one log line says so).
+
+How the FALLBACK list works, and what "current" means there:
 
 - **The snapshot is Firefox's own crash-recovery file**, rewritten
   roughly every 15 seconds while the browser runs. The app decodes its
@@ -2025,9 +2060,10 @@ Plain words about what installing a plugin means:
 - **Responses are data, never capability.** A response cannot execute
   anything by itself: `run_command` results are dropped unless the
   on-disk manifest opts in via `allow_run_command`; the internal
-  `set_query`/`run_builtin` action types are stripped from external
-  responses; `open_url` is restricted to `http`/`https`; every action
-  is re-validated at execution time.
+  action types (`set_query`, `run_builtin`, `activate_window`,
+  `activate_tab`) are stripped from external responses; `open_url` is
+  restricted to `http`/`https`; every action is re-validated at
+  execution time.
 - **No markup, no remote fetches.** Plugins cannot inject HTML or CSS;
   all text renders as text nodes; icons are built-in names or literal
   glyphs, never URLs; styling is limited to the whitelisted knobs
@@ -2874,6 +2910,9 @@ For debugging and unusual setups:
   global hotkey; the CLI commands keep working).
 - `COMPETENT_SEARCH_SOCKET` -- override the single-instance socket
   path (default `$XDG_RUNTIME_DIR/competent-search-thing.sock`).
+- `COMPETENT_SEARCH_FFEXT_SOCKET` -- override the Firefox tab-bridge
+  socket path (default
+  `$XDG_RUNTIME_DIR/competent-search-thing-ffext.sock`).
 - `COMPETENT_SEARCH_FPS=1` -- dev-only fps meter: logs periodic
   frame-rate summaries plus a display/power context line (see
   [Frame pacing on macOS](#frame-pacing-on-macos)). Off = zero cost.
