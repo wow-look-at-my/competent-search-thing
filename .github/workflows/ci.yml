@@ -224,7 +224,7 @@ jobs:
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-create-release@master
         with:
           project: competent-search-thing
-          brew_service: 'true'
+          create_service: 'true'
 
       - name: Upload linux/amd64 binary
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-upload-artifact@master
