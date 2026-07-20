@@ -220,7 +220,8 @@ interface TelemetryPickedRef {
 // A RecordPick report (internal/telemetry PickReport): the query, the
 // delivered flat row list, and the pick. Sent fire-and-forget after
 // an activation actually ran; a Go-side no-op when the local ranking
-// log is off (search.telemetry.disabled, the debug escape hatch).
+// log could not start (unresolvable config dir; the log itself is
+// always on and has no config switch).
 interface TelemetryPickReport {
   query: string;
   shown: TelemetryShownRef[];
@@ -336,7 +337,7 @@ interface WailsAppBindings {
   GetCustomCSS(): Promise<string>;
   // The system-stats sampler's cached snapshot -- instant Go-side
   // (never IO), so it is safe to call on the show path. enabled false
-  // (stats.disabled / no sampler) = hide the row entirely.
+  // (stats.enabled false / no sampler) = hide the row entirely.
   GetStats(): Promise<StatsSnapshot>;
   // Preview pane (internal/app preview.go). QueryPreview asks for
   // target under generation gen; answers arrive asynchronously as
@@ -409,7 +410,7 @@ interface WatchBackendEvent {
 
 // Payload of the "stats:update" event AND the GetStats return
 // (internal/sysstats Snapshot; keep field names in lockstep with its
-// json tags). enabled false means the feature is off (stats.disabled):
+// json tags). enabled false means the feature is off (config stats.enabled false):
 // hide the #stats row entirely and skip rendering. enabled true with a
 // metric's *Ok false means that one metric has no live value (missing
 // source, non-Linux, failed read, rate not accumulated yet): render a
