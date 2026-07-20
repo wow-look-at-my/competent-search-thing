@@ -424,10 +424,16 @@ body {
    wrapper elements; the minmax(0, ...) tracks keep long preview
    content scrolling inside the pane instead of growing the window.
    The fourth row is the stats row; hidden (display:none) it
-   collapses to zero height. */
+   collapses to zero height. The results column is min()-capped at
+   the window width: when the clamp-to-screen rule (or a drag)
+   shrinks the window below the configured column width, the column
+   gives way instead of overflowing -- the pane takes whatever
+   remains, down to zero. */
 body.with-preview #bar {
   display: grid;
-  grid-template-columns: var(--preview-results-col, 680px) minmax(0, 1fr);
+  grid-template-columns:
+    minmax(0, min(var(--preview-results-col, 680px), 100%))
+    minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto auto;
 }
 

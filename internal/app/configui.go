@@ -60,9 +60,10 @@ type ConfigForEdit struct {
 	// clean.
 	LoadWarning string `json:"loadWarning,omitempty"`
 	// UnknownKeys lists JSON keys present in the on-disk file that the
-	// config schema does not know ("$schema" included). They survive
-	// hand-editing but are DROPPED by a GUI save, so the editor warns
-	// and points at the open-the-file escape hatch.
+	// config schema does not know ("$schema" is a known reserved key
+	// and never listed). They survive hand-editing but are DROPPED by
+	// a GUI save, so the editor warns and points at the open-the-file
+	// escape hatch.
 	UnknownKeys []string `json:"unknownKeys,omitempty"`
 }
 

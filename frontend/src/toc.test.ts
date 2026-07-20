@@ -51,16 +51,38 @@ describe("activeSectionIndex", () => {
 });
 
 describe("config.schema.json editor annotations", () => {
-  it("marks rootsVersion and $schema x-editor-hidden", () => {
+  interface SchemaDoc {
+    properties: Record<string, Record<string, unknown>>;
+    $defs: Record<string, { properties: Record<string, Record<string, unknown>> }>;
+  }
+  const loadSchema = (): SchemaDoc => {
     const here = dirname(fileURLToPath(import.meta.url));
     const raw = readFileSync(
       join(here, "..", "..", "schemas", "config.schema.json"),
       "utf-8",
     );
-    const doc = JSON.parse(raw) as {
-      properties: Record<string, Record<string, unknown>>;
-    };
+    return JSON.parse(raw) as SchemaDoc;
+  };
+
+  it("marks rootsVersion and $schema x-editor-hidden", () => {
+    const doc = loadSchema();
     expect(doc.properties.rootsVersion["x-editor-hidden"]).toBe(true);
     expect(doc.properties.$schema["x-editor-hidden"]).toBe(true);
+  });
+
+  it("hides the drag-managed window sizes from the editor", () => {
+    // window.width/height and preview.windowWidth/windowHeight are
+    // set by dragging the bar's edges (resize.ts); the editor rows
+    // would fight the drag, so the schema hides them while the keys
+    // stay hand-editable in config.json.
+    const doc = loadSchema();
+    const win = doc.$defs.windowConfig.properties;
+    expect(win.width["x-editor-hidden"]).toBe(true);
+    expect(win.height["x-editor-hidden"]).toBe(true);
+    expect(win.translucent["x-editor-hidden"]).toBeUndefined();
+    const pv = doc.$defs.previewConfig.properties;
+    expect(pv.windowWidth["x-editor-hidden"]).toBe(true);
+    expect(pv.windowHeight["x-editor-hidden"]).toBe(true);
+    expect(pv.enabled["x-editor-hidden"]).toBeUndefined();
   });
 });

@@ -27,6 +27,13 @@ import (
 // means "exclude nothing"), and so are watcher.watchExcludes and
 // watcher.maxWatches (negative = explicitly unlimited).
 func (c *Config) Normalize() {
+	// The "$schema" editor hint: stamp the sidecar reference when the
+	// key is absent (existing configs gain it on their next save); a
+	// hand-set value is kept verbatim -- it is a reserved key, not a
+	// setting.
+	if c.Schema == "" {
+		c.Schema = SchemaRef
+	}
 	if len(c.Roots) == 0 {
 		c.Roots = Default().Roots
 	}

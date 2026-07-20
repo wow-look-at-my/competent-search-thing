@@ -195,6 +195,10 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 		r.call(fmt.Sprintf("setWindowSize:%dx%d", w, h))
 		return false
 	}
+	// The toolkit work-area probe answers "unknown" (the production
+	// linux value would dispatch onto a GTK loop no test runs and eat
+	// its 2s timeout); clamp tests override it with fixed rects.
+	a.plat.windowWorkArea = func() (platform.Rect, bool) { return platform.Rect{}, false }
 	// The hint probe answers "nothing exists" so Search never touches
 	// the real disk; hint tests override it (some with the real
 	// os.Lstat over temp trees).

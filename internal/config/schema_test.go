@@ -287,9 +287,6 @@ func configSchemaProperties(t *testing.T, defName string) []string {
 	require.True(t, ok)
 	var names []string
 	for k := range props {
-		if k == "$schema" {
-			continue
-		}
 		names = append(names, k)
 	}
 	sort.Strings(names)

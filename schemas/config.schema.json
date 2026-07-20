@@ -456,19 +456,21 @@
         "enabled": {
           "type": "boolean",
           "default": false,
-          "description": "true turns the preview pane on and widens the window to windowWidth x windowHeight. Read once at startup; the window size cannot change while the app runs."
+          "description": "true turns the preview pane on and widens the window to windowWidth x windowHeight (applied live; the shown window is always clamped to the screen's usable area)."
         },
         "windowWidth": {
           "type": "integer",
           "minimum": 1,
           "default": 1600,
-          "description": "Window width in pixels while the pane is enabled (default 1600). Ignored when enabled is false."
+          "x-editor-hidden": true,
+          "description": "Window width in pixels while the pane is enabled (default 1600). Ignored when enabled is false. Normally set by DRAGGING the bar's edges while the pane is mounted (the drag persists the size here), which is why the settings editor hides the field; the shown window is always clamped to the screen's usable area."
         },
         "windowHeight": {
           "type": "integer",
           "minimum": 1,
           "default": 800,
-          "description": "Window height in pixels while the pane is enabled (default 800). Ignored when enabled is false."
+          "x-editor-hidden": true,
+          "description": "Window height in pixels while the pane is enabled (default 800). Ignored when enabled is false. Same drag-to-resize and clamp rules as windowWidth."
         },
         "textMaxKB": {
           "type": "integer",
@@ -558,13 +560,15 @@
           "type": "integer",
           "minimum": 320,
           "default": 780,
-          "description": "The bar window's width in pixels (default 780). The window size is fixed at startup (the bar is not resizable); changes take effect on the next launch. Zero, negative, or missing values get the default and positive values below 320 are raised to that floor by the app; this schema rejects them."
+          "x-editor-hidden": true,
+          "description": "The bar window's width in pixels (default 780). Normally set by DRAGGING the bar's edges (the drag persists the size here), which is why the settings editor hides the field; hand edits apply live too. The shown window is always clamped to the screen's usable area, while this value keeps what was set. Zero, negative, or missing values get the default and positive values below 320 are raised to that floor by the app; this schema rejects them."
         },
         "height": {
           "type": "integer",
           "minimum": 240,
           "default": 550,
-          "description": "The bar window's height in pixels (default 550). Same repair rules as width, with a 240 floor. A taller window shows more result rows before scrolling; how many results a query returns stays governed by the top-level maxResults."
+          "x-editor-hidden": true,
+          "description": "The bar window's height in pixels (default 550). Same drag-to-resize, clamp, and repair rules as width, with a 240 floor. A taller window shows more result rows before scrolling; how many results a query returns stays governed by the top-level maxResults."
         }
       },
       "additionalProperties": false

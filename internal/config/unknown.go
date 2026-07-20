@@ -10,9 +10,9 @@ import (
 // UnknownKeys reports the JSON object keys in a raw config.json
 // document that Config has no field for -- the keys a full-file
 // rewrite (Load -> Save, or the GUI editor's save) silently drops.
-// The GUI surfaces them so a user hand-editing extra keys (including
-// an editor "$schema" hint, which the schema explicitly allows) gets
-// a warning instead of silent data loss.
+// The GUI surfaces them so a user hand-editing extra keys gets a
+// warning instead of silent data loss. The "$schema" editor hint is a
+// real (reserved) Config field, so it is never reported here.
 //
 // The walk is recursive over nested config sections, dotted paths
 // ("watcher.frobnicate"), with map entries addressed by key

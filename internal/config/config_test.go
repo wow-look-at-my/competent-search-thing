@@ -652,3 +652,43 @@ func TestPreviewConfig(t *testing.T) {
 	require.Equal(t, "sk-secret", got.Preview.OpenAI.APIKey)
 	require.Equal(t, DefaultPreviewOpenAIModel, got.Preview.OpenAI.Model)
 }
+
+// The "$schema" reserved key: the sidecar reference is stamped as the
+// document's FIRST key on fresh saves and empty loads, a hand-set
+// value survives verbatim, and the loader never treats the key as an
+// error (it is a real Config field, so the GUI's strict decode and
+// UnknownKeys both accept it).
+func TestSchemaRefStampedFirst(t *testing.T) {
+	dir := setConfigDir(t)
+	_, err := Load() // missing file: defaults written
+	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	require.NoError(t, err)
+	require.True(t, json.Valid(data))
+	require.Contains(t, string(data), `"$schema": "`+SchemaRef+`"`)
+	// First key: the document starts {\n  "$schema": ...
+	require.Equal(t, "{\n  \"$schema\":", string(data[:13]),
+		"$schema is the document's first key (first struct field)")
+}
+
+func TestSchemaFieldNormalizeAndRoundTrip(t *testing.T) {
+	var c Config
+	c.Normalize()
+	require.Equal(t, SchemaRef, c.Schema, "Normalize stamps the empty value")
+
+	c.Schema = "https://example.test/other.schema.json"
+	c.Normalize()
+	require.Equal(t, "https://example.test/other.schema.json", c.Schema,
+		"a hand-set $schema passes through untouched")
+
+	dir := setConfigDir(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"),
+		[]byte(`{"$schema": "custom-ref", "maxResults": 7}`), 0o644))
+	got, err := Load()
+	require.NoError(t, err, "the $schema key is reserved, never a load error")
+	require.Equal(t, "custom-ref", got.Schema)
+	require.NoError(t, Save(got))
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"$schema": "custom-ref"`, "round-trip keeps the hand-set value")
+}

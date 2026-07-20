@@ -16,6 +16,7 @@
 // GetPreviewConfig + the selection/query hooks).
 
 import { configModeActive, initConfig } from "./config";
+import { initResize } from "./resize";
 import {
   initPreview,
   previewOnQueryChange,
@@ -792,6 +793,10 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   // The config editor mode (config.ts): wiring only -- the schema and
   // config document load lazily on the first "config:open".
   initConfig(app, rt);
+  // Drag-edge window resizing (resize.ts): element-free document
+  // listeners, so nothing here can interfere with wheel/hover/
+  // selection handling above.
+  initResize(app);
   inputEl.addEventListener("input", () => {
     state.histCursor = -1; // typing exits history browse mode
     scheduleSearch(app);
