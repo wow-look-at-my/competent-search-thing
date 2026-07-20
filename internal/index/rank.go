@@ -22,8 +22,11 @@ type cand struct {
 
 // candCompare orders candidates best-first: match class, then (within
 // the fuzzy class only) higher alignment score, then directories before
-// files, then shorter full path, then lexicographic full path. Paths
-// are unique per store, so this is a total order.
+// files, then shorter full path, then the numeric-aware lexicographic
+// full-path order (numorder.go): aligned digit runs compare
+// numerically DESCENDING so datestamped/versioned families deliver
+// newest first, and every other difference keeps the plain byte
+// order. Paths are unique per store, so this is a total order.
 //
 // classFuzzy shares ordinal 3 with path-mode classPathSub, but a query
 // is exactly one mode and path-mode candidates always carry score 0, so
@@ -44,7 +47,7 @@ func (s *Store) candCompare(a, b cand) int {
 	if a.pathLen != b.pathLen {
 		return cmp.Compare(a.pathLen, b.pathLen)
 	}
-	return compareJoined(
+	return compareJoinedNumeric(
 		s.dirs[s.parent[a.id]], s.nameBytes(a.id),
 		s.dirs[s.parent[b.id]], s.nameBytes(b.id),
 	)

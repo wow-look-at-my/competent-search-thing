@@ -313,18 +313,33 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   values sharing Open are filtered by its absolute-path guard, and
   openConfigFile bypasses Open deliberately -- recording async, write
   errors logged once (frecErrOnce), never blocking or failing the
-  action. Ranking telemetry wiring (telemetry.go in this package):
-  Startup's startTelemetry (config search.telemetry, OPT-IN -- zero
-  value = OFF, the preview.enabled privacy precedent; unresolvable
-  config dir = one log line + disabled) builds the telemetryLayer --
-  an internal/telemetry.Store at <configDir>/telemetry.jsonl plus an
-  8-slot query->signals impression ring; Search routes through
-  queryWithTelemetry (nil layer = exactly Manager.Query; enabled =
-  Manager.QueryTraced capturing index.ResultSignals + a ring stash
-  keyed by the TRIMMED query, blendActive from Blend.Active());
-  `RecordPick(rep telemetry.PickReport) error` is the frontend's
-  activation-success report (called beside AddHistory): nil layer or
-  blank query = silent no-op, everything echoed back RE-validated
+  action. Pick-memory priors wiring (priors.go in this package):
+  Startup's startPriors (config search.priors, OPT-IN -- zero value =
+  OFF: no store, no file reads, no goroutines) builds the
+  internal/priors Store, installs store.PriorFunc as frecBlend.Prior
+  (riding the SAME blend the cwd stash re-swaps, so the resolver
+  survives those swaps; with frecency disabled the Manager gets a
+  prior-only Blend, which the engine still activates), and rebuilds
+  the tables asynchronously -- once at Startup and after every
+  successful Open/Reveal (kickPriorsRefresh beside recordOpen:
+  single-flight + one pending re-run coalescing bursts, no timers,
+  priorsClosed stops re-arms during Shutdown's priorsWG drain beside
+  frecWG) -- by reading <configDir>/telemetry.jsonl(.1) oldest-first
+  plus frecency.json for the bootstrap; read errors log once
+  (priorsErrOnce) and degrade to whatever parsed, and ONE startup log
+  line reports the table sizes. Ranking telemetry wiring
+  (telemetry.go in this package): Startup's startTelemetry (config
+  search.telemetry, OPT-IN -- zero value = OFF, the preview.enabled
+  privacy precedent; unresolvable config dir = one log line +
+  disabled) builds the telemetryLayer -- an internal/telemetry Store
+  at <configDir>/telemetry.jsonl plus an 8-slot query->signals
+  impression ring; Search routes through queryWithTelemetry (nil
+  layer = exactly Manager.Query; enabled = Manager.QueryTraced
+  capturing index.ResultSignals + a ring stash keyed by the TRIMMED
+  query, blendActive from Blend.Active()); `RecordPick(rep
+  telemetry.PickReport) error` is the frontend's activation-success
+  report (called beside AddHistory): nil layer or blank query =
+  silent no-op, everything echoed back RE-validated
   (telemetry.ValidatePickReport -- the RunPluginAction defense-in-
   depth stance), file-row features joined EXCLUSIVELY from the ring
   (the report carries row identities only, so the frontend can never
@@ -678,7 +693,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   `Store.Query`: case-insensitive substring
   search, sharded across NumCPU goroutines with per-shard bounded
   top-K heaps; ranking exact > prefix > substring > fuzzy, dirs before
-  files, shorter then lexicographic paths. QueryWith dispatches by
+  files, shorter then numeric-aware lexicographic paths (aligned
+  digit runs DESC -- numorder.go, below). QueryWith dispatches by
   match.Terms: whitespace-only = nil, ONE term = the pre-multi engine
   byte-identical (a padded query behaves as its trimmed term), 2+
   terms = multiterm.go: ALL terms must match the name order-free;
@@ -739,15 +755,36 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   recencyScore (log-scaled age -> [0,1]: ~1 within the hour, ~0.5 a
   day, ~0.2 a week, 0 at 30d). Ordering: effective class (class - 1
   when boost > TierJump -- one tier max) then blended = score/64 +
-  wF*boost + wR*recency + cwd - wN*penalty DESC then the pre-blend
-  chain; weights <= 0 disable each part. The Manager holds the Blend
+  wF*boost + wR*recency + cwd - wN*penalty + prior DESC then the
+  pre-blend
+  chain; weights <= 0 disable each part. Blend.Prior is the
+  pick-memory prior seam (internal/priors wired by internal/app
+  priors.go): a per-query resolver QueryWith calls ONCE with the raw
+  query on a per-query Blend copy (unexported priorFn -- no scan path
+  or per-mode signature changes), whose returned func selectBlended
+  consults once per merged candidate as the additive prior term;
+  Prior alone activates the blend, nil resolver answers and
+  zero-returning funcs are byte-identical no-ops
+  (blendprior_test.go pins absent/zero no-op, within-class-only
+  reordering, one-resolve-per-query, and the no-resurrection
+  contract). The Manager holds the Blend
   (SetBlend/Blend; swapped as an IMMUTABLE copy -- the app's cwd
   stash swaps fresh ones); nil or zero-value-Signals blends take the
   EXACT pre-blend selectTop path, byte-identical ordering pinned by
   TestBlendInactiveIsNoOp, and pruning stays pre-blend: a candidate
   outside its shard's top-limit heap cannot be resurrected
-  (TestBlendMergedSetOnly, documented). signalstrace.go is the OPT-IN
-  ranking-signals trace seam consumed by the app's telemetry:
+  (TestBlendMergedSetOnly, documented). candCompare's FINAL
+  tie-break is the numeric-aware lexicographic path order
+  (numorder.go, always on, every query mode incl. the shard heaps --
+  selection at exact ties included): aligned digit runs compare
+  numerically DESCENDING (datestamped/versioned families newest
+  first -- the strverscmp-style lockstep walk, a true total order;
+  equal-value runs continue, any other first difference keeps plain
+  byte order, all-equal walks fall back to compareJoined); the naive
+  test references share the rule via refPathLess (search_test.go) and
+  numorder_test.go holds the family/stability pins; internal/match's
+  Rank (plugin rows) deliberately untouched. signalstrace.go is the
+  OPT-IN ranking-signals trace seam consumed by the app's telemetry:
   QueryOptions.Trace (*[]ResultSignals) + Manager.QueryTraced (Query
   itself untouched) fill one ResultSignals per returned Result --
   Path/Class/EffClass/Align/Boost/Recency/Cwd/Penalty/IsDir/PathLen,
@@ -849,14 +886,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   UNIQUE HERE: Normalize repairs only the EXACT zero to the default
   (halfLifeDays repairs <= 0), a NEGATIVE value is the documented
   per-signal off switch and passes through, and the schema rejects
-  the ambiguous literal 0 -- and telemetry {enabled, maxSizeKB 4096,
-  retainQueries}, the OPT-IN ranking telemetry knob main.go wires to
-  app.Options.Telemetry: zero value = the whole feature OFF (the
-  preview.enabled privacy precedent, deliberately NOT tray.disabled),
-  Normalize repairs maxSizeKB <= 0 while the schema rejects it, and
-  retainQueries false logs query text as "" (note the bare zero value
-  is false = the privacy-conservative direction; Default() writes
-  true)},
+  the ambiguous literal 0 -- and priors {enabled}, the OPT-IN
+  pick-memory priors knob (zero value = OFF, the preview.enabled
+  privacy precedent; a single bool, so Normalize has nothing to
+  repair) main.go wires to app.Options.Priors -- and telemetry
+  {enabled, maxSizeKB 4096, retainQueries}, the OPT-IN ranking
+  telemetry knob main.go wires to app.Options.Telemetry: zero value
+  = the whole feature OFF (the preview.enabled privacy precedent,
+  deliberately NOT tray.disabled), Normalize repairs maxSizeKB <= 0
+  while the schema rejects it, and retainQueries false logs query
+  text as "" (note the bare zero value is false = the
+  privacy-conservative direction; Default() writes true)},
   watcher {maxWatches 0 = auto-budget / negative = unlimited,
   sweepMinutes 0 = the 20m default, sweepDisabled (zero value = sweeps
   ON, the tray.disabled convention), watchExcludes
@@ -1049,6 +1089,34 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Exhaustively unit-tested, headless, table-driven: fake clocks,
   counting/blocking lstat fakes, scripted ProcTree fakes, real
   tempdir files (os.Chtimes) for the atime/mtime max path.
+- `internal/priors` -- the PURE half of the opt-in pick-memory
+  ranking priors (config search.priors, zero value = OFF; consumed by
+  internal/index's Blend.Prior seam, wired by internal/app
+  priors.go), pure stdlib and headless-tested on the
+  internal/frecency conventions (RWMutex, injectable clock,
+  nil-receiver/zero-value = total no-op, immutable swapped state).
+  Three tables per generation (Tables, built by BuildTables and
+  swapped whole via Store.SetTables): exact-query pick memory
+  (normalized query -> path -> frecency-style decayed pick weight,
+  14d half-life; term = 6*w/(1+w), the dominant within-class signal),
+  per-extension and per-dir-prefix (first 3 DIRECTORY components,
+  both separators split) smoothed pick rates ((picks+1)/(imps+20)
+  applied as a clamped log-odds nudge vs the 1/20 unseen baseline,
+  +-0.3 max per table -- the penalty/recency scale). Data sources,
+  read-only + tolerant (missing = empty + nil error, malformed lines/
+  entries skipped, oversized files ignored): the telemetry.jsonl(.1)
+  JSONL FORMAT as a data contract (ReadTelemetryFile parses only
+  v/ts/query/shown file paths/picked kind+path; non-file picks =
+  impressions only; deliberately NO internal/telemetry import) and
+  frecency.json (ReadFrecencyWeights, the {v:1,entries:{path:{c,t}}}
+  shape re-declared) whose decayed-count distributions BOOTSTRAP the
+  two rate tables while the log holds < 20 file picks -- the
+  exact-query table never bootstraps. Memory hard-capped: 2048
+  queries x 4 rows under a 512 KiB approximate byte budget (lowest
+  decayed best-weight queries evicted first), 512/2048 rate keys
+  (most-seen kept). Store.PriorFunc(query) resolves ONCE per query
+  (table-generation snapshot, no locks or allocation on the
+  per-candidate path) and returns nil when nothing applies.
 - `internal/telemetry` -- the opt-in ranking telemetry log (config
   search.telemetry, zero value = OFF; wired by internal/app's
   telemetry.go, fed by internal/index's signalstrace.go seam), pure

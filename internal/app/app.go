@@ -21,6 +21,7 @@ import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/ipc"
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/internal/preview"
+	"github.com/wow-look-at-my/competent-search-thing/internal/priors"
 	"github.com/wow-look-at-my/competent-search-thing/internal/progress"
 	"github.com/wow-look-at-my/competent-search-thing/internal/watch"
 )
@@ -257,6 +258,23 @@ type App struct {
 	frecBlend   index.Blend
 	frecWG      sync.WaitGroup
 
+	// Pick-memory priors (see priors.go in this package): the lookup
+	// store whose resolver rides frecBlend.Prior, built once at
+	// Startup when config search.priors opts in; nil otherwise --
+	// every hook then no-ops. The busy/again pair single-flights the
+	// asynchronous table rebuilds; priorsClosed stops re-arms during
+	// Shutdown's priorsWG drain.
+	priorsOnce    sync.Once
+	priorsErrOnce sync.Once
+	priorsLogOnce sync.Once
+	priorsMu      sync.Mutex // guards priorsStore, priorsDir, priorsBusy, priorsAgain, priorsClosed
+	priorsStore   *priors.Store
+	priorsDir     string
+	priorsBusy    bool
+	priorsAgain   bool
+	priorsClosed  bool
+	priorsWG      sync.WaitGroup
+
 	// Ranking telemetry (see telemetry.go in this package): the
 	// opt-in local impression/pick log. tel stays nil unless config
 	// search.telemetry.enabled turned the feature on -- RecordPick
@@ -372,6 +390,7 @@ func (a *App) Startup(ctx context.Context) {
 	// (startThemeWatch also feeds config.json hot-apply), so an
 	// external edit always diffs against a real baseline.
 	a.cfgOnce.Do(a.startConfigState)
+	a.priorsOnce.Do(a.startPriors)
 	a.telOnce.Do(a.startTelemetry)
 	a.themeOnce.Do(a.startThemeWatch)
 	// The progress printer exists before the build kick: the walk's
@@ -605,6 +624,11 @@ func (a *App) Shutdown(_ context.Context) {
 	// here and none of them can block indefinitely.
 	a.frecWG.Wait()
 
+	// Same for the priors layer's table rebuilds (bounded local file
+	// reads); the closed flag inside keeps a finishing rebuild from
+	// re-arming behind the drain.
+	a.shutdownPriors()
+
 	// Same for the telemetry appends (telemetry.go): each is one
 	// bounded file append; a pick recorded moments before quit still
 	// lands in the log.
@@ -662,6 +686,7 @@ func (a *App) Open(path string) error {
 		return err
 	}
 	a.recordOpen(path)
+	a.kickPriorsRefresh()
 	a.Hide()
 	return nil
 }
@@ -675,6 +700,7 @@ func (a *App) Reveal(path string) error {
 		return err
 	}
 	a.recordOpen(path)
+	a.kickPriorsRefresh()
 	a.Hide()
 	return nil
 }

@@ -35,9 +35,10 @@ import (
 //
 //	blended = matchScore/blendAlignDivisor
 //	        + WeightFrecency*frecency + WeightRecency*recency
-//	        + cwd - WeightNoise*noise
+//	        + cwd - WeightNoise*noise + prior
 //
-// descending, then the pre-blend tie-break chain (original class,
+// (prior = the opt-in pick-memory term, see the Blend.Prior field;
+// absent = 0) descending, then the pre-blend tie-break chain (original class,
 // alignment score, dirs first, shorter path, lexicographic path).
 // matchScore is the fuzzy-tier alignment score (0 for every other
 // class, where match quality is constant within the class and
@@ -99,6 +100,23 @@ type Blend struct {
 	// Now is the clock recency ages are measured against (tests);
 	// nil means time.Now.
 	Now func() time.Time
+	// Prior resolves the pick-memory prior lookup for one query (the
+	// app layer injects internal/priors' resolver here; config
+	// search.priors). QueryWith calls it ONCE per query with the raw
+	// query string; the returned func is consulted once per merged
+	// candidate and its value joins the blended score additively --
+	// within the effective class only, exactly like every other
+	// signal. A nil Prior, or a resolver returning nil (no learned
+	// tables apply), adds no term and costs nothing; a func returning
+	// 0 for every path orders byte-identically to no func at all
+	// (pinned by TestBlendPriorZeroIsNoOp).
+	Prior func(query string) func(path string) float64
+
+	// priorFn is the per-query resolved lookup: QueryWith binds it on
+	// a per-query Blend copy (the handed-over Blend itself stays
+	// immutable), so no scan path or per-mode query function needs the
+	// query string threaded through.
+	priorFn func(path string) float64
 
 	// trace, when non-nil, receives the delivered rows' ranking
 	// components (see signalstrace.go). Only ever set on the
@@ -111,12 +129,13 @@ type Blend struct {
 // active reports whether the blend participates in ranking at all.
 // Nil, or a zero-value Signals -- frecency disabled in config, or the
 // app never wired a store -- means selectTop takes the exact
-// pre-blend path.
+// pre-blend path. A Prior alone activates the blend too (priors can
+// run with frecency disabled).
 func (b *Blend) active() bool {
 	if b == nil {
 		return false
 	}
-	return b.Signals.Store != nil || b.Signals.Probe != nil || b.Signals.Cwd != ""
+	return b.Signals.Store != nil || b.Signals.Probe != nil || b.Signals.Cwd != "" || b.Prior != nil
 }
 
 // recencyScore maps a last-touch age onto [0, 1], log-scaled so the
@@ -213,6 +232,9 @@ func (s *Store) selectBlended(all []cand, limit int, b *Blend) []Result {
 			if tr != nil {
 				trPen[i] = p
 			}
+		}
+		if b.priorFn != nil {
+			d += b.priorFn(paths[i])
 		}
 		blended[i] = d
 		eff[i] = c.class
