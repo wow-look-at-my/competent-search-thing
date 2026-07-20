@@ -56,6 +56,8 @@ func (c *Config) Normalize() {
 	switch strings.ToLower(strings.TrimSpace(c.Watcher.Backend)) {
 	case WatcherBackendFanotify:
 		c.Watcher.Backend = WatcherBackendFanotify
+	case WatcherBackendFSEvents:
+		c.Watcher.Backend = WatcherBackendFSEvents
 	case WatcherBackendInotify:
 		c.Watcher.Backend = WatcherBackendInotify
 	default: // "", "auto", or anything unknown

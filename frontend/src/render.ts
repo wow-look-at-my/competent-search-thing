@@ -2,13 +2,19 @@
 // folder/file glyph (cloned from the <template> elements in
 // index.html), the entry name with the matched substring highlighted,
 // and the dimmed parent directory -- plus the plugin sections that
-// render below the file rows (header + rows cloned from templates,
-// icon glyph map, whitelisted --plugin-accent styling hook). Pure
+// render in the two plugin zones (priority > 0 above the file rows,
+// everything else below; header + rows cloned from templates, icon
+// glyph map, whitelisted --plugin-accent styling hook). Pure
 // text-node builders throughout: nothing here can inject markup.
 
+// RowHandlers receive the ROW ELEMENT, not a captured index: handler
+// indices are resolved at EVENT time (main.ts does rows.indexOf), so
+// rows keep working when a zone rendered later shifts their flat
+// position -- a late priority emission PREPENDS rows above the file
+// rows, which would silently stale any index captured at render time.
 export interface RowHandlers {
-  onHover(index: number): void;
-  onActivate(index: number, reveal: boolean): void;
+  onHover(row: HTMLDivElement): void;
+  onActivate(row: HTMLDivElement, reveal: boolean): void;
 }
 
 const folderTpl = document.getElementById(
@@ -107,7 +113,7 @@ export function renderResults(
 ): HTMLDivElement[] {
   const rows: HTMLDivElement[] = [];
   const frag = document.createDocumentFragment();
-  items.forEach((item, i) => {
+  for (const item of items) {
     const row = document.createElement("div");
     row.className = "result";
     row.setAttribute("role", "option");
@@ -125,15 +131,15 @@ export function renderResults(
     row.append(dir);
 
     row.addEventListener("mouseenter", () => {
-      handlers.onHover(i);
+      handlers.onHover(row);
     });
     row.addEventListener("click", (ev: MouseEvent) => {
-      handlers.onActivate(i, ev.ctrlKey || ev.metaKey);
+      handlers.onActivate(row, ev.ctrlKey || ev.metaKey);
     });
 
     frag.append(row);
     rows.push(row);
-  });
+  }
   container.replaceChildren(frag);
   return rows;
 }
@@ -168,6 +174,41 @@ export interface PluginSection {
   plugin: string; // provider id (the RunPluginAction pluginId)
   name: string; // section header display name
   results: PluginResult[];
+  // Source priority (Emission.priority; 0 when absent on the wire).
+  // priority > 0 = the section renders in #priority-results ABOVE
+  // the file rows; the value is registry-stamped metadata for builtin
+  // sources -- external plugins can never carry one.
+  priority: number;
+}
+
+// splitByPriority separates the sections for the two render zones:
+// priority > 0 renders above the file rows, everything else keeps
+// the classic below-files zone. Order within each group is left to
+// compareSections at render time.
+export function splitByPriority(sections: PluginSection[]): {
+  priority: PluginSection[];
+  normal: PluginSection[];
+} {
+  const priority: PluginSection[] = [];
+  const normal: PluginSection[] = [];
+  for (const s of sections) {
+    (s.priority > 0 ? priority : normal).push(s);
+  }
+  return { priority, normal };
+}
+
+// compareSections orders sections within a zone, fully
+// deterministically: source priority desc, then max result score
+// desc, then plugin id.
+export function compareSections(a: PluginSection, b: PluginSection): number {
+  if (a.priority !== b.priority) {
+    return b.priority - a.priority;
+  }
+  const byScore = sectionMaxScore(b) - sectionMaxScore(a);
+  if (byScore !== 0) {
+    return byScore;
+  }
+  return a.plugin < b.plugin ? -1 : a.plugin > b.plugin ? 1 : 0;
 }
 
 // PluginRowRef ties a rendered plugin row back to the data the
@@ -218,6 +259,98 @@ export function iconGlyph(icon: string | undefined): string {
   return iconGlyphs.get(icon) ?? DEFAULT_GLYPH;
 }
 
+/* --- resolved icon images ------------------------------------------ */
+
+// Rows whose result carries an iconKey (builtin app sources only; the
+// sanitizer strips it from external plugins) render their glyph
+// immediately and swap to the real icon once the batched ResolveIcons
+// answer arrives. Requests batch per render tick via queueMicrotask,
+// answers are cached frontend-side (misses too) so held keystrokes
+// re-render without IPC churn, and a row replaced before its answer
+// lands is simply skipped (isConnected). The <img> is built as a DOM
+// node with a data:-URI src assigned as a property -- NOT a markup
+// sink; the no-innerHTML rule is untouched.
+
+// ICON_SIZE is the physical pixel size requested from Go: the row
+// icon renders at 16 CSS px, and 64 stays crisp on HiDPI while small
+// enough that data URIs stay a few KB.
+const ICON_SIZE = 64;
+
+const iconUriCache = new Map<string, string>(); // key -> data URI ("" = known miss)
+let pendingIconEls = new Map<string, HTMLSpanElement[]>();
+let iconFlushQueued = false;
+
+// setIconImage swaps a glyph span's content for the resolved image.
+function setIconImage(el: HTMLSpanElement, uri: string): void {
+  const img = document.createElement("img");
+  img.className = "plugin-icon-img";
+  img.alt = "";
+  img.draggable = false;
+  img.src = uri;
+  el.replaceChildren(img);
+}
+
+// requestIcon resolves key into el: synchronously from the cache, or
+// via the next batch (the glyph already in el stands meanwhile).
+function requestIcon(el: HTMLSpanElement, key: string): void {
+  const cached = iconUriCache.get(key);
+  if (cached !== undefined) {
+    if (cached !== "") {
+      setIconImage(el, cached);
+    }
+    return;
+  }
+  const els = pendingIconEls.get(key);
+  if (els !== undefined) {
+    els.push(el);
+  } else {
+    pendingIconEls.set(key, [el]);
+  }
+  if (!iconFlushQueued) {
+    iconFlushQueued = true;
+    queueMicrotask(flushIconRequests);
+  }
+}
+
+// flushIconRequests ships one batch of pending keys to Go and fills
+// the rows in as the answer arrives. Resolution failures (no binding
+// yet, resolver unavailable) leave the glyphs standing.
+function flushIconRequests(): void {
+  iconFlushQueued = false;
+  const batch = pendingIconEls;
+  pendingIconEls = new Map();
+  if (batch.size === 0) {
+    return;
+  }
+  const app = window.go?.app.App;
+  if (app === undefined) {
+    return;
+  }
+  const keys = [...batch.keys()];
+  app
+    .ResolveIcons(keys, ICON_SIZE)
+    .then((resolved) => {
+      if (iconUriCache.size > 512) {
+        iconUriCache.clear(); // crude bound; keys are per-app, small
+      }
+      for (const key of keys) {
+        const uri = resolved?.[key] ?? "";
+        iconUriCache.set(key, uri);
+        if (uri === "") {
+          continue; // known miss: the glyph stands
+        }
+        for (const el of batch.get(key) ?? []) {
+          if (el.isConnected) {
+            setIconImage(el, uri);
+          }
+        }
+      }
+    })
+    .catch(() => {
+      /* resolver unavailable: glyphs stand, keys stay uncached */
+    });
+}
+
 // resultScore mirrors the Go sanitizer's default score.
 function resultScore(r: PluginResult): number {
   return r.score ?? 50;
@@ -232,28 +365,21 @@ function sectionMaxScore(s: PluginSection): number {
 }
 
 // renderPluginSections replaces container's children with the plugin
-// sections: an unselectable header per section (no handlers, not in
-// the returned rows), then that section's rows. Sections order by max
-// result score desc then plugin id; results within a section by score
-// desc then response order (Array.sort is stable). Handler indices
-// continue the flat selection model after the file rows, so callers
-// pass startIndex = number of file rows currently rendered.
+// sections of ONE zone: an unselectable header per section (no
+// handlers, not in the returned rows), then that section's rows.
+// Sections order by compareSections (priority desc, max score desc,
+// plugin id); results within a section by score desc then response
+// order (Array.sort is stable). Rows resolve their selection index at
+// event time (see RowHandlers), so zones can render independently.
 export function renderPluginSections(
   container: HTMLElement,
   sections: PluginSection[],
-  startIndex: number,
   handlers: RowHandlers,
 ): { rows: HTMLDivElement[]; refs: PluginRowRef[] } {
   const rows: HTMLDivElement[] = [];
   const refs: PluginRowRef[] = [];
   const frag = document.createDocumentFragment();
-  const orderedSections = [...sections].sort((a, b) => {
-    const byScore = sectionMaxScore(b) - sectionMaxScore(a);
-    if (byScore !== 0) {
-      return byScore;
-    }
-    return a.plugin < b.plugin ? -1 : a.plugin > b.plugin ? 1 : 0;
-  });
+  const orderedSections = [...sections].sort(compareSections);
   for (const section of orderedSections) {
     const secFrag = pluginSectionTpl.content.cloneNode(
       true,
@@ -267,7 +393,7 @@ export function renderPluginSections(
       (a, b) => resultScore(b) - resultScore(a),
     );
     for (const result of orderedResults) {
-      const row = buildPluginRow(result, startIndex + rows.length, handlers);
+      const row = buildPluginRow(result, handlers);
       secEl.append(row);
       rows.push(row);
       refs.push({ pluginId: section.plugin, result });
@@ -282,14 +408,16 @@ export function renderPluginSections(
 // subtitle, badge chip on the right, "label: value" fields beneath.
 function buildPluginRow(
   result: PluginResult,
-  index: number,
   handlers: RowHandlers,
 ): HTMLDivElement {
   const rowFrag = pluginRowTpl.content.cloneNode(true) as DocumentFragment;
   const row = rowFrag.firstElementChild as HTMLDivElement;
 
-  (row.querySelector(".plugin-icon") as HTMLSpanElement).textContent =
-    iconGlyph(result.icon);
+  const iconEl = row.querySelector(".plugin-icon") as HTMLSpanElement;
+  iconEl.textContent = iconGlyph(result.icon);
+  if (result.iconKey !== undefined && result.iconKey !== "") {
+    requestIcon(iconEl, result.iconKey);
+  }
   appendHighlighted(
     row.querySelector(".plugin-title") as HTMLSpanElement,
     result.title,
@@ -324,10 +452,10 @@ function buildPluginRow(
   }
 
   row.addEventListener("mouseenter", () => {
-    handlers.onHover(index);
+    handlers.onHover(row);
   });
   row.addEventListener("click", (ev: MouseEvent) => {
-    handlers.onActivate(index, ev.ctrlKey || ev.metaKey);
+    handlers.onActivate(row, ev.ctrlKey || ev.metaKey);
   });
   return row;
 }

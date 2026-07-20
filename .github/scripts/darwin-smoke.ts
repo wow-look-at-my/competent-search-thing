@@ -6,9 +6,15 @@
 // a deadline EVEN WHILE a large index build is provably running (the
 // B-midindex-window check gates on that proof) -- the exact user-reported
 // failure was `toggle` timing out with "read unix ...sock: i/o timeout"
-// during startup indexing, with no window ever appearing -- and (d) the
+// during startup indexing, with no window ever appearing -- (d) the
 // deleted legacy v1 line protocol is REJECTED: a bare-word request must earn
-// the JSON invalid-request error, never a raw "ok" (a8-legacy-rejected).
+// the JSON invalid-request error, never a raw "ok" (a8-legacy-rejected) --
+// and (e) once the big build completes, the watch layer comes up on the
+// FSEvents whole-filesystem backend (B-backend) with the process's open-fd
+// count far below kern.maxfilesperproc (B-fd-headroom) -- the regression
+// pins for the macOS field incident where unbounded per-directory kqueue
+// watches pinned the process at its fd ceiling and broke every later
+// open()/exec.
 //
 // Verdicts and evidence go to the JOB LOG. Every "SMOKE PASS: <id>" /
 // "SMOKE FAIL: <id>" line is a hard check -- there are no warn-and-continue
@@ -44,7 +50,14 @@ const CLI_RTT_MS = 2500; // `<bin> toggle|show|hide` must exit within this
 const WINDOW_DEADLINE_MS = 8000; // idle-scenario window appear/disappear budget
 const WINDOW_DEADLINE_BUSY_MS = 10000; // scenario B window budget while indexing
 const MIDINDEX_WINDOW_MS = 20000; // scenario B: progress line must appear within this
-const SCENARIO_B_CAP_MS = 180000; // hard cap on ALL of scenario B, then SIGKILL
+const B_INDEX_DONE_MS = 180000; // scenario B: the big index must then COMPLETE within this
+const WATCH_BACKEND_MS = 30000; // after completion, the watch backend line must land
+// The scenario B cap was 180s while B ended mid-index; it now waits
+// out the big build for the watch-layer gates (B-backend,
+// B-fd-headroom -- the macOS field-incident regression pins), so the
+// cap covers boot + mid-index checks + B_INDEX_DONE_MS + the watch
+// gates with margin. Still a hard kill.
+const SCENARIO_B_CAP_MS = 360000; // hard cap on ALL of scenario B, then SIGKILL
 const STOP_GRACE_MS = 5000; // SIGTERM -> SIGKILL grace on app teardown
 const POLL_MS = 250; // generic poll interval
 const WINDOW_POLL_MS = 400; // window probe interval (each probe execs winlist)
@@ -623,9 +636,68 @@ async function scenarioB(): Promise<void> {
     return r.raw.detail;
   });
 
-  const endState = INDEX_DONE_RE.test(readLog(app)) ? "completed during the checks" : "still building (as intended)";
-  core.info(`index state at scenario B end: ${endState}`);
-  // Deliberately do NOT wait for the big index; teardown SIGTERM/SIGKILLs.
+  if (capBail()) return;
+  // The macOS field-incident regression pins need the watch layer UP,
+  // and the watch layer starts only after the initial build completes
+  // -- so scenario B waits out the big build (bounded) before the
+  // backend and fd-headroom gates. Teardown still SIGTERM/SIGKILLs.
+  await check("B-index-done", () =>
+    pollFor("big index completion in the app log", B_INDEX_DONE_MS, 500, async () => {
+      if (app.proc.exitCode !== null) throw new Error(`app exited (code ${app.proc.exitCode})`);
+      const m = INDEX_DONE_RE.exec(readLog(app));
+      return m !== null ? `"${m[0].trim()}"` : undefined;
+    }),
+  );
+
+  if (capBail()) return;
+  // B-backend: the honest-label + auto-selection pin in one grep. On
+  // macOS, "auto" must resolve to the FSEvents whole-filesystem
+  // backend; a kqueue/none line here means the fd-eating
+  // per-directory fallback (or no live watching at all) is running --
+  // the exact field failure mode (17,704 watched dirs pinned the
+  // process at its fd ceiling and broke every later open()/exec).
+  await check("B-backend", () =>
+    pollFor('a "watch: backend ..." line naming fsevents', WATCH_BACKEND_MS, POLL_MS, async () => {
+      if (app.proc.exitCode !== null) throw new Error(`app exited (code ${app.proc.exitCode})`);
+      const m = /watch: backend ([a-z]+):/.exec(readLog(app));
+      if (m === null) return undefined;
+      if (m[1] !== "fsevents") {
+        throw new Error(`watch backend is "${m[1]}", want "fsevents" (line: "${m[0]}")`);
+      }
+      return `"${m[0]}" -- fsevents active`;
+    }),
+  );
+
+  if (capBail()) return;
+  // B-fd-headroom: with fsevents wide coverage the app sits at a few
+  // hundred open fds even over a big root; a regressed unbounded
+  // kqueue path lands AT the kern.maxfilesperproc ceiling. lsof rows
+  // slightly overcount fds (cwd/txt segment rows) -- the threshold
+  // absorbs that with a wide margin, and it stays valid even if
+  // scenario B's root ever shrinks (it asserts an upper bound;
+  // B-backend is the load-bearing selection pin). lsof itself is a
+  // separate process, so it works even against a target at its fd
+  // ceiling.
+  await check("B-fd-headroom", async () => {
+    const limit = parseInt(
+      child_process.execFileSync("/usr/sbin/sysctl", ["-n", "kern.maxfilesperproc"]).toString().trim(),
+      10,
+    );
+    if (!Number.isFinite(limit) || limit <= 0) {
+      throw new Error("cannot read kern.maxfilesperproc");
+    }
+    const rows =
+      child_process
+        .execFileSync("/usr/sbin/lsof", ["-n", "-P", "-p", String(app.proc.pid)], { maxBuffer: 64 * 1024 * 1024 })
+        .toString()
+        .trim()
+        .split("\n").length - 1;
+    const ceiling = Math.min(5000, Math.floor(limit / 2));
+    if (rows > ceiling) {
+      throw new Error(`fd headroom gone: lsof rows ${rows} > ceiling ${ceiling} (kern.maxfilesperproc ${limit})`);
+    }
+    return `lsof rows ${rows} <= ceiling ${ceiling} (kern.maxfilesperproc ${limit})`;
+  });
 }
 
 // ---- run ----------------------------------------------------------------------

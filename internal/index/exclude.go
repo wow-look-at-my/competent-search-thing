@@ -47,8 +47,16 @@ func NewExcluder(patterns []string) (*Excluder, error) {
 }
 
 // Match reports whether an entry with the given base name and full
-// absolute path is excluded.
+// absolute path is excluded. Exactly MatchBase || MatchFull; the walk
+// hot path calls the halves separately so it can skip materializing
+// the full path when HasFullPatterns is false.
 func (e *Excluder) Match(base, full string) bool {
+	return e.MatchBase(base) || e.MatchFull(full)
+}
+
+// MatchBase reports whether the base name alone is excluded by a
+// base-name pattern.
+func (e *Excluder) MatchBase(base string) bool {
 	if e == nil {
 		return false
 	}
@@ -57,10 +65,27 @@ func (e *Excluder) Match(base, full string) bool {
 			return true
 		}
 	}
+	return false
+}
+
+// MatchFull reports whether the full absolute path is excluded by a
+// full-path pattern.
+func (e *Excluder) MatchFull(full string) bool {
+	if e == nil {
+		return false
+	}
 	for _, p := range e.full {
 		if ok, _ := filepath.Match(p, full); ok {
 			return true
 		}
 	}
 	return false
+}
+
+// HasFullPatterns reports whether any full-path patterns exist.
+// Callers that would have to BUILD the full path just to check it
+// (the walker, for every file entry) skip that work entirely when
+// there are none.
+func (e *Excluder) HasFullPatterns() bool {
+	return e != nil && len(e.full) > 0
 }

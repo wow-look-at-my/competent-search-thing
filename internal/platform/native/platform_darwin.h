@@ -62,4 +62,15 @@ void csUnregisterHotkey(void);
 // success, 0 when there is no window yet.
 int csConfigurePanel(void);
 
+// csSetDockIcon sets the application's Dock/Cmd-Tab icon from size x
+// size PREMULTIPLIED-alpha RGBA pixels (NSBitmapImageRep's default
+// interpretation); the pixels are copied before returning. Returns 1
+// on success.
+int csSetDockIcon(const uint8_t *rgba, int size);
+
+// csObserveSpaceChanges installs (once, idempotently) the NSWorkspace
+// observer for active-Space changes; every switch calls the Go export
+// csSpaceChanged. Returns 1 once the observer is installed.
+int csObserveSpaceChanges(void);
+
 #endif

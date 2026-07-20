@@ -68,9 +68,11 @@ func (appSource) RunningApps() ([]appctx.AppInfo, bool) {
 
 // InstalledApps scans /Applications and ~/Applications for .app
 // bundles, best-effort: Name is the bundle name without .app, ID the
-// bundle directory name, and Exec an `open -a "<path>"` line in the
-// quoted syntax the plugin layer's Exec parser understands. ok is
-// false only when neither directory is readable.
+// bundle directory name, Exec an `open -a "<path>"` line in the
+// quoted syntax the plugin layer's Exec parser understands, and Icon
+// the absolute bundle path -- the darwin ref shape internal/icons
+// resolves through Info.plist + .icns extraction (see its bundle.go).
+// ok is false only when neither directory is readable.
 func (appSource) InstalledApps() ([]appctx.InstalledApp, bool) {
 	dirs := []string{"/Applications"}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
@@ -100,6 +102,7 @@ func (appSource) InstalledApps() ([]appctx.InstalledApp, bool) {
 				Name: strings.TrimSuffix(id, ".app"),
 				Exec: "open -a " + desktopQuote(full),
 				ID:   id,
+				Icon: full,
 			})
 		}
 	}

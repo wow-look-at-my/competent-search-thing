@@ -35,7 +35,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/app` -- the Wails-bound App object and its methods
   (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/DomReady/
   Shutdown/QueryPlugins/RunPluginAction/CheatSheet/GetHistory/
-  AddHistory/GetStats/RecordPick). Bound methods
+  AddHistory/GetStats/ResolveIcons/RecordPick). Bound methods
   appear in JS as `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
   saves the runtime ctx, brings up the global hotkey once through a
   session-dependent backend plan (hotkey.go: empty spec = skip, parse
@@ -101,7 +101,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   error), Open config -> openConfigFile (the !config behavior minus
   the bar-hide), Quit -> runBuiltin("quit"); the tooltip getter wraps
   hotkeyDescription(), so no shortcut is promised until one is
-  proven), starts the system-stats sampler once (stats.go in this
+  proven), arms the darwin dismiss-on-Space-change once (spaceOnce ->
+  startSpaceWatch in window.go over the plat.watchSpaceChanges seam --
+  nil off-darwin via defaultSpaceWatch, the defaultProcTree pattern;
+  production native.WatchSpaceChanges -- and the spaceChanged callback
+  runs the EXISTING Hide path only when the bar is visible, so
+  lastHide is stamped and toggle-gap dismiss semantics hold, while a
+  hidden bar keeps its pending-show latch untouched; decision (b) of
+  the space-switch ghost fix: Spotlight itself dismisses on a Space
+  switch), starts the system-stats sampler once (stats.go in this
   package: the `newStats` builder seam -- production buildStats does a
   fresh config.Load (translucent.go pattern), stats.disabled = one
   "stats: disabled in config" log + nil, else sysstats.New wired with
@@ -109,7 +117,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   log.Printf -- and a non-nil sampler is Start()ed under a dedicated
   ctx cancelled in Shutdown; the sampler idles until the bar first
   shows, so startup cost is zero and newTestApp-stubbed apps spawn
-  nothing), wires the
+  nothing), builds the icon resolver once (icons.go in this package:
+  the `newIcons` builder seam, production buildIcons =
+  icons.NewService over its defaults -- zero IO at build, the first
+  Resolve pays initialization -- behind the bound
+  `ResolveIcons(keys, size) map[string]string`, which the frontend
+  calls with batched per-render icon keys; nil resolver (newTestApp)
+  = empty non-nil maps, and resolution runs on the bound method's own
+  goroutine so the query path never waits on icon IO), wires the
   single-instance IPC handlers when Options.IPC is set (Toggle =
   toggle, Show = showIfHidden, Hide = Hide; Options.ShowOnStartup
   latches a pending show) -- wired FIRST in Startup, before
@@ -158,7 +173,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   printer too), and kicks the initial disk walk in a
   goroutine (under a cancellable context) whose ticks render through
   the printer (Done clears the line before the completion/error
-  logs); when the walk finishes,
+  logs); the BuildFromDisk window runs under a lowered GOGC
+  (gcbound.go: boundBuildGC over the plat.setGCPercent seam,
+  production debug.SetGCPercent, buildGCPercent 40, restored
+  immediately after BuildFromDisk returns on every path -- walk churn
+  otherwise doubles the peak heap at GOGC=100, and nothing else
+  bounds it on darwin where the cgroup GOMEMLIMIT guard is inert; a
+  percentage composes with any external GOMEMLIMIT, which is why
+  SetGCPercent was chosen over a derived byte limit); when the walk
+  finishes,
   `startWatch` brings up the `watch.Watcher` + `watch.Rescanner` +
   `watch.Sweeper` trio honoring the Options watcher knobs
   (WatchMaxWatches, WatchExcludes -> a second watch-only Excluder,
@@ -166,9 +189,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   SweepDisabled = no Sweeper + one loud warning; see the
   internal/watch bullet), then announces the effective backend ONCE:
   `watchBackendFor(st.Backend)` builds the "watch:backend" payload
-  {backend "fanotify"|"inotify"|"none", full bool (fanotify only),
-  hint string (empty when full; the pinned hintPartialWatch /
-  hintWatchOff texts otherwise, hintWatchFailed when the watcher
+  {backend "fanotify"|"fsevents"|"inotify"|"kqueue"|"windows"|
+  "none", full bool (fanotify AND fsevents), hint string (empty when
+  full; the pinned hintPartialWatch (linux/windows per-dir) /
+  hintPartialWatchDarwin (kqueue -> points at fsevents, not setcap) /
+  hintWatchOff (generalized: "the configured backend is required but
+  unavailable") texts otherwise, hintWatchFailed when the watcher
   itself failed to start -> backend forced to "none")}, and when NOT
   full `logFanotifyGrant()` first logs -- once per App, linux only
   (plat.goos), the grant line BEFORE the emit (tests synchronize on
@@ -354,24 +380,28 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (once, from startWatch; see above), "app:shown", "theme:changed" (no
   payload; frontend refetches GetTheme/GetCustomCSS),
   "plugin:results" (payload plugin.Emission
-  {plugin,name,gen,results}), "stats:update" (payload
+  {plugin,name,gen,results,priority} -- priority omitempty, > 0 =
+  the frontend's above-files zone), "stats:update" (payload
   sysstats.Snapshot {enabled,cpuPct,cpuOk,gpuPct,gpuOk,memUsed,
   memTotal,memOk,swapUsed,swapTotal,swapOk,netRxBps,netTxBps,netOk};
   enabled always true on the event -- it only ever fires from a live
   sampler). ALL Wails
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
-  incl. run/activateWindow/configurePanel/appSource plus getenv/executable/args0/detectSession/
+  incl. run/activateWindow/configurePanel/watchSpaceChanges/appSource plus getenv/executable/args0/detectSession/
   startPortal/ensureGnomeBinding/procTree AND the launch seams --
   open/reveal/run take extraEnv now (reveal also startupID),
   launchExec, resolveHandler, handlerByID, mintCredential,
   prepareLaunch, dbusLaunch, watchState, snRemove -- in window.go;
   defaults in New, plus
-  the `newRegistry`, `newTray`, `newStats` and `newProgress` seams);
+  the `newRegistry`, `newTray`, `newStats`, `newProgress` and
+  `newIcons` seams);
   unit tests MUST
   replace them (see
-  newTestApp, which also nils appSource AND procTree, stubs
-  newRegistry, newTray, newStats
+  newTestApp, which also nils appSource, procTree AND
+  watchSpaceChanges (non-nil on the darwin CI job's production
+  seams), stubs
+  newRegistry, newTray, newStats, newIcons
   AND newProgress (an inert non-TTY io.Discard printer) so no config,
   X11, session-bus, /proc//sys or global-log-output IO
   happens, pins goos to
@@ -670,9 +700,25 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   path-suffix >
   path-prefix > substring with the same tie-breaks. `Walk`: parallel walker (worker
   pool + LIFO queue) with exclude patterns (`Excluder`: bare pattern
-  = base name, pattern with separator = full path), symlinks indexed
+  = base name, pattern with separator = full path; Match =
+  MatchBase || MatchFull exactly, split plus HasFullPatterns for the
+  walker hot path), symlinks indexed
   but never descended, permission errors counted not fatal, throttled
-  progress callbacks. `Manager`: owns the RWMutex contract (queries
+  progress callbacks. WALK ALLOCATION DIET (2026-07, recon-measured
+  438 B / 4.26 allocs per entry before): base-name excludes are
+  checked FIRST without any join; FILE entries join their full path
+  into a per-worker reusable scratch buffer and hand MatchFull an
+  unsafe.String view (nothing down that call retains or mutates it;
+  only taken when HasFullPatterns) so no per-file path string is ever
+  allocated, while DIRECTORY entries materialize the real string once
+  and walkItem.full carries it into appendEntry -- whose signature is
+  (pid, name, dirPath, isDir), interning the caller's string instead
+  of re-joining (AddEntry joins for itself) -- and growChildren
+  presizes children[pid] to the exact batch size before the append
+  loop, so walk-built children slices end at cap == len (the
+  append-ladder's measured 1.32x overshoot and copy churn are gone;
+  pinned by TestWalkChildrenPresized, the scratch path by
+  TestWalkFullPathPatternOnFiles + TestAppendJoinDir). `Manager`: owns the RWMutex contract (queries
   RLock, mutations Lock); `BuildFromDisk` walks into a fresh store and
   swaps it in, so queries keep working during rebuilds -- and first
   recomputes the mount skip list (mounts.go: `SystemMountSkips` reads
@@ -743,8 +789,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   ON, the tray.disabled convention), watchExcludes
   (json omitempty; excluder-syntax patterns never LIVE-WATCHED but
   still indexed + swept), backend (json omitempty; the
-  WatcherBackend* constants "auto"/"fanotify"/"inotify" -- fanotify =
-  STRICT, no inotify fallback; Normalize trims+lowercases and repairs
+  WatcherBackend* constants "auto"/"fanotify"/"fsevents"/"inotify" --
+  fanotify (linux) and fsevents (darwin) = STRICT, no per-dir
+  fallback, and "kqueue" is deliberately NOT a config value (runtime
+  label only); Normalize trims+lowercases and repairs
   empty/unknown to "auto", schema enum in lockstep) -- main.go copies
   all five into app.Options
   {WatchMaxWatches, SweepInterval, SweepDisabled, WatchExcludes,
@@ -795,15 +843,35 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   .pytest_cache .ruff_cache .tox .nox .venv, the v3 high-churn set) +
   the system trees (/proc /sys /dev /run /tmp /var/tmp full-path +
   lost+found by name; unix-likes only -- windows gets the name
-  patterns without system trees). rootsVersion (0 = legacy, current
-  3) drives the one-shot Load migration, each missing step applied in
+  patterns without system trees) + firmlinkExcludesFor (darwin only:
+  /System/Volumes/Data full-path -- the APFS Data volume macOS ALSO
+  exposes at the firmlinked canonical paths /Users, /Applications,
+  ..., so an unguarded "/" walk indexes ~45% of the disk twice) +
+  darwinNoiseExcludesFor (darwin only, the v5 set: Caches,
+  DerivedData, _CodeSignature, CodeResources by name +
+  /private/var/folders full-path -- macOS's real per-user temp tree,
+  the /tmp and /var/tmp excludes only cover the symlinked spellings;
+  wholesale .app/.framework internals and Application Support are
+  DELIBERATELY not excluded -- they change search semantics and
+  await an owner decision).
+  rootsVersion (0 = legacy, current
+  5) drives the one-shot Load migration (migrateRootsFor; goos is a
+  parameter so tests cover the darwin shape headlessly), each missing
+  step applied in
   order: the v2 step moves configs whose roots are exactly the legacy
   home default (or empty) to the new default roots + appends the
   missing system excludes (user patterns untouched; customized roots
   stamped only); the v3 step appends the MISSING noiseExcludes -- but
   ONLY when the exclude list still contains ALL of baseExcludes
   (default-shaped); a curated-away or explicitly empty list is
-  stamped only, with an informational note. Either way version 3 is
+  stamped only, with an informational note; the v4 step applies the
+  identical policy to the darwin firmlink exclude (non-darwin = pure
+  stamp, nothing added or announced); the v5 step applies it AGAIN to
+  darwinNoiseExcludesFor -- a NEW version rather than an extension of
+  v4, so configs a v4-era build already stamped still receive it --
+  and each step is gated on its
+  own version so already-fired informational notes never repeat.
+  Either way version 5 is
   Saved back, and every user-visible change lands in the
   non-serialized MigrationNotes (json:"-") that internal/app logs
   loudly at startup -- the scope never changes silently. `Load` never crashes: missing file -> defaults
@@ -967,13 +1035,51 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   SysRoot "/sys", GOOS
   runtime.GOOS, Interval 1500ms, GPUInterval 5s, GPUTimeout 1s,
   LookPath exec.LookPath, OnUpdate, Logf; unexported test seams
-  gpuExec + now})` probes sources ONCE, cheaply (no subprocess
-  spawns): GOOS != linux = zero sources + one "placeholders" log;
+  gpuExec + now + darwin})` probes sources ONCE, cheaply (no
+  subprocess spawns), by a GOOS switch: windows/unknown = zero
+  sources + one "placeholders" log;
   linux = the three proc files assumed present, GPU = first readable
   glob hit of SysRoot/class/drm/card*/device/gpu_busy_percent
   (amdgpu) else LookPath("nvidia-smi") else none (intel: deliberately
   absent, no cheap sysfs busy%), all summarized in ONE "stats:
-  sources: cpu=... gpu=..." line. THE invariant: nothing outside the
+  sources: cpu=... gpu=..." line; darwin = the darwinReaders seam
+  (Options.darwin, else newDarwinReaders -- binding only, zero IO at
+  probe time) + its own accurate source line ("cpu=host_statistics
+  mem=vm_statistics64+hw.memsize swap=vm.swapusage net=sysctl(iflist2)
+  gpu=none"), while a readers value with nothing bound (the !darwin
+  stub) degrades to the placeholders path. DARWIN LAYOUT (the
+  fixture tests must keep running on BOTH CI jobs, so the split is
+  VALUE-driven, build tags confined to the thin readers): darwin.go
+  is UNTAGGED pure logic -- the darwinReaders struct (cpuTicks/
+  memTotal/vmStat/swapRaw/ifRIB/ifNames; nil member = that metric
+  degrades alone), cpuCountersFromTicks (busy=user+system+nice,
+  total=busy+idle; uint32 tick wraps take the linux skip-one-update
+  path), memFromVMStat = Activity Monitor's "Memory Used"
+  ((internal - purgeable clamped at 0) + wired + compressor pages *
+  pageSize -- NOT total-free, which macOS's tiny free_count makes
+  meaningless), decodeXswUsage (vm.swapusage xsw_usage: LE uint64s
+  at 0/8/16, min len 24; total 0 = the valid empty-dynamic-swap
+  dash), decodeIfList2 (bounds-checked NET_RT_IFLIST2 walker, the
+  fanotify_parse pattern: 4-byte prologue, advance by ifm_msglen,
+  RTM_IFINFO2=0x12 records read ifm_index@12 + if_data64 64-bit
+  ibytes/obytes@96/104; malformed lengths error, zero usable records
+  error -- never a silent zero), the SEPARATE darwin iface filter
+  (skip lo/gif/stf/awdl/llw/utun/ap/bridge/anpi/pktap/feth/vmnet;
+  keep en* -- Wi-Fi IS en0 on Macs -- and bond*), and the
+  sampleCPUDarwin/sampleMemDarwin/sampleNetDarwin bodies;
+  readers_darwin.go (the package's ONE cgo file, darwin-only) binds
+  host_statistics/host_statistics64+host_page_size (mach ports
+  deallocated per call) + unix.SysctlUint64("hw.memsize") +
+  unix.SysctlRaw("vm.swapusage") + syscall.RouteRIB(NET_RT_IFLIST2)
+  (deprecated-but-kept: x/net/route exposes NO darwin byte counters
+  -- verified) + net.Interfaces; readers_other.go (!darwin) binds
+  nothing. sampleCPU/sampleMem/sampleNet dispatch on s.dwn != nil
+  and share the extracted updateCPURate/updateNetRate with linux
+  (byte-identical linux behavior); sampleGPU is untouched -- darwin
+  GPU is the DELIBERATE dash (GPUOK false, gpu=none in the probe
+  log; the IOKit IOAccelerator "PerformanceStatistics" route is the
+  documented future source, the "intel: deliberately absent"
+  precedent). THE invariant: nothing outside the
   sampler goroutines ever does IO -- Snapshot() is a mutex-guarded
   copy, SetVisible(v) is a flag flip (+ non-blocking 1-buffered kick
   send on true), and while hidden the loops sample NOTHING, so the
@@ -1008,7 +1114,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   math on a fake clock, full lifecycle over a real loop, nvidia fake
   incl. ctx-deadline + real /bin/sh subprocess kill) plus
   BenchmarkSample: one full fast-path sample against the real /proc
-  (skips where unreadable). Consumed by internal/app's stats.go.
+  (skips where unreadable). darwin_test.go is UNTAGGED (synthetic
+  xsw_usage/RIB buffers, scripted fakeDarwin readers with call
+  counts, GOOS "darwin" + injected seam lifecycle incl. the
+  hidden-reads-nothing proof -- runs on linux CI AND the mac job;
+  the nil-seam stub expectation is runtime.GOOS-gated);
+  readers_darwin_test.go (darwin-only) real-calls every production
+  reader on the mac runner (tick monotonicity, memsize/vm_stat
+  sanity, real-RIB decode against the documented offsets, and a
+  two-real-samples end-to-end with live cpu/net + the GPU dash).
+  Consumed by internal/app's stats.go.
 - `internal/theme` -- design-token resolution. WARNING: the 22
   `TokenNames` (bg, bg-elevated, fg, fg-dim, accent, accent-fg,
   selection-bg, selection-fg, border, highlight, warning, badge-bg,
@@ -1066,7 +1181,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (Request/Response/Result/Action, v=1; Result also carries Keywords
   <=8x64 runes -- extra engine match texts -- and MatchRanges <=32
   half-open RUNE pairs on Title, normalizeRanges clamps/sorts/merges
-  against the post-truncation title; Action carries the
+  against the post-truncation title; Result carries the INTERNAL-ONLY
+  IconKey json:"iconKey" -- the "app:<ref>" icon-resolution key the
+  frontend hands to ResolveIcons for a real icon image, stamped by
+  the builtin app sources and CLEARED by the sanitizer on every
+  external result (image icons are a trusted-source capability;
+  InstalledApp mirrors the appctx Icon ref json:"icon" for the
+  purpose); Action carries the
   INTERNAL-ONLY DesktopID json:"desktop_id" -- the .desktop entry
   behind a builtin run_command launch, consumed by the app's
   credentialed launch path) and `SanitizeResponse`, which
@@ -1121,7 +1242,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   per-provider 5s-throttled logging (throttle.go), focused boost
   added and clamped at 100, emit only with results and only while ctx
   is live -- emit runs on provider goroutines and MUST be
-  goroutine-safe. Routing: resolved bang (exact/alias/unique-prefix)
+  goroutine-safe. SOURCE PRIORITY (placement metadata, NEVER a
+  score): `prioritized` (engine.go, the watch backendInfo
+  optional-extension pattern) is `priority() int`; Emission gains
+  Priority (json priority,omitempty) stamped in dispatchOne and
+  CheatSheet via providerPriority (type assertion, absent = 0).
+  Only apps-search implements it (sourcePriorityApps = 1, the
+  above-file-results placement); the targeted apps provider stays 0
+  (bang queries have no files to outrank), and external plugins can
+  NEVER set it -- the wire Response has no priority field and
+  *externalProvider does not implement the extension (pinned by
+  TestSourcePriorityMetadata + TestExternalEmissionPriorityAlwaysZero
+  + TestPriorityNeverChangesMintedScores: the mint is byte-identical,
+  bands untouched). Routing: resolved bang (exact/alias/unique-prefix)
   + space => ONLY that provider, all trigger gating bypassed;
   bare/partial/ambiguous or resolved-without-space sigil => ONLY the
   builtin suggestions provider; bang-shaped text with zero candidates
@@ -1142,15 +1275,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   snapshot (empty query = first 15 alphabetical, prefix 100 /
   substring 80, cap 15, run_command argv via `parseDesktopExec`:
   quotes, backslash escapes, %-field codes stripped; the shared
-  scoring/sort/cap/result-build helper is `collectAppResults`, whose
+  candidate builder is `appCandidates`, whose
   actions also carry DesktopID = the InstalledApp.ID so the app can
-  launch with activation credentials);
+  launch with activation credentials, and whose Results carry the
+  internal-only IconKey "app:<Icon ref>" when the installed app has
+  one -- the frontend's real-icon hook);
   builtin_apps_search.go "apps-search"/Apps -- installed apps in
   NORMAL results: no bangs, a real all_queries Trigger (match
-  override on builtinBase, effective min 2 runes), ranking exact 100
-  / prefix 90 / word-start 75 (words = letter/digit runs, so spaces,
-  hyphens, dots split) / substring 60, cap 6, same run_command
-  launch; bang routing keeps it exclusive with the targeted !app
+  override on builtinBase, effective min 2 runes), the shared
+  engine's canonical bands over the app name (words = letter/digit
+  runs, so spaces, hyphens, dots split), cap 6, same run_command
+  launch, and THE one prioritized source (priority() = 1 -> its
+  Emission renders above the file results); bang routing keeps it
+  exclusive with the targeted !app
   path, and a nil/empty snapshot emits nothing;
   builtin_openwindows.go "windows"/Open Windows -- also in the normal
   fan-out (no bangs; own all-queries match, min 2 runes of
@@ -1354,12 +1491,54 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   with the process RAM figure resampled at most once per second;
   `Done()` erases and resets all render/throttle state (safe when
   nothing rendered); `TTY()`; `IsTerminal(*os.File)`; mem.go `RAM()`
-  (platform RSS via rss_{linux,darwin,windows}.go, runtime Sys
+  (platform CURRENT footprint via rss_{linux,darwin,windows}.go --
+  linux /proc/self/statm, windows WorkingSetSize, darwin mach
+  task_info TASK_VM_INFO phys_footprint (Activity Monitor's figure)
+  through the package's ONE cgo file footprint_darwin.go (the
+  sysstats readers_darwin.go pattern; darwin builds need cgo, which
+  Wails already requires) with getrusage ru_maxrss -- the PEAK, in
+  bytes on darwin -- as the mach-failure fallback; runtime Sys
   fallback) / `RAMString()` / `FormatBytes` (decimal MB/GB, one
   decimal). All methods goroutine-safe. Consumed by internal/app's
   progress.go (the `newProgress` seam).
+- `internal/icons` -- result-row icon resolution to data URIs behind
+  the app's bound ResolveIcons, pure and headless-tested (every input
+  dir and external command sits behind Options seams). Key protocol
+  (the frontend wire contract): "dir", "file:<basename>",
+  "app:<ref>". NewService does NO IO; the first Resolve pays
+  initialization (mime-db load + gsettings/settings.ini theme
+  detection), and everything is served through a positive + negative
+  (name|size)->URI LRU (512 entries each) under one mutex.
+  Linux/freedesktop half (#37): theme.go/lookup.go/mimedb.go -- the
+  detected GTK theme + Inherits chain + Adwaita/hicolor, exact size
+  match then closest, then unthemed/pixmap fallbacks; absolute
+  .png/.svg refs served directly; 1 MiB MaxFileBytes cap. Darwin half
+  (bundle.go + plist.go + icns.go): an "app:" ref that is an ABSOLUTE
+  path ending ".app" (case-insensitive -- the ref SHAPE selects the
+  branch, so fixture bundles test it on any OS) resolves
+  Contents/Info.plist -> CFBundleIconFile (".icns" appended when
+  extension-less; separators/".."/non-.icns rejected) ->
+  Contents/Resources/<file> -> icnsBestPNG. plist.go is a
+  hand-rolled bounded bplist00 reader (trailer + offset table + dict/
+  ASCII/UTF-16 strings/int extended counts ONLY -- the mozLz4
+  precedent, no plist dep; caps 65536 objects / 4096-rune strings)
+  plus an encoding/xml fallback matching the same root-dict-only
+  semantics (nested decoys never match). icns.go walks the container
+  (4CC + BE length entries) and passes through the best PNG-magic
+  payload -- smallest nominal size covering the want, else largest
+  below, else unknown-size band; NO image decoding ever -- skipping
+  legacy RLE/JPEG-2000 payloads and entries over 512KB
+  (maxIcnsEntryBytes; plist capped 4 MiB, icns container 32 MiB via
+  stat-first readCapped). CFBundleIconName-only (Assets.car) apps
+  are a DELIBERATE miss (negative-cached -> glyph fallback; est.
+  5-15% of /Applications, measured by the darwin-only
+  real_darwin_test.go which runs un-gated on the mac job and fails
+  only when a POPULATED /Applications resolves nothing). Consumed by
+  internal/app icons.go (the newIcons seam).
 - `internal/appctx` -- app-context collection for the plugin system,
-  pure and headless-tested: the data types (AppInfo / InstalledApp /
+  pure and headless-tested: the data types (AppInfo / InstalledApp
+  (incl. Icon -- the platform icon ref: .desktop Icon= on linux, the
+  .app bundle path on darwin, empty on windows) /
   WindowInfo (ID uint32/Title/App/PID) /
   Snapshot -- deliberately NOT internal/plugin's wire types, the app
   layer converts), the `Source` seam (FocusedApp/RunningApps/
@@ -1477,9 +1656,21 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   for the 750-line cap): a bounded HOT SET of fsnotify watches --
   fsnotify uniform on ALL platforms, never recursive.
   `Options.MaxWatches` (config watcher.maxWatches -> app.Options
-  .WatchMaxWatches): 0 = auto (linux min(max_user_watches/2,
-  65536), floor 1024, via the `readMaxWatches` seam; non-linux/read
-  failure = unlimited watch-everything), negative = unlimited.
+  .WatchMaxWatches): 0 = auto via TWO per-OS seams (`readMaxWatches`
+  raw limit + `autoBudget` formula, production bindings in
+  budget_{linux,darwin,other}.go; both formulas live untagged in
+  watch.go so every job tests both): linux = autoBudgetInotify
+  (min(max_user_watches/2, 65536), floor 1024), darwin =
+  autoBudgetDarwinFD over readFDLimit (fdlimit_darwin.go, read-only
+  Getrlimit -- NEVER add a Setrlimit: the Go runtime already raises
+  the soft limit at init and restores the original in exec'd
+  children; min(RLIMIT_NOFILE/16, 8192), floor 256, /16 because
+  kqueue opens one fd per watched dir PLUS one per direct child
+  file -- the unbudgeted model pinned a field machine at its fd
+  ceiling), elsewhere/read failure = unlimited watch-everything;
+  negative = unlimited. `FormatBudget` renders math.MaxInt as
+  "unlimited" in BOTH budget log lines (events.go fill summary +
+  the app summary), never the raw digits.
   `Options.WatchEx` (config watcher.watchExcludes; a SECOND
   index.Excluder distinct from the walk one): matching dirs AND
   their whole subtrees (watchExcluded walks ancestors -- the walk
@@ -1505,23 +1696,53 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   paths filtered with the SAME `index.Excluder` as the walks. The
   notifier seam (notify.go; optional `backendInfo` extension = kind()
   name + wideCoverage) keeps unit tests scripted; integration
-  tests run real inotify. BACKEND SELECTION: New binds
+  tests run real inotify/kqueue. The production per-dir `fsnotifier`
+  implements backendInfo too: kind() = (`PerDirBackendName()`, false)
+  -- the HONEST per-OS label ("inotify" linux, "kqueue" darwin+BSDs,
+  "windows" windows; also the New-time Stats default), exported for
+  app_test's per-GOOS assertions. BACKEND SELECTION: New binds
   `newBackendNotifier(Options.Backend, normalized roots)` (notify.go;
   config watcher.backend -> app.Options.WatchBackend): "inotify" =
-  plain fsnotify, no fanotify probe; "fanotify" = STRICT
-  `newStrictFanotifyNotifier` (fanotify_linux.go + the
-  fanotify_other.go always-none twin) -- constructor failure = one
-  LOUD 'backend "fanotify" required by config but unavailable ...
-  live watching DISABLED' line + the no-op `noopNotifier` (notify.go:
+  plain fsnotify on every OS, no whole-filesystem probe; "fanotify"
+  and "fsevents" = STRICT `newStrictFanotifyNotifier` /
+  `newStrictFSEventsNotifier` (per-OS: fanotify_linux.go +
+  fsevents_darwin.go carry their own-OS strict + auto selections,
+  fanotify_other.go is now `!linux && !darwin`, fsevents_other.go =
+  `!darwin`; off its OS each strict mode is the loud
+  always-unavailable noop) -- constructor failure = one LOUD
+  'backend "..." required by config but unavailable ... live
+  watching DISABLED' line + the no-op `noopNotifier` (notify.go:
   accepts everything, delivers nothing, kind ("none", wide) so
   Watched/IndexedDirs stay 0 and addInitialWatches logs no
-  marks-active line for it; sweeps converge), NEVER an inotify
-  fallback; anything else = `newAutoNotifier` (fanotify_linux.go; the
-  fanotify_other.go twin is plain fsnotify) -- try the fanotify
-  whole-filesystem notifier, ANY constructor error = one log line +
-  per-directory fsnotify fallback. The `newFanotifyFn` package var is
-  the constructor seam both selections probe (scripted in tests, no
-  CAP_SYS_ADMIN needed). fanotifyNotifier: ONE
+  coverage-active line for it; sweeps converge), NEVER a per-dir
+  fallback; anything else = `newAutoNotifier` -- linux tries
+  fanotify, darwin tries fsevents, windows/BSDs go straight to
+  per-dir fsnotify; ANY constructor error = one log line +
+  per-directory fallback. The `newFanotifyFn` / `newFSEventsFn`
+  package vars are the constructor seams the selections probe
+  (scripted in tests, no privileges needed). FSEVENTS BACKEND
+  (fsevents_darwin.{go,h,c} cgo over CoreServices +
+  fsevents_events.go, the UNTAGGED pure half unit-tested on linux
+  CI too): ONE FSEventStreamCreate over the roots'
+  EvalSymlinks-RESOLVED spellings (FileEvents|NoDefer, sinceNow,
+  latency 0.3s, callbacks on a private serial dispatch queue via
+  FSEventStreamSetDispatchQueue -- no run loop), a cgo.Handle
+  trampoline (launchmint pattern) feeds handleBatch -> `fseDecide`
+  per record: overflow flags (MustScanSubDirs/UserDropped/
+  KernelDropped/IdsWrapped) -> the fsnotify overflow sentinel
+  (degrade + sweep) AND MustScanSubDirs still emits its subtree
+  root; content/metadata-only flags dropped (the Write/Chmod
+  analogue; flags==0 KEPT, fail open); `fsePathTranslator` maps
+  resolved prefixes back to configured spellings (/tmp ->
+  /private/tmp forking guard); paths outside the roots dropped
+  (stream-on-"/" sees everything). Close ordering is load-bearing:
+  closed flag -> FSEventStreamStop/Invalidate/Release -> dispatch
+  queue DRAIN (dispatch_sync_f) -> only then cgo.Handle delete +
+  channel closes. fsevents_darwin_test.go runs REAL FSEvents
+  un-gated on the mac job (delivery incl. symlink translation,
+  watcher-level convergence, scripted selections, handleBatch
+  overflow paths -- the integration twin CI's unprivileged fanotify
+  cannot have). fanotifyNotifier: ONE
   FAN_CLASS_NOTIF|FAN_REPORT_DFID_NAME|FAN_CLOEXEC|FAN_NONBLOCK
   group; FAN_MARK_FILESYSTEM marks (mask CREATE|DELETE|MOVED_FROM|
   MOVED_TO|ONDIR; FAN_RENAME deliberately unused) on every root's
@@ -1558,7 +1779,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   overflow = lost events -> Sweeper.Request when wired, else
   Rescanner fallback; OnDegraded edge-triggered once -> app's
   "watch:degraded".
-  Stats{Backend "inotify"|"fanotify"|"none" (strict mode refused: no
+  Stats{Backend "inotify"|"kqueue"|"windows" (per-dir, per-OS honest)
+  |"fanotify"|"fsevents" (wide)|"none" (strict mode refused: no
   live watching, sweeps only), Budget, WatchedDirs,
   IndexedDirs, DroppedWatches, Evictions, Overflows, Degraded};
   `InitialRegistration()` closes when the first fill finished (the
@@ -1675,7 +1897,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   deterministically); the icon is a magnifier DRAWN IN CODE (icon.go,
   analytic coverage rasterizer, stdlib math only, no assets) at
   22/24/48 px in ARGB32 network byte order (bytes A,R,G,B, straight
-  alpha -- v42 argbToRgba parses exactly that); ToolTip
+  alpha -- v42 argbToRgba parses exactly that; rgba.go's exported
+  `MagnifierRGBA(size)` is the one PREMULTIPLIED-RGBA variant of the
+  same rasterizer, consumed by the darwin Dock icon in
+  internal/platform/native panel_darwin.go); ToolTip
   (sa(iiay)ss) carries Title + the summon-shortcut text, re-read from
   the Tooltip getter at every (re-)registration and announced via
   NewToolTip on change (GNOME's extension ignores tooltips; KDE
@@ -1834,7 +2059,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (panel_darwin.go over csConfigurePanel; panel_other.go = false on
   !darwin): the Spotlight-style collectionBehavior canJoinAllSpaces
   + fullScreenAuxiliary + ignoresCycle plus hidesOnDeactivate NO on
-  the first NSWindow, false while no window exists yet.
+  the first NSWindow, false while no window exists yet -- and it
+  FIRST sets the Dock/Cmd-Tab icon once (dockIconOnce ->
+  tray.MagnifierRGBA(128) -> csSetDockIcon: NSBitmapImageRep over
+  premultiplied RGBA -> NSApp.applicationIconImage; the raw-binary
+  install ships no .app bundle/.icns, so a bare Mach-O would show the
+  generic icon while running). WatchSpaceChanges
+  (spacewatch_darwin.go + the !darwin always-false stub): the
+  NSWorkspaceActiveSpaceDidChangeNotification observer
+  (csObserveSpaceChanges, block-based, token retained forever under
+  MRC -- the shim compiles without ARC) feeding the csHotkeyFired
+  channel pattern (buffered(1), non-blocking send, one app-lifetime
+  drain goroutine) into the first caller's onChange -- the app's
+  dismiss-on-Space-change (window.go spaceChanged).
   display_darwin.go also carries `#cgo LDFLAGS: -framework
   UniformTypeIdentifiers` on Wails' behalf: the v2 darwin frontend
   references UTType without linking that framework, and newer Xcode
@@ -1915,7 +2152,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   darwin = NSWorkspace via the Cocoa shim (frontmostApplication /
   runningApplications with regular activation policy; Title always
   empty -- titles need the AX API), InstalledApps = /Applications +
-  ~/Applications *.app scan (Exec = `open -a "<path>"`).
+  ~/Applications *.app scan (Exec = `open -a "<path>"`, Icon = the
+  absolute bundle path -- internal/icons' darwin ref shape).
   windows/darwin files compile only on their OSes -- the CI `linux`
   job builds linux/amd64 + a windows/amd64 cross-compile but only
   ever RUNS the linux binary, and the `darwin` job cgo-compiles
@@ -1924,9 +2162,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `wails.json` -- Wails CLI project config (app name, frontend
   install/build commands) read by `wails dev`/`wails build` only; the
   no-CLI go-toolchain path does not use it.
-- `frontend/` -- vanilla TypeScript + Vite. No framework. `index.html`
+- `frontend/` -- vanilla TypeScript + Vite. No framework. Tiny vitest
+  + jsdom suite (`npm test` = `vitest run`; vitest.config.ts +
+  src/test-setup.ts, which loads the REAL index.html body into jsdom
+  before render.ts's module-load template grabs, so the DOM-order
+  tests fail if the zones/templates change shape; src/priority.test.ts
+  pins priority-above-files rendering, the flat traversal order, and
+  the reconcileSelection rules -- run in the CI linux job's frontend
+  step). `index.html`
   (query row with inline SVG magnifier + hidden bang chip; #results
-  split into #file-results / static #empty ("No matches") /
+  split into #priority-results (plugin sections with priority > 0,
+  ABOVE the files) / #file-results / static #empty ("No matches") /
   #plugin-results zones; status bar + degraded chip + backend chip;
   the #stats row
   BELOW the status bar -- the bottom-most chrome, five STATIC
@@ -1974,10 +2220,24 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   picked rank, the action kind + revealed flag), a Go-side no-op
   unless search.telemetry opted in;
   "plugin:results" emissions are dropped unless gen === seq, else
-  upsert that plugin's section (keyed by id) and re-render the plugin
-  area BELOW the file rows, never displacing them; selection is one
-  flat list, file rows then plugin rows: ArrowUp/Down wrap, Home/End,
-  hover -- selection scrollIntoView fires ONLY for keyboard/auto-
+  upsert that plugin's section (keyed by id; priority = e.priority ??
+  0) and renderPluginArea re-renders BOTH plugin zones
+  (render.ts splitByPriority: priority > 0 -> #priority-results above
+  the file rows -- the apps section -- everything else below;
+  compareSections = priority desc, max score desc, plugin id);
+  selection is one flat list in DOM order -- priority rows, then file
+  rows, then below-zone plugin rows: ArrowUp/Down wrap, Home/End,
+  hover; row handlers resolve their index at EVENT time
+  (rows.indexOf(row) -- render-time captured indices went stale when
+  a late priority emission PREPENDED rows above the files), and every
+  re-render reconciles the selection through selection.ts
+  reconcileSelection: userNavigated (set by arrows/Home/End/hover,
+  cleared per generation in runSearch) preserves the selected item BY
+  IDENTITY at its shifted index, while an un-navigated bar re-runs
+  auto-select on row 0 so a late apps section takes the selection
+  Spotlight-style (never at a blank query -- the cheat sheet stays
+  unselected, and its section is always priority 0/below);
+  selection scrollIntoView fires ONLY for keyboard/auto-
   select navigation (applySelection/select carry a scroll flag;
   hover and the plugin-area re-render select without scrolling, so
   they never move the viewport), and wheel input on #results is
@@ -2038,7 +2298,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   subtitle/badge/"label: value" fields; the builtin icon-name -> glyph
   map (calculator globe clock star info warning link terminal text
   hash bolt app puzzle; unknown/absent -> puzzle, non-name values
-  render as literal glyphs); accent_color is ONLY ever applied by
+  render as literal glyphs); REAL app icons: a row whose result
+  carries the internal-only iconKey renders its glyph, requestIcon
+  batches the pending keys per render tick (queueMicrotask) through
+  the bound ResolveIcons(keys, 64), and setIconImage swaps the glyph
+  span's content for an <img class="plugin-icon-img"> whose src is
+  the Go-minted data URI -- a DOM-node build with a property-assigned
+  src, NOT a second innerHTML sink; answers (misses included) land in
+  a module-level cache (cleared past 512 keys), stale rows are
+  skipped via isConnected, and a missing binding/miss leaves the
+  glyph standing; accent_color is ONLY ever applied by
   setting the `--plugin-accent` custom property on the row -- never
   inline color styles) + `src/theme.ts` (initTheme called first in
   wire(): fetches GetTheme and sets each token as `--sb-<k>` on
@@ -2123,9 +2392,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   window field and the internal desktop_id the frontend echoes back
   unchanged)/PluginResult/PluginEmission plus the preview contract
   Preview{Target,Payload,ConfigInfo,MetaRow,Text,Image,Dir,DirEntry,
-  Web,WebResult,AI} and the four preview bound methods, plus the
-  telemetry report contract Telemetry{PickReport,ShownRef,PickedRef}
-  and RecordPick -- keep in
+  Web,WebResult,AI}, ResolveIcons, and the four preview bound
+  methods, plus the telemetry report contract
+  Telemetry{PickReport,ShownRef,PickedRef} and RecordPick -- keep in
   sync with internal/app + internal/plugin + internal/preview +
   internal/sysstats + internal/telemetry payload
   structs).
@@ -2250,7 +2519,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   close, never the old raw "ok") + a real on-screen window via a compiled
   CGWindowList Swift probe, including while a big index build is
   PROVABLY in flight (the hard B-midindex-window check: progress
-  line present, completion line absent, before b1 runs) -- the step
+  line present, completion line absent, before b1 runs); scenario B
+  then WAITS OUT the big build (B-index-done, 180s bound; the B hard
+  cap is 360s to fit it) and pins the macOS watcher field fixes:
+  B-backend (the "watch: backend ..." log line must name fsevents --
+  auto-selection + honest label in one grep) and B-fd-headroom (lsof
+  row count vs kern.maxfilesperproc, threshold min(5000, limit/2) --
+  a regressed unbounded kqueue path sits AT the fd ceiling and fails
+  loudly) -- the step
   is a HARD GATE (no continue-on-error): every SMOKE id is pass/fail
   and any FAIL fails the darwin job and with it all-builds;
   screenshots are best-effort "evidence:" captures (never a SMOKE
@@ -2272,8 +2548,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   #23 briefly added was redundant and was removed in the 2026-07-17
   ci.yml cleanup (#25).
 - The `linux` job: checkout -> apt install gtk/webkit/x11 dev packages plus
-  xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run build`
-  in `frontend/` -> `wow-look-at-my/go-toolchain@v1`
+  xvfb/xdotool/imagemagick/x11-utils/openbox -> `npm ci && npm run
+  build && npm test` in `frontend/` (npm test = the vitest
+  DOM-ordering gate) -> `wow-look-at-my/go-toolchain@v1`
   with `targets: linux/amd64,windows/amd64`, `cgo: 'true'`,
   `timeout: '20'`, `autorelease: 'false'`, and env
   `GOFLAGS: "-tags=webkit2_41,desktop,production"` -> two

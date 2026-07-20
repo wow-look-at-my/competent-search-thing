@@ -82,8 +82,9 @@ type Options struct {
 	// (default "/sys").
 	SysRoot string
 	// GOOS selects the platform sources (default runtime.GOOS);
-	// anything but "linux" yields zero sources and a Sampler that only
-	// ever serves the zero Snapshot.
+	// "linux" and "darwin" have real sources, anything else yields
+	// zero sources and a Sampler that only ever serves the zero
+	// Snapshot.
 	GOOS string
 	// Interval is the fast-loop cadence while visible (default 1500ms).
 	Interval time.Duration
@@ -101,12 +102,15 @@ type Options struct {
 	// Logf receives the package's log lines (default log.Printf).
 	Logf func(format string, args ...any)
 
-	// gpuExec and now are test seams: gpuExec runs the probed
-	// nvidia-smi binary under ctx and returns its stdout (nil means
-	// runNvidiaSMI, the real subprocess); now is the clock (nil means
-	// time.Now).
+	// gpuExec, now, and darwin are test seams: gpuExec runs the
+	// probed nvidia-smi binary under ctx and returns its stdout (nil
+	// means runNvidiaSMI, the real subprocess); now is the clock (nil
+	// means time.Now); darwin injects scripted darwin readers (nil
+	// means newDarwinReaders, the real mach/sysctl calls -- which
+	// bind nothing on a non-darwin build).
 	gpuExec func(ctx context.Context, path string) (string, error)
 	now     func() time.Time
+	darwin  *darwinReaders
 }
 
 // rateState is the fast-loop goroutine's private counter memory for
@@ -130,12 +134,14 @@ type Sampler struct {
 
 	// Sources, decided once in New: empty/zero means "absent". On
 	// linux the three proc paths are always set; at most one of
-	// amdPath / nvidiaPath is set.
+	// amdPath / nvidiaPath is set. On darwin dwn holds the reader
+	// seam instead and the paths stay empty.
 	cpuPath    string
 	memPath    string
 	netPath    string
 	amdPath    string
 	nvidiaPath string
+	dwn        *darwinReaders
 
 	// kick wakes the fast loop for the immediate summon sample; it is
 	// 1-buffered and only ever sent to non-blockingly.
@@ -194,22 +200,44 @@ func New(opt Options) *Sampler {
 		kick:   make(chan struct{}, 1),
 		logged: make(map[string]bool),
 	}
-	if opt.GOOS != "linux" {
+	switch opt.GOOS {
+	case "linux":
+		s.cpuPath = filepath.Join(opt.ProcRoot, "stat")
+		s.memPath = filepath.Join(opt.ProcRoot, "meminfo")
+		s.netPath = filepath.Join(opt.ProcRoot, "net", "dev")
+		gpu := "none"
+		if p, ok := probeAMDGPU(opt.SysRoot); ok {
+			s.amdPath = p
+			gpu = fmt.Sprintf("amdgpu(%s)", amdCardName(p))
+		} else if p, err := opt.LookPath("nvidia-smi"); err == nil {
+			s.nvidiaPath = p
+			gpu = "nvidia-smi"
+		}
+		opt.Logf("stats: sources: cpu=%s mem=%s net=%s gpu=%s", s.cpuPath, s.memPath, s.netPath, gpu)
+	case "darwin":
+		dwn := opt.darwin
+		if dwn == nil {
+			dwn = newDarwinReaders()
+		}
+		if !dwn.ok() {
+			// Only reachable when a non-darwin build asks for GOOS
+			// "darwin" (readers_other.go binds nothing): behave like
+			// an unknown platform.
+			opt.Logf("stats: no sources on this platform; stats row will show placeholders")
+			break
+		}
+		s.dwn = dwn
+		// GPU is deliberately absent on darwin for now (the honest
+		// dash, GPUOK false): the only spawn-free source is IOKit's
+		// IOAccelerator "PerformanceStatistics" registry ("Device
+		// Utilization %"), a chunk of IOKit/CoreFoundation cgo whose
+		// key names are not API-stable across macOS releases -- the
+		// "intel: deliberately absent" precedent. That route is the
+		// known future source if the dash ever needs replacing.
+		opt.Logf("stats: sources: cpu=host_statistics mem=vm_statistics64+hw.memsize swap=vm.swapusage net=sysctl(iflist2) gpu=none")
+	default:
 		opt.Logf("stats: no sources on this platform; stats row will show placeholders")
-		return s
 	}
-	s.cpuPath = filepath.Join(opt.ProcRoot, "stat")
-	s.memPath = filepath.Join(opt.ProcRoot, "meminfo")
-	s.netPath = filepath.Join(opt.ProcRoot, "net", "dev")
-	gpu := "none"
-	if p, ok := probeAMDGPU(opt.SysRoot); ok {
-		s.amdPath = p
-		gpu = fmt.Sprintf("amdgpu(%s)", amdCardName(p))
-	} else if p, err := opt.LookPath("nvidia-smi"); err == nil {
-		s.nvidiaPath = p
-		gpu = "nvidia-smi"
-	}
-	opt.Logf("stats: sources: cpu=%s mem=%s net=%s gpu=%s", s.cpuPath, s.memPath, s.netPath, gpu)
 	return s
 }
 
@@ -246,9 +274,10 @@ func runNvidiaSMI(ctx context.Context, path string) (string, error) {
 	return string(out), err
 }
 
-// hasSources reports whether New found anything to sample (linux; the
-// three proc files are assumed present there).
-func (s *Sampler) hasSources() bool { return s.cpuPath != "" }
+// hasSources reports whether New found anything to sample (linux: the
+// three proc files are assumed present; darwin: the reader seam is
+// bound).
+func (s *Sampler) hasSources() bool { return s.cpuPath != "" || s.dwn != nil }
 
 // Start brings the sampler goroutines up: the fast loop (cpu, mem,
 // swap, net, and the amdgpu read), plus one slow nvidia-smi loop when
@@ -427,10 +456,15 @@ func (s *Sampler) sample() {
 	}
 }
 
-// sampleCPU reads /proc/stat and updates the busy percentage from the
-// counter delta. Zero or negative deltas (a clock hiccup or counter
-// wrap) skip the update, keeping the previous value and OK flag.
+// sampleCPU updates the busy percentage from the platform counter
+// delta: /proc/stat on linux, the mach tick counters on darwin. Zero
+// or negative deltas (a clock hiccup or counter wrap) skip the
+// update, keeping the previous value and OK flag.
 func (s *Sampler) sampleCPU(snap *Snapshot, now time.Time) {
+	if s.dwn != nil {
+		s.sampleCPUDarwin(snap, now)
+		return
+	}
 	data, err := os.ReadFile(s.cpuPath)
 	if err != nil {
 		s.logOnce(fmt.Sprintf("stats: cpu: %v", err))
@@ -443,6 +477,15 @@ func (s *Sampler) sampleCPU(snap *Snapshot, now time.Time) {
 		snap.CPUOK = false
 		return
 	}
+	s.updateCPURate(snap, cur, now)
+}
+
+// updateCPURate feeds one counter reading into the rate state shared
+// by the linux and darwin CPU paths: the new baseline is stored, and
+// only when the previous one is recent enough (rateWindow) does the
+// delta reach the snapshot -- zero/negative deltas (wrap) skip the
+// update via cpuRate's ok=false.
+func (s *Sampler) updateCPURate(snap *Snapshot, cur cpuCounters, now time.Time) {
 	prev, prevAt, valid := s.rs.cpu, s.rs.cpuAt, s.rs.cpuValid
 	s.rs.cpu, s.rs.cpuAt, s.rs.cpuValid = cur, now, true
 	if !valid || now.Sub(prevAt) > s.rateWindow() {
@@ -453,11 +496,16 @@ func (s *Sampler) sampleCPU(snap *Snapshot, now time.Time) {
 	}
 }
 
-// sampleMem reads /proc/meminfo for the point-in-time memory and swap
-// figures. A swap total of zero is a valid answer (no swap configured;
-// SwapOK stays true and the frontend renders a dash for it), while a
-// missing MemAvailable line means the used figure cannot be computed.
+// sampleMem fills the point-in-time memory and swap figures:
+// /proc/meminfo on linux, the mach/sysctl readers on darwin. A swap
+// total of zero is a valid answer (no swap configured; SwapOK stays
+// true and the frontend renders a dash for it), while a missing
+// MemAvailable line means the used figure cannot be computed.
 func (s *Sampler) sampleMem(snap *Snapshot) {
+	if s.dwn != nil {
+		s.sampleMemDarwin(snap)
+		return
+	}
 	data, err := os.ReadFile(s.memPath)
 	if err != nil {
 		s.logOnce(fmt.Sprintf("stats: mem: %v", err))
@@ -490,10 +538,15 @@ func (s *Sampler) sampleMem(snap *Snapshot) {
 	}
 }
 
-// sampleNet reads /proc/net/dev and updates the summed real-interface
-// throughput from the counter deltas, with the same staleness and wrap
+// sampleNet updates the summed real-interface throughput from the
+// platform counter deltas -- /proc/net/dev on linux, the
+// NET_RT_IFLIST2 RIB on darwin -- with the same staleness and wrap
 // rules as the CPU rate.
 func (s *Sampler) sampleNet(snap *Snapshot, now time.Time) {
+	if s.dwn != nil {
+		s.sampleNetDarwin(snap, now)
+		return
+	}
 	data, err := os.ReadFile(s.netPath)
 	if err != nil {
 		s.logOnce(fmt.Sprintf("stats: net: %v", err))
@@ -506,6 +559,13 @@ func (s *Sampler) sampleNet(snap *Snapshot, now time.Time) {
 		snap.NetOK = false
 		return
 	}
+	s.updateNetRate(snap, cur, now)
+}
+
+// updateNetRate is updateCPURate's network twin: shared by the linux
+// and darwin paths, negative deltas (wrap, a vanished interface) skip
+// the update via netRate's ok=false.
+func (s *Sampler) updateNetRate(snap *Snapshot, cur netCounters, now time.Time) {
 	prev, prevAt, valid := s.rs.net, s.rs.netAt, s.rs.netValid
 	s.rs.net, s.rs.netAt, s.rs.netValid = cur, now, true
 	if !valid || now.Sub(prevAt) > s.rateWindow() {

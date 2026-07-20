@@ -23,8 +23,8 @@
     "rootsVersion": {
       "type": "integer",
       "minimum": 0,
-      "default": 3,
-      "description": "Roots-defaults version stamp, written by the app. 0 (or absent) marks a config from before whole-filesystem indexing: on load the app upgrades roots still set to the old default (the home directory) to the whole-filesystem default and appends the missing system excludes. Configs stamped below 3 additionally get the high-churn noise exclude patterns (.hg, .svn, __pycache__, ...) appended -- but only when the exclude list still carries all three base patterns (.git, node_modules, .cache); curated or emptied lists are stamped only. Every change is logged loudly, the stamp advances to 3, and the file is rewritten once. Customized roots are never touched by the migration. Do not edit by hand unless you want the migration to run again."
+      "default": 5,
+      "description": "Roots-defaults version stamp, written by the app. 0 (or absent) marks a config from before whole-filesystem indexing: on load the app upgrades roots still set to the old default (the home directory) to the whole-filesystem default and appends the missing system excludes. Configs stamped below 3 additionally get the high-churn noise exclude patterns (.hg, .svn, __pycache__, ...) appended; on macOS configs stamped below 4 get the firmlink-dedup exclude /System/Volumes/Data (the same files macOS also shows at /Users, /Applications, ...), and below 5 the macOS noise set (Caches, DerivedData, _CodeSignature, CodeResources, /private/var/folders) -- each addition only when the exclude list still carries all three base patterns (.git, node_modules, .cache); curated or emptied lists are stamped only. Every change is logged loudly, the stamp advances to 5, and the file is rewritten once. Customized roots are never touched by the migration. Do not edit by hand unless you want the migration to run again."
     },
     "excludes": {
       "type": "array",
@@ -218,13 +218,13 @@
     },
     "watcherConfig": {
       "title": "Live-watch layer configuration",
-      "description": "The layer that keeps the index fresh between rescans: a bounded hot set of per-directory watches (or fanotify whole-filesystem marks where available) plus always-on reconcile sweeps that converge everything the hot set does not cover. See the README's 'File watching and freshness'.",
+      "description": "The layer that keeps the index fresh between rescans: a bounded hot set of per-directory watches (or a whole-filesystem backend where available -- fanotify on Linux, FSEvents on macOS) plus always-on reconcile sweeps that converge everything the hot set does not cover. See the README's 'File watching and freshness'.",
       "type": "object",
       "properties": {
         "maxWatches": {
           "type": "integer",
           "default": 0,
-          "description": "Bounds the hot set of live per-directory watches. 0 (the default) resolves the budget automatically: half of the kernel's per-user inotify watch allowance, capped at 65536. Negative means explicitly unlimited (watch every indexed directory); positive values are taken as-is. Irrelevant while the fanotify whole-filesystem backend is active."
+          "description": "Bounds the hot set of live per-directory watches. 0 (the default) resolves the budget automatically: on Linux, half of the kernel's per-user inotify watch allowance, capped at 65536; on macOS, a conservative sixteenth of the process file-descriptor limit, capped at 8192 -- the kqueue backend opens one descriptor per watched directory PLUS one per direct child file, so the budget must leave descriptors for the app itself. Negative means explicitly unlimited (watch every indexed directory; on macOS that can exhaust the fd limit and break the whole process -- prefer the fsevents backend, which needs no watch set at all); positive values are taken as-is. Irrelevant while a whole-filesystem backend (fanotify, fsevents) is active."
         },
         "sweepMinutes": {
           "type": "integer",
@@ -245,9 +245,9 @@
         },
         "backend": {
           "type": "string",
-          "enum": ["auto", "fanotify", "inotify"],
+          "enum": ["auto", "fanotify", "inotify", "fsevents"],
           "default": "auto",
-          "description": "Notification backend selection. 'auto' (the default) uses fanotify whole-filesystem marks when the binary can (needs CAP_SYS_ADMIN; see the README's 'Enable full-filesystem watching') and falls back to the per-directory inotify hot set otherwise. 'fanotify' is STRICT: when fanotify cannot start, live watching is disabled outright -- no inotify fallback; reconcile sweeps keep the index converging -- announced loudly in-app and in the log. 'inotify' skips the fanotify probe entirely (debugging). The app repairs an empty or unknown value to 'auto'."
+          "description": "Notification backend selection. 'auto' (the default) uses a whole-filesystem backend where one exists -- fanotify marks on Linux (needs CAP_SYS_ADMIN; see the README's 'Enable full-filesystem watching') or the FSEvents stream on macOS (automatic, no privileges) -- and falls back to the per-directory hot set otherwise (inotify on Linux, kqueue on macOS; 'kqueue' is a runtime label, not a config value). 'fanotify' and 'fsevents' are STRICT: when the named backend cannot start (including on the wrong OS), live watching is disabled outright -- no per-directory fallback; reconcile sweeps keep the index converging -- announced loudly in-app and in the log. 'inotify' skips the whole-filesystem probe and pins the per-directory hot set on every OS (debugging). The app repairs an empty or unknown value to 'auto'."
         }
       },
       "additionalProperties": false
@@ -597,7 +597,7 @@
       "roots": [
         "/"
       ],
-      "rootsVersion": 3,
+      "rootsVersion": 5,
       "excludes": [
         ".git",
         "node_modules",

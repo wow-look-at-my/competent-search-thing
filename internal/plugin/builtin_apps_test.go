@@ -62,6 +62,26 @@ func TestAppsProviderSearchScoring(t *testing.T) {
 	require.Equal(t, &Action{Type: ActionRunCommand, Argv: []string{"firefox"}}, results[0].Action)
 }
 
+func TestAppsProviderIconKey(t *testing.T) {
+	list := []InstalledApp{
+		{Name: "Firefox", Exec: "firefox %u", ID: "firefox.desktop", Icon: "firefox"},
+		{Name: "Editor", Exec: "editor", ID: "Editor.app", Icon: "/Applications/Editor.app"},
+		{Name: "Bare", Exec: "bare"},
+	}
+	p := newAppsProvider(func() []InstalledApp { return list })
+
+	byTitle := map[string]Result{}
+	for _, r := range srcResults(t, p, targetedReq("app", "")) {
+		byTitle[r.Title] = r
+	}
+	require.Equal(t, "app:firefox", byTitle["Firefox"].IconKey,
+		"a themed .desktop Icon= ref rides as an app: key")
+	require.Equal(t, "app:/Applications/Editor.app", byTitle["Editor"].IconKey,
+		"a darwin bundle-path ref rides verbatim")
+	require.Empty(t, byTitle["Bare"].IconKey, "no ref, no key: the glyph stands alone")
+	require.Equal(t, "app", byTitle["Bare"].Icon, "the glyph fallback is untouched either way")
+}
+
 func TestAppsProviderSkipsUnlaunchableAndCaps(t *testing.T) {
 	list := []InstalledApp{
 		{Name: "Broken", Exec: "%f"}, // parses to nothing

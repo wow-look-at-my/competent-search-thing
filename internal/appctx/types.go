@@ -14,9 +14,11 @@ type AppInfo struct {
 // InstalledApp describes one installed application. Exec is kept raw
 // in .desktop Exec-line syntax (field codes and all); the plugin
 // layer's parser handles quoting and %-codes when launching. Icon is
-// the raw .desktop Icon= value -- a themed icon name or an absolute
-// path -- kept verbatim for the icon-lookup layer; empty on windows
-// and darwin for now (no .ico/.icns extraction).
+// the platform icon ref kept verbatim for the icon-lookup layer
+// (internal/icons): the raw .desktop Icon= value on linux (a themed
+// name or an absolute path), the absolute .app bundle path on darwin
+// (resolved via Info.plist + .icns extraction); empty on windows for
+// now (no .ico extraction).
 type InstalledApp struct {
 	Name string
 	Exec string

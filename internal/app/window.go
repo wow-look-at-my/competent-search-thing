@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	goruntime "runtime"
+	"runtime/debug"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -71,7 +72,13 @@ type platformSeams struct {
 	// command consumes it as a fallback candidate.
 	args0         func() string
 	detectSession func() platform.Session
-	startHotkey   func(hk platform.Hotkey, onDown func()) (stop func(), err error)
+	// setGCPercent swaps the runtime's GOGC value and returns the
+	// previous one; the initial index build lowers it temporarily to
+	// bound the walk's peak heap (gcbound.go). Production is
+	// debug.SetGCPercent, whose percentage composes with any
+	// externally installed GOMEMLIMIT.
+	setGCPercent func(pct int) int
+	startHotkey  func(hk platform.Hotkey, onDown func()) (stop func(), err error)
 	// startPortal registers the summon shortcut through the XDG portal
 	// (may block on interactive approval; ctx aborts); production is
 	// startPortalShortcut in hotkey.go.
@@ -136,7 +143,12 @@ type platformSeams struct {
 	// raise watcher); production is the native EWMH client message
 	// with a fresh server timestamp.
 	activateWindow func(id uint32) error
-	appSource      appctx.Source
+	// watchSpaceChanges arms the active-Space-change observer and
+	// reports whether it installed; onChange fires on every switch.
+	// Darwin only -- nil on every other platform (the defaultProcTree
+	// pattern), production native.WatchSpaceChanges.
+	watchSpaceChanges func(onChange func()) bool
+	appSource         appctx.Source
 	// firefoxBases lists the Firefox profiles.ini base directories the
 	// frequent-sites discovery probes; production is
 	// firefox.DefaultBaseDirs (the real home), tests pin it.
@@ -162,6 +174,7 @@ func defaultPlatformSeams() platformSeams {
 			return os.Args[0]
 		},
 		detectSession: func() platform.Session { return platform.DetectSession(os.Getenv) },
+		setGCPercent:  debug.SetGCPercent,
 		startHotkey:   native.StartHotkey,
 		startPortal:   startPortalShortcut,
 		ensureGnomeBinding: func(ctx context.Context, hk platform.Hotkey, command string) (gsettings.Applied, error) {
@@ -187,13 +200,24 @@ func defaultPlatformSeams() platformSeams {
 			defer cancel()
 			return launch.DBusActivate(ctx, call)
 		},
-		watchState:     native.WatchState,
-		snRemove:       native.RemoveStartupSequence,
-		activateWindow: native.ActivateWindow,
-		appSource:      native.AppSource(),
-		firefoxBases:   firefox.DefaultBaseDirs,
-		procTree:       defaultProcTree(goruntime.GOOS),
+		watchState:        native.WatchState,
+		snRemove:          native.RemoveStartupSequence,
+		activateWindow:    native.ActivateWindow,
+		appSource:         native.AppSource(),
+		firefoxBases:      firefox.DefaultBaseDirs,
+		procTree:          defaultProcTree(goruntime.GOOS),
+		watchSpaceChanges: defaultSpaceWatch(goruntime.GOOS),
 	}
+}
+
+// defaultSpaceWatch returns the per-OS Space-change observer: the
+// native NSWorkspace observer on darwin, nil elsewhere (Spaces are a
+// macOS concept; linux/windows never arm the dismiss).
+func defaultSpaceWatch(goos string) func(onChange func()) bool {
+	if goos != "darwin" {
+		return nil
+	}
+	return native.WatchSpaceChanges
 }
 
 // defaultProcTree returns the per-capture process-tree factory for
@@ -290,6 +314,36 @@ func (a *App) toggle() {
 	} else if !justHidden {
 		a.captureAppContext()
 		a.showOnCursorDisplay()
+	}
+}
+
+// startSpaceWatch arms the dismiss-on-Space-change behavior once, at
+// Startup, on platforms with a Space concept (the seam is nil
+// elsewhere). Decision (b) of the space-switch ghost fix: Spotlight
+// itself dismisses on a Space switch, and the alternative -- fighting
+// the compositor for key-window status during the transition
+// animation -- is exactly the 1-frame ghost being fixed.
+func (a *App) startSpaceWatch() {
+	if a.plat.watchSpaceChanges == nil {
+		return
+	}
+	if a.plat.watchSpaceChanges(a.spaceChanged) {
+		log.Printf("panel: space-change dismiss armed")
+	}
+}
+
+// spaceChanged is the active-Space-change callback: a visible bar is
+// dismissed through the EXISTING Hide path -- stamping lastHide, so
+// the toggle-gap dismiss semantics hold for a summon racing the
+// switch -- while a hidden bar is left completely alone (in
+// particular the pending-show latch stays untouched; only Hide on a
+// VISIBLE bar may clear it).
+func (a *App) spaceChanged() {
+	a.mu.Lock()
+	visible := a.visible
+	a.mu.Unlock()
+	if visible {
+		a.Hide()
 	}
 }
 

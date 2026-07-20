@@ -55,7 +55,7 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 	// too (built from the Go structs so renames are caught here).
 	full := Config{
 		Roots:                 []string{"/home/me"},
-		RootsVersion:          3,
+		RootsVersion:          currentRootsVersion,
 		Excludes:              []string{".git", "*.tmp", "/home/*/secret"},
 		Hotkey:                "ctrl+shift+k",
 		RescanIntervalMinutes: 30,
@@ -136,6 +136,14 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 	data, err = json.Marshal(full)
 	require.NoError(t, err)
 	require.NoError(t, validateConfigJSON(sch, data))
+
+	// Every backend enum value validates (kept in lockstep with the
+	// schema's enum; "kqueue" stays a rejected runtime-only label,
+	// see TestConfigSchemaRejectsInvalid).
+	for _, b := range []string{WatcherBackendAuto, WatcherBackendFanotify, WatcherBackendInotify, WatcherBackendFSEvents} {
+		require.NoError(t, validateConfigJSON(sch, []byte(`{"watcher":{"backend":"`+b+`"}}`)),
+			"backend %q validates", b)
+	}
 }
 
 // TestConfigSchemaRejectsInvalid mirrors the Go-side validation and
