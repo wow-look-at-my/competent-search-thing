@@ -3163,7 +3163,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   strings are UTF-16) as .hl spans -- LETTER COLOR ONLY via
   --sb-highlight, on file-row names AND plugin titles, no frontend
   re-matching (the old indexOf highlight is gone; renderResults no
-  longer takes the query) -- file rows with the highlighted match + dim parent dir (a
+  longer takes the query) -- file rows with a per-file-type glyph
+  icon (buildFileGlyph: span.icon.file-glyph.<font> with
+  textContent = the fileicons.ts-resolved glyph, coloured EXCLUSIVELY
+  via the per-row --fi-dark/--fi-light custom properties -- the
+  --plugin-accent precedent; SYNCHRONOUS, no ResolveIcons for file
+  rows -- the index.html tpl-icon-* templates stay for the preview
+  pane's dir listing) + the highlighted match + dim parent dir (a
   non-empty result hint replaces the parent-dir text -- the
   outside-indexed-roots note); plugin
   sections -- unselectable header, rows with icon/title/dim
@@ -3181,10 +3187,41 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   skipped via isConnected, and a missing binding/miss leaves the
   glyph standing; accent_color is ONLY ever applied by
   setting the `--plugin-accent` custom property on the row -- never
-  inline color styles) + `src/theme.ts` (initTheme called first in
+  inline color styles) + `src/fileicons/` (the per-file-type icon
+  layer, ALL frontend -- zero Go involvement: data.json = the
+  generated rule set from the vendored file-icons/atom pack (2,158
+  file + 42 dir rules; pinned pack commit, per-font licenses and the
+  devopicons exclusion in LICENSES.md, regeneration via
+  tools/convert.mjs + the woff2 cmap reader tools/woff2cmap.mjs --
+  see its README.md), fonts/ = the four committed woff2 icon fonts
+  (file-icons ISC, FontAwesome 4.7 OFL 1.1, MFixx MIT, Octicons
+  v4.4.0 MIT), fileicons.ts = the matcher (`fileIcon(name, isDir)`:
+  pack-order first-match -- rules pre-sorted priority-desc so
+  special filenames/compound suffixes beat generic extensions;
+  string rule = case-insensitive basename suffix, regex rule = raw
+  basename with authored flags ("g" stripped -- .test statefulness);
+  memoized, never throws, no match = the pack's octicons
+  file-text/file-directory defaults, uncolored -> fg-dim) + the pure
+  `isLightBackground` (the pack's own HSL-lightness >= 0.5 motif
+  rule over hex/rgb()/hsl(); unparseable = dark), fileicons.css =
+  the four @font-face decls (vite emits the woff2 assets; wails
+  serves them from the embedded dist) + .file-glyph slot styling
+  (16px column, per-font pack sizings) consuming
+  --fi-dark/--fi-light with the html.icons-light class selecting the
+  light variants; src/fileicons.test.ts is the gate -- matcher
+  semantics, isLightBackground forms, and COMMITTED-DATA INTEGRITY:
+  every data.json codepoint must exist in its font's cmap (parsed by
+  the same woff2cmap.mjs the generator used, via its .d.mts
+  sibling -- the ffext logic.mjs precedent), font byte budgets, rule
+  counts, pure-ASCII data.json) + `src/theme.ts` (initTheme called
+  first in
   wire(): fetches GetTheme and sets each token as `--sb-<k>` on
   <html>, injects GetCustomCSS as the text of the single managed
-  `<style id="sb-custom-css">`, refetches on "theme:changed") +
+  `<style id="sb-custom-css">`, refetches on "theme:changed";
+  applyTokens ALSO toggles the html.icons-light motif class from the
+  applied bg token via fileicons.ts isLightBackground, so every
+  theme apply/change re-selects the file-icon colour variants with
+  zero re-renders) +
   `src/style.css` (Spotlight-ish bar, dark by default; dir ellipsizes
   before the name; thin scrollbar; ALL colors/sizes/effects flow
   through var(--sb-*) -- the :root block holds the dark fallbacks and
@@ -3717,7 +3754,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   builtin theme changes deliberately, RE-DERIVE them from a local run
   (CLAUDE.md "To capture locally" below); never guess.
 - Mechanics (mirrors what was verified manually): deterministic
-  ~200-file fixture tree + `config.json` in a temp dir
+  ~200-file fixture tree (incl. four "rep"-prefixed code files --
+  repo.go/reply.ts/repack.json/repair.css -- so the 02/03 shots show
+  varied per-file-type icons) + `config.json` in a temp dir
   (`COMPETENT_SEARCH_CONFIG_DIR`), `Xvfb :99` at 1280x800x24, openbox
   with the stock `A-space` keybind stripped from
   `/etc/xdg/openbox/rc.xml` -- stock openbox grabs Alt+Space for its
