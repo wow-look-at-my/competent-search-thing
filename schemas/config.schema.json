@@ -113,6 +113,9 @@
         },
         "priors": {
           "$ref": "#/$defs/priorsConfig"
+        },
+        "telemetry": {
+          "$ref": "#/$defs/searchTelemetryConfig"
         }
       },
       "additionalProperties": false
@@ -126,6 +129,30 @@
           "type": "boolean",
           "default": false,
           "description": "true turns the pick-memory priors on. Requires nothing else, but learns from real picks only once search.telemetry is also enabled; until then the frecency-derived bootstrap is the only signal."
+        }
+      },
+      "additionalProperties": false
+    },
+    "searchTelemetryConfig": {
+      "title": "Ranking telemetry configuration",
+      "description": "The opt-in, local-only ranking telemetry log (see the README's 'Ranking telemetry'): one size-capped JSONL record per activated result at <configDir>/telemetry.jsonl, carrying the query, the delivered result list with its ranking signals, and which row was picked. Nothing is ever uploaded. The default keeps the whole feature OFF; deleting the file (or disabling the option) erases/stops it at any time.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "true turns the ranking telemetry log on. The default records nothing at all (opt-in: behavioral data is privacy-sensitive)."
+        },
+        "maxSizeKB": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 4096,
+          "description": "Log rotation threshold in KiB: an append that would cross it first rotates telemetry.jsonl to telemetry.jsonl.1 (replacing the previous one), so at most two generations exist. The app repairs non-positive values to the default; this schema rejects them."
+        },
+        "retainQueries": {
+          "type": "boolean",
+          "default": true,
+          "description": "false logs every record's query text as \"\" while keeping result paths and ranking signals. Note an omitted key means false (the privacy-conservative direction); the default config writes true explicitly.
         }
       },
       "additionalProperties": false

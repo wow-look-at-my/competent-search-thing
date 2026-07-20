@@ -78,6 +78,7 @@ func runGUI(opts cli.RunOptions) error {
 		ConfigNotes:            cfg.MigrationNotes,
 		Frecency:               cfg.Search.Frecency,
 		Priors:                 cfg.Search.Priors,
+		Telemetry:              cfg.Search.Telemetry,
 		Preview:                cfg.Preview,
 		WindowWidth:            width,
 		WindowHeight:           height,

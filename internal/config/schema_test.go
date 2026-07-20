@@ -72,6 +72,11 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 				TierJumpCount:  5,
 			},
 			Priors: PriorsConfig{Enabled: true},
+			Telemetry: TelemetryConfig{
+				Enabled:       true,
+				MaxSizeKB:     1024,
+				RetainQueries: true,
+			},
 		},
 		Watcher: WatcherConfig{
 			MaxWatches:    -1,
@@ -174,6 +179,11 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"zero noise weight":                `{"search":{"frecency":{"weightNoise":0}}}`,
 		"zero tier jump":                   `{"search":{"frecency":{"tierJumpCount":0}}}`,
 		"non-number frecency weight":       `{"search":{"frecency":{"weightNoise":"1"}}}`,
+		"non-bool telemetry enabled":       `{"search":{"telemetry":{"enabled":"yes"}}}`,
+		"zero telemetry maxSizeKB":         `{"search":{"telemetry":{"maxSizeKB":0}}}`,
+		"negative telemetry maxSizeKB":     `{"search":{"telemetry":{"maxSizeKB":-1}}}`,
+		"telemetry key typo":               `{"search":{"telemetry":{"retainQuerys":true}}}`,
+		"non-bool retainQueries":           `{"search":{"telemetry":{"retainQueries":"yes"}}}`,
 		"bad theme name":                   `{"theme":"../evil"}`,
 		"bad plugin entry id":              `{"plugins":{"entries":{"Bad ID":{}}}}`,
 		"non-object settings":              `{"plugins":{"entries":{"calc":{"settings":"loud"}}}}`,
@@ -286,6 +296,8 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json $defs/frecencyConfig out of sync with FrecencyConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PriorsConfig{})), configSchemaProperties(t, "priorsConfig"),
 		"config.schema.json $defs/priorsConfig out of sync with PriorsConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(TelemetryConfig{})), configSchemaProperties(t, "searchTelemetryConfig"),
+		"config.schema.json $defs/searchTelemetryConfig out of sync with TelemetryConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PluginsConfig{})), configSchemaProperties(t, "pluginsConfig"),
 		"config.schema.json $defs/pluginsConfig out of sync with PluginsConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PluginEntry{})), configSchemaProperties(t, "pluginEntry"),

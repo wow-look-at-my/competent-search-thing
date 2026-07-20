@@ -585,6 +585,39 @@ matches, recall is untouched, and disabling the knob restores
 today's ordering exactly. Everything stays on this machine: the
 priors layer writes nothing and sends nothing.
 
+## Ranking telemetry
+
+Ranking telemetry (`search.telemetry.enabled`, **off by default**)
+records, locally only, which results were shown and which one you
+activated -- the query text, the delivered result paths, and the
+ranking signals behind each row -- to a size-capped log at
+`<configDir>/telemetry.jsonl` (mode 0600). Nothing is ever uploaded
+or shared; it exists so ranking can learn from your own picks, and
+deleting the file (or disabling the option) erases/stops it at any
+time.
+
+What one record holds (one JSON line per *activated* result -- plain
+keystrokes, abandoned queries, and zero-result queries are never
+logged):
+
+- the query (logged as `""` when `retainQueries` is `false`; paths
+  and signals are still recorded),
+- every delivered row in order: file rows with their path and the
+  ranking components at impression time (match class, fuzzy
+  alignment, frecency boost, recency, working-directory proximity,
+  noise penalty, depth, extension); plugin rows with the provider id
+  and engine score only -- plugin titles, subtitles, clipboard
+  contents, preview queries/answers, and file contents are
+  deliberately never logged,
+- which row was activated and the action kind (open, reveal,
+  copy_text, ...).
+
+Size is bounded: when the log would cross `maxSizeKB` (default 4096
+KiB) it rotates once to `telemetry.jsonl.1`, so at most two
+generations (~8 MiB) ever exist. The feature is behaviorally
+invisible either way -- result ordering is byte-identical with it on
+or off; it only observes.
+
 ## Rewrite rules
 
 `rewrites` in [the configuration](#configuration) defines regex ->
@@ -698,7 +731,12 @@ The file is created with defaults on first run:
       "weightNoise": 1,
       "tierJumpCount": 3
     },
-    "priors": { "enabled": false }
+    "priors": { "enabled": false },
+    "telemetry": {
+      "enabled": false,
+      "maxSizeKB": 4096,
+      "retainQueries": true
+    }
   },
   "watcher": { "maxWatches": 0, "sweepMinutes": 0, "sweepDisabled": false, "watchExcludes": [] },
   "theme": "dark",
@@ -799,6 +837,12 @@ Field reference:
   "use the default" and a NEGATIVE value turns that one signal off.
   `priors.enabled` (default `false`) turns the opt-in pick-memory
   priors on -- see [Pick-memory priors](#pick-memory-priors-opt-in).
+  `telemetry` configures the opt-in, local-only ranking telemetry log
+  described under [Ranking telemetry](#ranking-telemetry): `enabled`
+  (default `false` -- nothing is recorded until you opt in),
+  `maxSizeKB` (default 4096) is the log rotation threshold, and
+  `retainQueries` `false` logs query text as `""` while keeping paths
+  and ranking signals.
 - `watcher` -- the live-watch layer: `backend` (`auto` | `fanotify` =
   strict, no inotify fallback | `inotify`; unset means `auto`),
   `maxWatches` (hot-set budget; 0 =

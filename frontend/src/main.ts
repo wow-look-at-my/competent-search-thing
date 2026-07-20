@@ -329,6 +329,34 @@ function refreshHistory(app: WailsAppBindings): void {
 
 /* --- activation ------------------------------------------------------ */
 
+// pickReport snapshots the ranking-telemetry report AT ACTIVATION
+// TIME (the rendered flat list, the picked rank, the action kind), so
+// a re-render racing the activation promise can never skew it. Row
+// identities only -- the Go side joins the ranking signals from its
+// own query ring and re-validates everything.
+function pickReport(
+  index: number,
+  action: string,
+  revealed: boolean,
+): TelemetryPickReport {
+  const shown: TelemetryShownRef[] = state.items.map((it) =>
+    it.kind === "file"
+      ? { kind: "file", path: it.file.path }
+      : { kind: "plugin", plugin: it.pluginId, score: it.result.score ?? 0 },
+  );
+  return { query: state.query, shown, picked: { rank: index, action, revealed } };
+}
+
+// reportPick sends a snapshotted report after the activation actually
+// ran. Fire-and-forget like commitHistory: a telemetry failure must
+// never break (or even delay) an activation, and the call is a silent
+// Go-side no-op unless search.telemetry opted in.
+function reportPick(app: WailsAppBindings, report: TelemetryPickReport): void {
+  app.RecordPick(report).catch((err: unknown) => {
+    console.warn("telemetry pick report failed: " + String(err));
+  });
+}
+
 function activate(index: number, reveal: boolean): void {
   const app = bindings();
   const item = state.items[index];
@@ -337,12 +365,14 @@ function activate(index: number, reveal: boolean): void {
   }
   if (item.kind === "file") {
     state.visible = false; // the Go side hides the bar on success
+    const report = pickReport(index, reveal ? "reveal" : "open", reveal);
     const action = reveal
       ? app.Reveal(item.file.path)
       : app.Open(item.file.path);
     action
       .then(() => {
         commitHistory(app); // the activation actually ran
+        reportPick(app, report);
       })
       .catch((err: unknown) => {
         state.visible = true;
@@ -353,7 +383,7 @@ function activate(index: number, reveal: boolean): void {
       });
     return;
   }
-  activatePlugin(app, item.pluginId, item.result);
+  activatePlugin(app, index, item.pluginId, item.result);
 }
 
 // activatePlugin runs a plugin row's action (Ctrl/Cmd+Enter behaves
@@ -364,6 +394,7 @@ function activate(index: number, reveal: boolean): void {
 // keep it open and flash "Copied".
 function activatePlugin(
   app: WailsAppBindings,
+  index: number,
   pluginId: string,
   result: PluginResult,
 ): void {
@@ -375,6 +406,7 @@ function activatePlugin(
     setQueryLocal(app, action.value ?? "");
     return;
   }
+  const report = pickReport(index, action.type, false);
   const staysOpen =
     action.type === "copy_text" ||
     (action.type === "run_builtin" && action.value === "version");
@@ -388,6 +420,7 @@ function activatePlugin(
         flashStatus("Copied", FLASH_COPIED_MS);
       }
       commitHistory(app); // the action actually ran
+      reportPick(app, report);
     })
     .catch((err: unknown) => {
       state.visible = true;
