@@ -196,8 +196,7 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 		return false
 	}
 	// The toolkit work-area probe answers "unknown" (the production
-	// linux value would dispatch onto a GTK loop no test runs and eat
-	// its 2s timeout); clamp tests override it with fixed rects.
+	// value would eat runOnGTKThread's 2s timeout headlessly).
 	a.plat.windowWorkArea = func() (platform.Rect, bool) { return platform.Rect{}, false }
 	// The hint probe answers "nothing exists" so Search never touches
 	// the real disk; hint tests override it (some with the real
@@ -300,8 +299,7 @@ func TestStartupLogsConfigNotesOnce(t *testing.T) {
 	a.Startup(context.Background()) // a second Startup must not repeat them
 
 	// Drain the async layer goroutines (priors/arbiter/telemetry log
-	// through the global logger) before reading the shared buffer;
-	// Shutdown is idempotent under the Cleanup-registered second call.
+	// through the global logger) before reading the shared buffer.
 	a.Shutdown(context.Background())
 	out := buf.String()
 	require.Equal(t, 1, strings.Count(out, "config: index roots upgraded to the whole-filesystem default (/)"),
