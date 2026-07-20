@@ -192,7 +192,7 @@ func TestOpenTabsGetterPrefersLiveAndFallsBack(t *testing.T) {
 }
 
 func TestRunPluginActionActivateTab(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{})
+	a, r, _ := newPluginTestApp(t)
 	f := &fakeBridge{connected: true}
 	installBridge(a, f)
 	require.NoError(t, a.RunPluginAction("firefox-tabs", plugin.Action{
@@ -203,7 +203,7 @@ func TestRunPluginActionActivateTab(t *testing.T) {
 }
 
 func TestRunPluginActionActivateTabValidation(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{})
+	a, r, _ := newPluginTestApp(t)
 	f := &fakeBridge{connected: true}
 	installBridge(a, f)
 	for _, bad := range []plugin.Action{
@@ -226,7 +226,7 @@ func TestActivateTabFallsBackToOpenURL(t *testing.T) {
 	fallbackCalls := []string{"resolve:https://example.com/x", "mint", "open:https://example.com/x", "hide"}
 
 	t.Run("bridge activate fails", func(t *testing.T) {
-		a, r := newTestApp(t, nil, Options{})
+		a, r, _ := newPluginTestApp(t)
 		f := &fakeBridge{connected: true, actErr: errors.New("Invalid tab ID: 42")}
 		installBridge(a, f)
 		require.NoError(t, a.RunPluginAction("firefox-tabs", act),
@@ -236,20 +236,20 @@ func TestActivateTabFallsBackToOpenURL(t *testing.T) {
 	})
 
 	t.Run("no host connected", func(t *testing.T) {
-		a, r := newTestApp(t, nil, Options{})
+		a, r, _ := newPluginTestApp(t)
 		installBridge(a, &fakeBridge{connected: false})
 		require.NoError(t, a.RunPluginAction("firefox-tabs", act))
 		require.Equal(t, fallbackCalls, r.callNames())
 	})
 
 	t.Run("no bridge at all", func(t *testing.T) {
-		a, r := newTestApp(t, nil, Options{})
+		a, r, _ := newPluginTestApp(t)
 		require.NoError(t, a.RunPluginAction("firefox-tabs", act))
 		require.Equal(t, fallbackCalls, r.callNames())
 	})
 
 	t.Run("fallback failure surfaces", func(t *testing.T) {
-		a, r := newTestApp(t, nil, Options{})
+		a, r, _ := newPluginTestApp(t)
 		boom := errors.New("no handler")
 		a.plat.open = func(string, []string) error { return boom }
 		require.Error(t, a.RunPluginAction("firefox-tabs", act))
