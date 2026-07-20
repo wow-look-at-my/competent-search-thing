@@ -665,6 +665,55 @@ matches, recall is untouched, and disabling the knob restores
 today's ordering exactly. Everything stays on this machine: the
 priors layer writes nothing and sends nothing.
 
+### Learned arbitration (opt-in)
+
+`search.arbiter.enabled` (default `false`) adds the cross-SOURCE
+learned layer: when the same name matches a file, a browser tab, and
+an app, which did YOU mean? Type `jira` and the bar shows a file
+named `jira-notes.md`, the open "JIRA - Sprint 12" Firefox tab, and
+maybe an app -- today the files always render first. If you keep
+picking the tab, the arbiter learns that and floats the tabs section
+above the file results for queries shaped like that; if you keep
+picking `.md` files over their `.txt` siblings, file rows get a
+small learned nudge too.
+
+```json
+"search": { "arbiter": { "enabled": true } }
+```
+
+What it is: a small pairwise model (a single weight vector -- class,
+alignment, frecency/recency/noise signals, extension and depth
+buckets, result source, engine score, and query-shape features like
+length/spaces/time-of-day) trained ONLY on your own recorded picks
+in the local telemetry log. It re-orders and places exactly what the
+deterministic engine already delivered, before anything paints:
+
+- Within the file list it adds a clamped nudge -- strictly less than
+  one match-class band, so an exact match can never lose to a fuzzy
+  one and strong engine decisions stand.
+- Across sources it may re-order a plugin section's rows and float a
+  section (tabs, apps, sites) above the file results when its best
+  row outscores the best file row for that query.
+
+The ACTIVATION GATE is what makes enabling this safe to try: the
+model participates only once **at least 200 picks** exist in the
+telemetry log AND it demonstrably predicts your newest picks better
+than the current result order does (a time-split holdout check --
+the oldest 80% of picks train, the newest 20% validate). Until both
+hold -- and whenever they stop holding -- the arbiter is completely
+inert and ordering is byte-identical to the feature being off. It
+retrains in the background at startup and after every 50 new picks;
+nothing runs on the keystroke path beyond a few microseconds of
+arithmetic.
+
+Prerequisite: the model learns from `<configDir>/telemetry.jsonl`,
+so `search.telemetry.enabled` must also be on for picks to accrue
+(enable both and the gate typically opens after a week or two of
+normal use). Privacy: everything is local -- the arbiter only READS
+the telemetry log, writes nothing, and sends nothing anywhere;
+disabling the knob (or deleting the log) restores today's ordering
+exactly.
+
 ## Ranking telemetry
 
 Ranking telemetry (`search.telemetry.enabled`, **off by default**)

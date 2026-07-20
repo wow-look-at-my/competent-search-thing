@@ -348,6 +348,41 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   recordOpen pattern) with Shutdown draining telWG beside frecWG;
   config changes to search.telemetry hot-apply through
   applyTelemetry (the sectionAppliers row in configapply.go).
+  Learned-arbitration wiring (arbiter.go in this package): Startup's
+  startArbiter (config search.arbiter, OPT-IN -- zero value = OFF:
+  no store, no file reads, no goroutines, emissions untouched)
+  builds the arbiterLayer -- an internal/arbiter Store plus its OWN
+  8-slot query->ResultSignals impression ring -- and applies the
+  model at BOTH composition seams: (1) frecBlend.Model =
+  arbBlendModel (the startPriors riding pattern; the resolver
+  answers nil per query until the activation gate passes, pinned
+  byte-identical) converts each merged candidate's signals to an
+  arbiter.Row and returns the clamped FileDelta; (2) QueryPlugins'
+  emit closure routes every emission through arbitrateEmission --
+  inactive = the emission returned UNTOUCHED (same rows, same
+  Priority); active = rows stable-re-ordered within the section by
+  model score and a priority-0 section promoted to Priority 1 when
+  its best row outscores bestFileScore over the ring's stashed
+  impression for the same trimmed query (no stash = placement
+  untouched) -- all before the one emit, so the frontend still
+  paints each section once (no new bridge calls; the frontend's
+  existing priority>0 zone + identity reconcile need no changes).
+  queryWithTelemetry stashes into the arbiter ring only while a
+  gate-passed model is installed (activeArbLayer; inactive =
+  today's exact query path). Training runs async (the priors
+  single-flight pattern: arbBusy/arbAgain/arbClosed + arbWG drained
+  in Shutdown after telWG): refreshArbiterNow reads
+  telemetry.jsonl(.1) oldest-first via arbiter.ReadLogFile (read
+  errors log once, arbErrOnce), arbiter.Train applies the gate, and
+  the outcome swaps into the store -- kicked at Startup/apply and by
+  noteArbiterPick after every arbiter.RetrainEvery (50)
+  SUCCESSFULLY APPENDED picks (counted in RecordPick's append
+  goroutine after the record hit disk); the gate verdict logs on
+  the first run (arbLogOnce) and on every activation flip
+  (arbActive). Config changes hot-apply through applyArbiter (the
+  applyPriors shape: disable detaches Model + swaps the layer out
+  live, enable rebuilds + kicks a training run, unresolvable config
+  dir = reported apply error).
   `GetStats() sysstats.Snapshot` (stats.go) returns the
   sampler's cached snapshot -- instant, never IO on this path -- with
   Enabled stamped true (the sampler itself never sets that field;
@@ -443,6 +478,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   layer -- the impression ring restarts empty, in-flight appends
   drain via telWG, and an unresolvable config dir is a reported
   apply error, unlike startTelemetry's quiet degrade),
+  search.arbiter (applyArbiter: the applyPriors shape over the
+  arbiter layer + blend Model resolver; disable detaches Model and
+  re-installs the blend only if it stays Active, enable rebuilds the
+  layer and kicks a training run),
   tray/stats (teardown + rebuild through startTrayIcon/startStats;
   disabling stats emits one Enabled-false snapshot so the row
   hides), history (fresh store at the new persist flag: disk seed +
@@ -774,7 +813,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   zero-returning funcs are byte-identical no-ops
   (blendprior_test.go pins absent/zero no-op, within-class-only
   reordering, one-resolve-per-query, and the no-resurrection
-  contract). The Manager holds the Blend
+  contract). Blend.Model is the learned-arbitration seam beside it
+  (internal/arbiter wired by internal/app arbiter.go): the same
+  resolve-once-per-query contract on the same per-query copy, except
+  the returned func also receives the candidate's ResultSignals --
+  filled inline from selectBlended's locals exactly as each
+  component participated -- and its value joins `blended` AFTER the
+  prior (within-effective-class only; the caller clamps magnitude,
+  arbiter.FileDeltaClamp); Model alone activates the blend, and
+  blendmodel_test.go mirrors the whole blendprior pin family
+  (absent/nil-resolver/zero no-ops, within-class-only, signals
+  delivery, prior+trace composition, no-resurrection). The Manager holds the Blend
   (SetBlend/Blend; swapped as an IMMUTABLE copy -- the app's cwd
   stash swaps fresh ones); nil or zero-value-Signals blends take the
   EXACT pre-blend selectTop path, byte-identical ordering pinned by
@@ -902,7 +951,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   = the whole feature OFF (the preview.enabled privacy precedent,
   deliberately NOT tray.disabled), Normalize repairs maxSizeKB <= 0
   while the schema rejects it, and retainQueries false logs query
-  text as "" (note the bare zero value is false = the
+  text as "" -- and arbiter {enabled}, the OPT-IN learned
+  composition arbitration knob main.go wires to app.Options.Arbiter
+  (zero value = OFF, the preview.enabled privacy precedent; a
+  single bool, so Normalize has nothing to repair) (note
+  retainQueries' bare zero value is false = the
   privacy-conservative direction; Default() writes true)},
   watcher {maxWatches 0 = auto-budget / negative = unlimited,
   sweepMinutes 0 = the 20m default, sweepDisabled (zero value = sweeps
@@ -1124,6 +1177,52 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (most-seen kept). Store.PriorFunc(query) resolves ONCE per query
   (table-generation snapshot, no locks or allocation on the
   per-candidate path) and returns nil when nothing applies.
+- `internal/arbiter` -- the PURE half of opt-in learned composition
+  arbitration (config search.arbiter, zero value = OFF; applied at
+  the index Blend.Model seam AND the app layer's plugin-emission
+  path, both wired by internal/app arbiter.go), pure stdlib and
+  headless-tested on the internal/priors conventions (RWMutex
+  Store, nil-receiver/zero-value = total no-op, immutable swapped
+  Model generations, tolerant log reading). ONE feature definition
+  (features.go): Row is the unified projection of a telemetry
+  shown-row (training) and a live row (serving) -- file rows carry
+  the ResultSignals components + depth/ext, plugin rows carry
+  id/score/priority/within-source rank -- visited sparsely
+  (visitFeatures) by both the serve-path dot products and the
+  trainer's dense vectors (parity pinned); FeatureDim = 69: bias +
+  kind + file class one-hots/jump/align/boost/recency/cwd/penalty/
+  isDir + depth buckets (4) + ext FNV buckets (16) + the four known
+  builtin source one-hots (apps-search/windows/firefox-tabs/
+  firefox-frequent) + other-plugin FNV buckets (8) + score/priority/
+  source-rank + the query-shape and time-of-day features CROSSED
+  with the row kind (qlen buckets x2, has-space x2, has-separator
+  x2, tod buckets x2 -- row-independent features cancel out of every
+  pairwise comparison, so "which source does this query shape mean"
+  must enter as kind crosses). read.go re-declares the telemetry
+  JSONL line shape with explicit tags (the priors no-import stance:
+  internal/telemetry is an append-only writer with a one-way
+  MarshalJSON and no reader; the on-disk format is the contract) --
+  missing/oversized files = (nil, nil), malformed/wrong-version/
+  unknown-kind lines skipped, SourceRank counted per plugin id,
+  Priority derived (apps-search = 1, the one production prioritized
+  source; serve reads the emission's real value), Hour from the
+  pick ts. train.go: Train = pairwise logistic SGD (picked row must
+  outscore every other shown row of its impression; fixed seed
+  20260720, 12 epochs, lr 0.2, L2 1e-4 -- deterministic given the
+  log, pinned) + the ACTIVATION GATE: >= MinPicks (200) JOINED
+  picks, finite weights, and on the time split (oldest 80% train /
+  newest 20% holdout) the model's holdout pairwise accuracy must
+  STRICTLY beat the delivered order's accuracy on the same pairs --
+  pass = retrain on ALL picks and ship, refuse = TrainOutcome with
+  nil Model + a human-readable Reason either way (RetrainEvery = 50
+  is the app layer's new-picks retrain cadence). Model.Score = the
+  full-vector score (cross-source comparisons, same-impression rows
+  only); Model.FileDelta = the file-VARYING block only (per-query
+  constants would eat headroom without reordering), clamped to
+  +-FileDeltaClamp (2.0 blend units -- strictly under the blend's
+  one-class-band equivalence, the 3.0 tier-jump threshold, and the
+  exact-prior's 6.0 saturation; class inversion is additionally
+  impossible structurally, effClass being the primary sort key).
 - `internal/telemetry` -- the opt-in ranking telemetry log (config
   search.telemetry, zero value = OFF; wired by internal/app's
   telemetry.go, fed by internal/index's signalstrace.go seam), pure

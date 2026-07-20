@@ -267,7 +267,7 @@ func (a *App) arbitrateEmission(query string, em plugin.Emission) plugin.Emissio
 		r := base
 		r.SourceRank = i
 		if res.Score != nil {
-			r.Score = *res.Score
+			r.Score = int(*res.Score)
 		}
 		scores[i] = m.Score(r)
 		if scores[i] > best {
