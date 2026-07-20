@@ -201,7 +201,15 @@ func TestApplyHistoryPersistFlipKeepsRecall(t *testing.T) {
 
 func TestApplyFrecencyDisableAndRebuild(t *testing.T) {
 	mgr := index.NewManager(nil, nil, 0)
-	a, _ := newTestApp(t, mgr, Options{})
+	// The learned layers are on by default and would keep a
+	// Prior/Model-only blend installed across a frecency disable;
+	// their escape hatches keep this pin about the frecency layer
+	// alone (the priors-riding interaction has its own test in
+	// priors_test.go).
+	a, _ := newTestApp(t, mgr, Options{
+		Priors:  config.PriorsConfig{Disabled: true},
+		Arbiter: config.ArbiterConfig{Disabled: true},
+	})
 	a.Startup(context.Background())
 	require.NotNil(t, a.frecencyStore(), "the default configuration builds the store")
 	require.NotNil(t, mgr.Blend())

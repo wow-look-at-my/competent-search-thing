@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,7 +34,17 @@ import (
 //	  every other OS. Deliberately a NEW version step rather than an
 //	  extension of v4: configs already stamped 4 by a v4-era build
 //	  must still receive it.
-const currentRootsVersion = 5
+//	6 -- the ranking-defaults flip (see migrateRankingDefaults): the
+//	  local ranking log (search.telemetry) becomes ALWAYS ON -- its
+//	  old opt-in "enabled" switch and retainQueries are removed
+//	  outright, an explicit `"enabled": false` included (the log is
+//	  private by staying on the machine; there is deliberately no off
+//	  state) -- while the two learned layers (search.priors,
+//	  search.arbiter) turn ON by default with their opt-in "enabled"
+//	  switches becoming opt-out "disabled" debug escape hatches. For
+//	  those two an explicit `"enabled": false` is preserved as
+//	  `"disabled": true` -- a deliberate opt-out is respected.
+const currentRootsVersion = 6
 
 // CurrentRootsVersion returns the rootsVersion stamp this build
 // writes. Writers that must preserve the field across a full-file
@@ -168,14 +179,22 @@ func legacyDefaultRoots() []string {
 // other OS the step has nothing to add and only the stamp advances.
 // The v5 step: the same policy again for the macOS noise excludes
 // (darwinNoiseExcludesFor).
+// The v6 step (migrateRankingDefaults) reads raw -- the on-disk JSON
+// bytes -- because the old opt-in "enabled" keys no longer exist on
+// the Config struct: for priors/arbiter an explicit
+// `"enabled": false` becomes `"disabled": true` (the opt-out
+// survives the shape flip) and anything else means the layer is on;
+// for telemetry every old key (enabled and retainQueries) is dropped
+// outright -- the ranking log is always on now. nil raw behaves as
+// "no old keys present".
 // Patterns the user wrote are never touched or reordered either way.
 // Every user-visible change is recorded in MigrationNotes for the app
 // to log loudly at startup -- the index scope never changes silently.
 // Returns true when the config file should be rewritten (a version
 // bump alone counts, so the migration runs once, not on every load).
-func (c *Config) migrateRoots() bool { return c.migrateRootsFor(runtime.GOOS) }
+func (c *Config) migrateRoots(raw []byte) bool { return c.migrateRootsFor(runtime.GOOS, raw) }
 
-func (c *Config) migrateRootsFor(goos string) bool {
+func (c *Config) migrateRootsFor(goos string, raw []byte) bool {
 	if c.RootsVersion >= currentRootsVersion {
 		return false
 	}
@@ -242,8 +261,100 @@ func (c *Config) migrateRootsFor(goos string) bool {
 				strings.Join(dn, ", ")))
 		}
 	}
+	// v6: the ranking-defaults flip.
+	if c.RootsVersion < 6 {
+		c.migrateRankingDefaults(raw)
+	}
 	c.RootsVersion = currentRootsVersion
 	return true
+}
+
+// rankingV6Raw is the minimal raw-document shape the v6 step reads:
+// the pre-v6 opt-in switches (and retainQueries), as pointers so an
+// absent key is distinguishable from an explicit false.
+type rankingV6Raw struct {
+	Search struct {
+		Priors struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"priors"`
+		Telemetry struct {
+			Enabled       *bool `json:"enabled"`
+			RetainQueries *bool `json:"retainQueries"`
+		} `json:"telemetry"`
+		Arbiter struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"arbiter"`
+	} `json:"search"`
+}
+
+// migrateRankingDefaults is the v6 step. search.telemetry -- the
+// local ranking log -- becomes ALWAYS ON: there is deliberately no
+// off state anymore (the log is private by staying on the machine),
+// so every old key is dropped outright -- an explicit
+// `"enabled": false` is overruled by design and announced, and
+// retainQueries goes with it (query text is always recorded now).
+// The learned layers (search.priors, search.arbiter) flip to ON by
+// default with their opt-in "enabled" switches becoming opt-out
+// "disabled" debug escape hatches; for those, per section from the
+// RAW old key: absent -> the new default (on) applies; an explicit
+// `"enabled": false` is preserved as `"disabled": true` (a
+// deliberate opt-out is respected); an explicit `"enabled": true`
+// stays on with the old key dropped by the rewrite. Every
+// user-visible flip lands in MigrationNotes; the Save-back drops the
+// old keys so UnknownKeys never flags leftovers.
+func (c *Config) migrateRankingDefaults(raw []byte) {
+	var old rankingV6Raw
+	if len(raw) > 0 {
+		// Best-effort: Load already parsed these bytes, so a failure
+		// here (nil raw from a direct migrate call, tests) just means
+		// "no old keys present".
+		_ = json.Unmarshal(raw, &old)
+	}
+	// The ranking log: previously off (opted out or never opted in)
+	// means this load turns it on -- say so. Already opted in means
+	// nothing changes beyond the key drop.
+	if e := old.Search.Telemetry.Enabled; e == nil || !*e {
+		c.MigrationNotes = append(c.MigrationNotes,
+			"ranking telemetry is now always on; the log is local-only and never leaves this machine")
+	}
+	var turnedOn, keptOff []string
+	apply := func(section string, enabled *bool, disabled *bool) {
+		switch {
+		case enabled == nil:
+			// No old opt-in key: the new default (on) applies -- unless
+			// the file already carries the NEW shape's disabled:true
+			// (parsed into the struct before this step), which stays.
+			if !*disabled {
+				turnedOn = append(turnedOn, section)
+			}
+		case !*enabled:
+			*disabled = true
+			keptOff = append(keptOff, section)
+		default:
+			*disabled = false
+		}
+	}
+	apply("search.priors", old.Search.Priors.Enabled, &c.Search.Priors.Disabled)
+	apply("search.arbiter", old.Search.Arbiter.Enabled, &c.Search.Arbiter.Disabled)
+	if len(turnedOn) > 0 {
+		c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
+			"the learned ranking layers are now on by default: %s turned on (everything stays on this machine; set the section's disabled flag in config.json to turn one back off)",
+			strings.Join(turnedOn, ", ")))
+	}
+	if len(keptOff) > 0 {
+		c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
+			"your ranking opt-outs were preserved: %s stay off (the old \"enabled\" switch became \"disabled\")",
+			strings.Join(keptOff, ", ")))
+	}
+	if rq := old.Search.Telemetry.RetainQueries; rq != nil {
+		if !*rq {
+			c.MigrationNotes = append(c.MigrationNotes,
+				"search.telemetry.retainQueries was removed: query text is now always recorded in the local ranking log (it never leaves this machine)")
+		} else {
+			c.MigrationNotes = append(c.MigrationNotes,
+				"search.telemetry.retainQueries was removed (query text was already recorded; the log is local-only)")
+		}
+	}
 }
 
 // hasAllBaseExcludes reports whether every base exclude pattern is

@@ -403,7 +403,12 @@ function pickReport(
   const shown: TelemetryShownRef[] = state.items.map((it) =>
     it.kind === "file"
       ? { kind: "file", path: it.file.path }
-      : { kind: "plugin", plugin: it.pluginId, score: it.result.score ?? 0 },
+      : {
+          kind: "plugin",
+          plugin: it.pluginId,
+          score: it.result.score ?? 0,
+          title: it.result.title,
+        },
   );
   return { query: state.query, shown, picked: { rank: index, action, revealed } };
 }
