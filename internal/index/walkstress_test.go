@@ -142,37 +142,36 @@ func stressExpected(dir string, depth int) int {
 // verifyStoreIntegrity walks every entry of a filled store and checks
 // the invariants corruption would break: exact entry count, strictly
 // increasing name-offset table ending at the blob length, NUL-free
-// sane names, and parent paths under the walk root. Plain loops with
-// Fatalf so the whole scan stays cheap enough to run per iteration.
+// sane names, and parent paths under the walk root. The per-entry scan
+// runs millions of times per stress run, so violations are collected
+// in plain Go and asserted once -- the happy path stays a tight loop.
 func verifyStoreIntegrity(t *testing.T, st *Store, want int) {
 	t.Helper()
-	if st.Len() != want || st.LiveCount() != want {
-		t.Fatalf("store count: len=%d live=%d want=%d", st.Len(), st.LiveCount(), want)
-	}
-	if len(st.nameOff) != want+1 {
-		t.Fatalf("offset table: len=%d want=%d", len(st.nameOff), want+1)
-	}
+	require.Equal(t, want, st.Len(), "entry count")
+	require.Equal(t, want, st.LiveCount(), "live count")
+	require.Equal(t, want+1, len(st.nameOff), "offset table length")
+
+	var problems []string
 	last := uint32(0)
-	for i := 0; i < want; i++ {
+	for i := 0; i < want && len(problems) < 8; i++ {
 		off := st.nameOff[i+1]
 		if off <= last {
-			t.Fatalf("offset table not increasing at %d: %d then %d", i, last, off)
+			problems = append(problems, fmt.Sprintf("entry %d: offset table not increasing (%d then %d)", i, last, off))
 		}
 		last = off
 		nb := st.nameBytes(int32(i))
 		if len(nb) == 0 || len(nb) > 128 {
-			t.Fatalf("entry %d: name length %d out of bounds", i, len(nb))
+			problems = append(problems, fmt.Sprintf("entry %d: name length %d out of bounds", i, len(nb)))
 		}
 		if bytes.IndexByte(nb, 0) >= 0 {
-			t.Fatalf("entry %d: NUL inside name %q", i, nb)
+			problems = append(problems, fmt.Sprintf("entry %d: NUL inside name %q", i, nb))
 		}
 		if p := st.ParentDir(int32(i)); p != stressRoot && !strings.HasPrefix(p, stressRoot+"/") {
-			t.Fatalf("entry %d: parent dir %q outside root", i, p)
+			problems = append(problems, fmt.Sprintf("entry %d: parent dir %q outside root", i, p))
 		}
 	}
-	if int(last) != len(st.names) {
-		t.Fatalf("blob length %d != final offset %d", len(st.names), last)
-	}
+	require.Empty(t, problems, "store integrity")
+	require.Equal(t, len(st.names), int(last), "blob length vs final offset")
 }
 
 // TestWalkStressIntegrity is the regression gate for the v395 startup
@@ -211,7 +210,13 @@ func TestWalkStressIntegrity(t *testing.T) {
 	// 16 concurrent Walks x NumCPU workers each: on a 4-CPU CI runner
 	// that is 64 walker goroutines -- the field machine's scale --
 	// grinding through constant preemption.
-	const conc = 16
+	// COMPETENT_SEARCH_STRESS_CONC raises it for investigation runs.
+	conc := 16
+	if s := os.Getenv("COMPETENT_SEARCH_STRESS_CONC"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			conc = n
+		}
+	}
 	deadline := time.Now().Add(budget)
 	iters := 0
 	for iters < 2 || (time.Now().Before(deadline) && iters < 500) {
