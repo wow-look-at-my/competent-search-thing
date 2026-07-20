@@ -52,6 +52,10 @@
      ],
      "description": "Either a builtin icon name ([a-z0-9_-]+: calculator, globe, clock, star, info, warning, link, terminal, text, hash, bolt, app, puzzle; unknown names render as the puzzle glyph) or a short literal glyph such as an emoji (at most 32 BYTES, no control characters)."
     },
+    "iconKey": {
+     "type": "string",
+     "description": "INTERNAL-ONLY icon-resolution key stamped by trusted builtin sources (\"app:<ref>\"): the frontend resolves it to a real icon image via the bound ResolveIcons method, keeping the 'icon' glyph while it resolves. External plugins cannot use it -- the app clears 'iconKey' on every external result, so this schema rejects any result carrying it ('icon' is the plugin-facing channel)."
+    },
     "badge": {
      "type": "string",
      "maxLength": 24,
@@ -105,7 +109,12 @@
      "description": "Optional per-character highlight ranges on title: half-open [start, end) RUNE index pairs. Absent means the app computes them for text-matched results (and none for triggered-tier results); supplying your own wins. The app clamps pairs into the title's rune length, drops empty/inverted pairs, sorts, merges overlaps, and keeps at most 32."
     }
    },
-   "additionalProperties": false
+   "additionalProperties": false,
+   "not": {
+    "required": [
+     "iconKey"
+    ]
+   }
   },
   "field": {
    "title": "Detail field",

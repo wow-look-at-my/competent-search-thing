@@ -114,6 +114,72 @@ int csConfigurePanel(void) {
 	return ok;
 }
 
+int csSetDockIcon(const uint8_t *rgba, int size) {
+	__block int ok = 0;
+	runOnMain(^{
+		// A fresh rep owning its own buffer (planes NULL allocates);
+		// the caller's pixels are copied in, so the Go slice may be
+		// collected the moment this returns. hasAlpha without an
+		// explicit bitmapFormat means PREMULTIPLIED alpha -- the
+		// contract in the header.
+		NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
+			initWithBitmapDataPlanes:NULL
+			              pixelsWide:size
+			              pixelsHigh:size
+			           bitsPerSample:8
+			         samplesPerPixel:4
+			                hasAlpha:YES
+			                isPlanar:NO
+			          colorSpaceName:NSCalibratedRGBColorSpace
+			             bytesPerRow:(NSInteger)size * 4
+			            bitsPerPixel:32];
+		if (rep == nil || rep.bitmapData == NULL) {
+			return;
+		}
+		memcpy(rep.bitmapData, rgba, (size_t)size * (size_t)size * 4);
+		NSImage *img = [[NSImage alloc] initWithSize:NSMakeSize(size, size)];
+		[img addRepresentation:rep];
+		[NSApp setApplicationIconImage:img];
+		ok = 1;
+	});
+	return ok;
+}
+
+// --- active-Space change observation (spacewatch_darwin.go) ---
+
+// csSpaceChanged is exported from Go (spacewatch_darwin.go); cgo emits
+// the definition, this file only references it.
+extern void csSpaceChanged(void);
+
+// The installed observer token. Retained manually (this file compiles
+// without ARC) and deliberately never removed: the observation is
+// app-lifetime, matching the Go side's forever-drain goroutine.
+static id csSpaceObserver = nil;
+
+int csObserveSpaceChanges(void) {
+	__block int ok = 0;
+	runOnMain(^{
+		if (csSpaceObserver != nil) {
+			ok = 1; // already observing
+			return;
+		}
+		id token = [[[NSWorkspace sharedWorkspace] notificationCenter]
+			addObserverForName:NSWorkspaceActiveSpaceDidChangeNotification
+			            object:nil
+			             queue:nil
+			        usingBlock:^(NSNotification *note) {
+			            (void)note;
+			            csSpaceChanged();
+			        }];
+		if (token == nil) {
+			return;
+		}
+		csSpaceObserver = [token retain];
+		ok = 1;
+	});
+	return ok;
+}
+
 // fillAppInfo copies one NSRunningApplication into the C struct.
 // Every accessor is nil-tolerant (messaging nil yields nil/NULL) and
 // the memset guarantees NUL termination after the bounded copies.

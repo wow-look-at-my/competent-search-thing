@@ -511,8 +511,9 @@ func TestBackendSelectionScriptedConstructors(t *testing.T) {
 	buf.Reset()
 	n, err = newBackendNotifier("auto", roots)()
 	require.NoError(t, err)
-	_, isInfo := n.(backendInfo)
-	require.False(t, isInfo, "auto falls back to plain per-directory fsnotify")
+	name, wide = n.(backendInfo).kind()
+	require.Equal(t, PerDirBackendName(), name, "auto falls back to per-directory fsnotify, labeled honestly")
+	require.False(t, wide)
 	require.NoError(t, n.Close())
 	require.Contains(t, buf.String(), "watch: fanotify unavailable (EPERM: no CAP_SYS_ADMIN); falling back to per-directory inotify watches")
 
@@ -531,8 +532,9 @@ func TestBackendSelectionScriptedConstructors(t *testing.T) {
 
 	n, err = newBackendNotifier("inotify", roots)()
 	require.NoError(t, err)
-	_, isInfo = n.(backendInfo)
-	require.False(t, isInfo, "the pinned inotify mode yields plain fsnotify")
+	name, wide = n.(backendInfo).kind()
+	require.Equal(t, PerDirBackendName(), name, "the pinned inotify mode yields per-directory fsnotify, labeled honestly")
+	require.False(t, wide)
 	require.NoError(t, n.Close())
 	require.Equal(t, 2, calls, "the pinned inotify mode never probes fanotify")
 	require.NoError(t, fake.Close())

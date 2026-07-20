@@ -3,6 +3,7 @@ package watch
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -39,8 +40,43 @@ func TestNewBackendNotifierInotifyPinsFSNotify(t *testing.T) {
 	n, err := newBackendNotifier("inotify", []string{t.TempDir()})()
 	require.NoError(t, err)
 	require.NotNil(t, n)
-	_, isInfo := n.(backendInfo)
-	require.False(t, isInfo, "the pinned inotify backend is plain per-directory fsnotify")
+	bi, ok := n.(backendInfo)
+	require.True(t, ok, "the per-directory backend reports its honest per-OS label")
+	name, wide := bi.kind()
+	require.Equal(t, PerDirBackendName(), name,
+		"the pinned per-directory backend is labeled by what fsnotify runs on this OS")
+	require.False(t, wide, "the per-directory model is never whole-filesystem coverage")
+	require.NoError(t, n.Close())
+}
+
+func TestPerDirBackendName(t *testing.T) {
+	want := "inotify"
+	switch runtime.GOOS {
+	case "darwin", "freebsd", "openbsd", "netbsd", "dragonfly":
+		want = "kqueue"
+	case "windows":
+		want = "windows"
+	}
+	require.Equal(t, want, PerDirBackendName())
+}
+
+func TestNewBackendNotifierStrictFSEvents(t *testing.T) {
+	// watcher.backend="fsevents" end to end through the selection:
+	// on darwin the real stream comes up (macOS CI runs this suite),
+	// everywhere else the strict-unavailable rule yields the loud
+	// no-op "none" notifier -- never a per-directory fallback.
+	n, err := newBackendNotifier("fsevents", []string{t.TempDir()})()
+	require.NoError(t, err)
+	require.NotNil(t, n)
+	bi, ok := n.(backendInfo)
+	require.True(t, ok)
+	name, wide := bi.kind()
+	if runtime.GOOS == "darwin" {
+		require.Equal(t, "fsevents", name)
+	} else {
+		require.Equal(t, "none", name, "fsevents is macOS-only; strict mode means no live watching")
+	}
+	require.True(t, wide, "both outcomes leave no per-directory watch set")
 	require.NoError(t, n.Close())
 }
 

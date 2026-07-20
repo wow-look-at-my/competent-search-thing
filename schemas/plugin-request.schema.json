@@ -80,7 +80,8 @@
       "properties": {
         "name": { "type": "string", "description": "Display name." },
         "exec": { "type": "string", "description": "RAW launch command in .desktop Exec syntax (quotes, %-field codes not yet stripped)." },
-        "id": { "type": "string", "description": "Stable identifier (e.g. the .desktop file name)." }
+        "id": { "type": "string", "description": "Stable identifier (e.g. the .desktop file name)." },
+        "icon": { "type": "string", "description": "Platform icon ref (a .desktop Icon= value on linux, the absolute .app bundle path on darwin; absent on windows). Informational -- plugins may ignore it." }
       },
       "additionalProperties": false
     }

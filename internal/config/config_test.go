@@ -178,10 +178,15 @@ func TestNormalize(t *testing.T) {
 	require.Equal(t, "light", keep.Theme, "a configured theme is preserved")
 	require.Equal(t, WatcherBackendInotify, keep.Watcher.Backend, "a valid backend is preserved")
 
+	keepFse := Config{Watcher: WatcherConfig{Backend: " FSEvents "}}
+	keepFse.Normalize()
+	require.Equal(t, WatcherBackendFSEvents, keepFse.Watcher.Backend,
+		"fsevents is a valid backend, trimmed and lowercased to its canonical spelling")
+
 	unknown := Config{Watcher: WatcherConfig{Backend: "kqueue"}}
 	unknown.Normalize()
 	require.Equal(t, WatcherBackendAuto, unknown.Watcher.Backend,
-		"an unknown watcher.backend is repaired to auto")
+		"an unknown watcher.backend is repaired to auto (kqueue is a runtime label, not a config value)")
 
 	var empty Config
 	empty.Normalize()
@@ -215,10 +220,10 @@ func TestDefaultRootsAreWholeFilesystem(t *testing.T) {
 	require.Equal(t, []string{"/"}, c.Roots, "linux/darwin default root is the filesystem root")
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t,
-		[]string{".git", "node_modules", ".cache",
+		withDarwinDefaults([]string{".git", "node_modules", ".cache",
 			".hg", ".svn", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox", ".venv",
-			"/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"},
-		c.Excludes, "defaults carry the noise and system excludes on unix-likes")
+			"/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"}),
+		c.Excludes, "defaults carry the noise and system excludes on unix-likes, plus the darwin firmlink + noise sets")
 }
 
 func TestDirUsesEnvOverride(t *testing.T) {

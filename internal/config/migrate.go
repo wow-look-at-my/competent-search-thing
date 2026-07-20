@@ -20,7 +20,20 @@ import (
 //	  (see noiseExcludes): configs still carrying every base pattern
 //	  get the missing noise patterns appended; curated or emptied
 //	  exclude lists are stamped only, with an informational note.
-const currentRootsVersion = 3
+//	4 -- the macOS firmlink-dedup exclude (see firmlinkExcludesFor):
+//	  /System/Volumes/Data exposes the same files macOS also shows at
+//	  the canonical firmlinked paths (/Users, /Applications, ...), so
+//	  a whole-filesystem walk without it indexes almost half the disk
+//	  twice. Same default-shaped gate and stamp-only fallback as v3;
+//	  a no-op on every other OS.
+//	5 -- the macOS noise excludes (see darwinNoiseExcludesFor):
+//	  unambiguous cache/derived/temp trees (Caches, Xcode DerivedData,
+//	  code-signature manifests, /private/var/folders). Same
+//	  default-shaped gate and stamp-only fallback as v3/v4; a no-op on
+//	  every other OS. Deliberately a NEW version step rather than an
+//	  extension of v4: configs already stamped 4 by a v4-era build
+//	  must still receive it.
+const currentRootsVersion = 5
 
 // baseExcludes returns the name-based exclude patterns every platform
 // defaults to. A fresh slice on every call so callers may append.
@@ -70,12 +83,52 @@ func systemExcludesFor(goos string) []string {
 	return []string{"/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"}
 }
 
+// firmlinkExcludesFor returns the macOS firmlink-dedup exclude
+// patterns for goos. Since Catalina the writable APFS Data volume is
+// mounted at /System/Volumes/Data while firmlinks expose its content
+// AGAIN at the canonical paths (/Users, /Applications, /usr/local,
+// ...), so a whole-filesystem walk from "/" without this exclude
+// indexes roughly 45% of the disk twice -- double the entries, double
+// the RAM, double the build time. The canonical spellings stay
+// indexed in full; only the duplicate /System/Volumes/Data view is
+// skipped. goos is a parameter so tests cover the darwin shape
+// headlessly (the defaultRootsFor convention). A fresh slice on every
+// call so callers may append.
+func firmlinkExcludesFor(goos string) []string {
+	if goos != "darwin" {
+		return nil
+	}
+	return []string{"/System/Volumes/Data"}
+}
+
+// darwinNoiseExcludesFor returns the macOS noise exclude patterns for
+// goos, added in rootsVersion 5: the base-name cache and
+// code-signature trees (Caches -- ~/Library/Caches and every app's
+// cache dir; DerivedData -- Xcode's build products; _CodeSignature
+// and CodeResources -- per-bundle signature manifests, thousands of
+// identically-named entries with zero search value) plus
+// /private/var/folders, macOS's real per-user temp tree (the /tmp and
+// /var/tmp system excludes cover only the symlinked spellings). goos
+// is a parameter so tests cover the darwin shape headlessly (the
+// defaultRootsFor convention). Deliberately NOT here: wholesale
+// .app/.framework bundle-internals exclusion and Application Support
+// filtering -- those change user-visible search semantics and need an
+// owner decision. A fresh slice on every call so callers may append.
+func darwinNoiseExcludesFor(goos string) []string {
+	if goos != "darwin" {
+		return nil
+	}
+	return []string{"Caches", "DerivedData", "_CodeSignature", "CodeResources", "/private/var/folders"}
+}
+
 // defaultExcludes returns the full default exclude set for this
 // process: the base name patterns, the high-churn noise patterns,
-// then the GOOS's system patterns.
+// then the GOOS's system, firmlink-dedup, and macOS noise patterns.
 func defaultExcludes() []string {
 	ex := append(baseExcludes(), noiseExcludes()...)
-	return append(ex, systemExcludesFor(runtime.GOOS)...)
+	ex = append(ex, systemExcludesFor(runtime.GOOS)...)
+	ex = append(ex, firmlinkExcludesFor(runtime.GOOS)...)
+	return append(ex, darwinNoiseExcludesFor(runtime.GOOS)...)
 }
 
 // legacyDefaultRoots returns the pre-v2 default root set -- the user's
@@ -93,21 +146,29 @@ func legacyDefaultRoots() []string {
 }
 
 // migrateRoots upgrades a config from an older rootsVersion in place,
-// applying each version step it is missing. The v2 step: a config
-// whose roots are still the legacy default (exactly the home
+// applying each version step it is missing (migrateRootsFor over the
+// real GOOS; goos steers the exclude sets -- the roots default is the
+// process's own, identical on linux and darwin anyway). The v2 step:
+// a config whose roots are still the legacy default (exactly the home
 // directory) -- or that never chose roots at all -- moves to the
 // whole-filesystem default roots, with the missing system exclude
 // patterns appended; customized roots are left exactly as written.
 // The v3 step: a config whose excludes still contain every base
 // pattern (the default shape) gets the missing high-churn noise
 // patterns appended; a curated-away or explicitly emptied list is
-// left untouched and only announced. Patterns the user wrote are
-// never touched or reordered either way. Every user-visible change is
-// recorded in MigrationNotes for the app to log loudly at startup --
-// the index scope never changes silently. Returns true when the
-// config file should be rewritten (a version bump alone counts, so
-// the migration runs once, not on every load).
-func (c *Config) migrateRoots() bool {
+// left untouched and only announced. The v4 step: the same policy for
+// the macOS firmlink-dedup exclude (firmlinkExcludesFor) -- on any
+// other OS the step has nothing to add and only the stamp advances.
+// The v5 step: the same policy again for the macOS noise excludes
+// (darwinNoiseExcludesFor).
+// Patterns the user wrote are never touched or reordered either way.
+// Every user-visible change is recorded in MigrationNotes for the app
+// to log loudly at startup -- the index scope never changes silently.
+// Returns true when the config file should be rewritten (a version
+// bump alone counts, so the migration runs once, not on every load).
+func (c *Config) migrateRoots() bool { return c.migrateRootsFor(runtime.GOOS) }
+
+func (c *Config) migrateRootsFor(goos string) bool {
 	if c.RootsVersion >= currentRootsVersion {
 		return false
 	}
@@ -120,7 +181,7 @@ func (c *Config) migrateRoots() bool {
 			c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
 				"index roots upgraded to the whole-filesystem default (%s); edit roots in config.json to revert -- the first rescan will re-walk everything",
 				strings.Join(c.Roots, ", ")))
-			if added := c.mergeExcludes(systemExcludesFor(runtime.GOOS)); len(added) > 0 {
+			if added := c.mergeExcludes(systemExcludesFor(goos)); len(added) > 0 {
 				c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
 					"system exclude patterns added for whole-filesystem indexing: %s",
 					strings.Join(added, ", ")))
@@ -130,16 +191,49 @@ func (c *Config) migrateRoots() bool {
 	// v3: the noise-exclude policy. Only a list still carrying every
 	// base pattern is default-shaped enough to extend; anything else
 	// was curated (or explicitly emptied) and stays the user's.
-	if c.hasAllBaseExcludes() {
-		if added := c.mergeExcludes(noiseExcludes()); len(added) > 0 {
+	if c.RootsVersion < 3 {
+		if c.hasAllBaseExcludes() {
+			if added := c.mergeExcludes(noiseExcludes()); len(added) > 0 {
+				c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
+					"high-churn exclude patterns added for the watch layer: %s; remove any of them in config.json to index those trees",
+					strings.Join(added, ", ")))
+			}
+		} else {
 			c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
-				"high-churn exclude patterns added for the watch layer: %s; remove any of them in config.json to index those trees",
-				strings.Join(added, ", ")))
+				"new default exclude patterns exist (%s) but your customized exclude list was left unchanged",
+				strings.Join(noiseExcludes(), ", ")))
 		}
-	} else {
-		c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
-			"new default exclude patterns exist (%s) but your customized exclude list was left unchanged",
-			strings.Join(noiseExcludes(), ", ")))
+	}
+	// v4: the macOS firmlink dedup, same default-shaped gate. On a
+	// non-darwin goos there is no new default, so nothing is added or
+	// announced and only the stamp advances.
+	if fl := firmlinkExcludesFor(goos); c.RootsVersion < 4 && len(fl) > 0 {
+		if c.hasAllBaseExcludes() {
+			if added := c.mergeExcludes(fl); len(added) > 0 {
+				c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
+					"macOS firmlink exclude added: %s (macOS shows the same files at /Users, /Applications, ...; indexing both nearly doubles the index and its RAM); remove it in config.json to index the Data volume twice",
+					strings.Join(added, ", ")))
+			}
+		} else {
+			c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
+				"a new default exclude exists (%s, the macOS firmlink duplicate view of /Users, /Applications, ...) but your customized exclude list was left unchanged",
+				strings.Join(fl, ", ")))
+		}
+	}
+	// v5: the macOS noise excludes, same default-shaped gate and
+	// non-darwin no-op as v4.
+	if dn := darwinNoiseExcludesFor(goos); c.RootsVersion < 5 && len(dn) > 0 {
+		if c.hasAllBaseExcludes() {
+			if added := c.mergeExcludes(dn); len(added) > 0 {
+				c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
+					"macOS noise exclude patterns added: %s (app caches, Xcode build products, code-signature manifests, and the real temp tree); remove any of them in config.json to index those trees",
+					strings.Join(added, ", ")))
+			}
+		} else {
+			c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
+				"new default exclude patterns exist (%s, the macOS cache/derived/temp noise set) but your customized exclude list was left unchanged",
+				strings.Join(dn, ", ")))
+		}
 	}
 	c.RootsVersion = currentRootsVersion
 	return true

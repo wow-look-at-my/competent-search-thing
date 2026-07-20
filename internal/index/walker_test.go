@@ -317,10 +317,89 @@ func TestExcluder(t *testing.T) {
 	}
 	for _, tc := range cases {
 		require.Equal(t, tc.want, ex.Match(tc.base, tc.full), "Match(%q, %q)", tc.base, tc.full)
+		// The split halves the walker hot path uses must agree with
+		// the combined check exactly.
+		require.Equal(t, tc.want, ex.MatchBase(tc.base) || ex.MatchFull(tc.full),
+			"MatchBase||MatchFull diverges from Match for (%q, %q)", tc.base, tc.full)
 	}
+	require.True(t, ex.HasFullPatterns(), "/home/*/secret is a full-path pattern")
+
+	baseOnly, err := NewExcluder([]string{"node_modules", "*.tmp"})
+	require.NoError(t, err)
+	require.False(t, baseOnly.HasFullPatterns(),
+		"base-name patterns alone must not force the walker to build full paths")
 
 	var nilEx *Excluder
 	require.False(t, nilEx.Match("a", "/a"), "nil excluder matches nothing")
+	require.False(t, nilEx.MatchBase("a"))
+	require.False(t, nilEx.MatchFull("/a"))
+	require.False(t, nilEx.HasFullPatterns())
+}
+
+// TestWalkFullPathPatternOnFiles pins the scratch-buffer branch: a
+// full-path pattern that names FILES (not a prunable directory) must
+// still exclude them, wildcards included.
+func TestWalkFullPathPatternOnFiles(t *testing.T) {
+	root := t.TempDir()
+	mkdirs(t, root, "a", "b")
+	writeFile(t, filepath.Join(root, "a/keep.txt"))
+	writeFile(t, filepath.Join(root, "a/drop.log"))
+	writeFile(t, filepath.Join(root, "b/drop.log"))
+	writeFile(t, filepath.Join(root, "b/also.txt"))
+	writeFile(t, filepath.Join(root, "exact.bin"))
+
+	excludes := []string{
+		filepath.Join(root, "*", "drop.log"), // wildcard full-path pattern on files
+		filepath.Join(root, "exact.bin"),     // literal full-path pattern on a file
+	}
+	st, stats := walkInto(t, []string{root}, excludes)
+
+	got := livePaths(st)
+	want := map[string]bool{
+		filepath.Join(root, "a"):          true,
+		filepath.Join(root, "a/keep.txt"): true,
+		filepath.Join(root, "b"):          true,
+		filepath.Join(root, "b/also.txt"): true,
+	}
+	require.Equal(t, want, got)
+	require.Equal(t, len(want), stats.Indexed)
+}
+
+// TestAppendJoinDir pins byte-for-byte parity with joinDir, including
+// the filesystem-root special case and buffer reuse.
+func TestAppendJoinDir(t *testing.T) {
+	cases := [][2]string{
+		{"/home/me", "file.txt"},
+		{"/", "etc"},
+		{"/deep/nested/dir", "x"},
+	}
+	var buf []byte
+	for _, c := range cases {
+		buf = appendJoinDir(buf[:0], c[0], c[1])
+		require.Equal(t, joinDir(c[0], c[1]), string(buf), "appendJoinDir(%q, %q)", c[0], c[1])
+		require.Equal(t, joinDir(c[0], c[1]), unsafeString(buf))
+	}
+	require.Equal(t, "", unsafeString(nil), "the empty view is the empty string")
+}
+
+// TestWalkChildrenPresized proves the growChildren presize: a fresh
+// walk visits every directory exactly once, so each children slice
+// must end at cap == len -- no append-ladder overshoot survives.
+func TestWalkChildrenPresized(t *testing.T) {
+	root := t.TempDir()
+	mkdirs(t, root, "d1", "d2/d3")
+	for i := 0; i < 9; i++ {
+		writeFile(t, filepath.Join(root, "d1", fmt.Sprintf("f%d.txt", i)))
+	}
+	writeFile(t, filepath.Join(root, "d2/d3/one.txt"))
+	writeFile(t, filepath.Join(root, "top.txt"))
+
+	st, _ := walkInto(t, []string{root}, nil)
+	require.NotEmpty(t, st.children)
+	for pid, kids := range st.children {
+		require.Equal(t, len(kids), cap(kids),
+			"children of %q grew past their exact batch size", st.dirs[pid])
+	}
 }
 
 func TestWalkQueueStop(t *testing.T) {
