@@ -515,11 +515,10 @@ type PreviewKagiConfig struct {
 	// environment variable, if set"; with neither, the web-search
 	// preview stays unavailable.
 	APIKey string `json:"apiKey"`
-	// BaseURL is a custom API base URL, e.g. a self-hosted
-	// Kagi-compatible server; empty = the official endpoint
-	// (https://kagi.com/api/v1, the spec's server URL). Passed
-	// through verbatim (no env fallback) and it replaces the WHOLE
-	// default base; requests go to <baseUrl>/search.
+	// BaseURL is a custom API base URL (e.g. a self-hosted
+	// Kagi-compatible server) replacing the WHOLE default base
+	// verbatim; empty = the official https://kagi.com/api/v1. No env
+	// fallback; requests go to <baseUrl>/search.
 	BaseURL string `json:"baseUrl"`
 	// MaxResults caps one web-search preview (default 8).
 	MaxResults int `json:"maxResults"`
