@@ -122,6 +122,7 @@ func (a *App) buildRegistry() dispatcher {
 		Entries:          entries,
 		Version:          Version,
 		InstalledApps:    a.installedApps,
+		AppUsage:         a.appUsage,
 		OpenWindows:      a.openWindowsGetter(),
 		FrequentSites:    sites,
 		FrequentSitesMax: cfg.Firefox.FrequentSites.MaxResults,
@@ -381,6 +382,10 @@ func (a *App) RunPluginAction(pluginID string, action plugin.Action) error {
 		if err := a.runCommandAction(action.Argv, action.DesktopID); err != nil {
 			return err
 		}
+		// A successful launch from a builtin app source counts toward
+		// that app's usage tie-break (recordAppPick ignores every
+		// other pluginID/action shape).
+		a.recordAppPick(pluginID, &action)
 		a.Hide()
 		return nil
 	case plugin.ActionRunBuiltin:

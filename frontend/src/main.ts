@@ -16,6 +16,7 @@
 // GetPreviewConfig + the selection/query hooks).
 
 import { configModeActive, initConfig } from "./config";
+import { initFPSMeter } from "./fpsmeter";
 import { initResize } from "./resize";
 import {
   initPreview,
@@ -33,6 +34,7 @@ import { reconcileSelection } from "./selection";
 import { renderStats } from "./stats";
 import type { StatsNodes } from "./stats";
 import { initTheme } from "./theme";
+import { shouldInterceptWheel } from "./wheel";
 
 const SEARCH_DEBOUNCE_MS = 15;
 const FLASH_COPIED_MS = 1200;
@@ -68,8 +70,8 @@ const statsNodes: StatsNodes = {
 };
 
 // A selectable row: a file hit or one plugin result. The flat
-// keyboard/hover selection runs over the priority plugin rows first,
-// then files, then the below-zone plugin rows -- the DOM order.
+// keyboard selection runs over the priority plugin rows first, then
+// files, then the below-zone plugin rows -- the DOM order.
 type SelectableItem =
   | { kind: "file"; file: WailsSearchResult }
   | { kind: "plugin"; pluginId: string; result: PluginResult };
@@ -89,9 +91,10 @@ interface UIState {
   visible: boolean; // mirrors the Go side; gates the blur auto-hide
   indexMsg: string; // last index build status, shown while idle
   query: string; // query of the current generation (empty-state check)
-  // Whether the user navigated (arrows/Home/End/hover) since the
-  // current generation started: a late priority emission only steals
-  // the auto-selection while this is false (see selection.ts).
+  // Whether the user navigated (arrows/Home/End) since the current
+  // generation started: a late priority emission only steals the
+  // auto-selection while this is false (see selection.ts). Mouse
+  // hover is decorative (CSS :hover) and deliberately not counted.
   userNavigated: boolean;
   histEntries: string[]; // committed query history, oldest -> newest
   histCursor: number; // -1 = not browsing history; 0 = newest entry
@@ -197,19 +200,17 @@ function refreshStats(app: WailsAppBindings): void {
 // element (rows.indexOf): a render-time index would go stale the
 // moment a later-arriving priority section prepends rows above the
 // file rows. indexOf over <= ~30 rows per event is free.
+//
+// TWO DISTINCT POINTER STATES (the hover-steals-selection field
+// report): the ACTIVE selection (state.selected) moves ONLY through
+// keyboard navigation and the auto-select/reconcile paths, and is the
+// single source of truth for Enter, the pick report, and the preview
+// pane. Mouse HOVER is a decorative CSS :hover wash (style.css) --
+// no JS listener at all, so sweeping the cursor across the list can
+// never change what Enter runs, mark the generation navigated, or
+// retarget the preview. A CLICK is the explicit mouse choice: it
+// activates the clicked row directly.
 const rowHandlers = {
-  // Hover selects WITHOUT scrolling: rows sweep under the cursor
-  // while the list scrolls, and a scrollIntoView per mouseenter
-  // would yank the viewport (select's scroll flag defaults to true
-  // for keyboard navigation). Hover counts as navigation: a late
-  // emission must not yank the selection out from under the mouse.
-  onHover: (row: HTMLDivElement) => {
-    const i = state.rows.indexOf(row);
-    if (i >= 0) {
-      state.userNavigated = true;
-      select(i, false);
-    }
-  },
   onActivate: (row: HTMLDivElement, reveal: boolean) => {
     const i = state.rows.indexOf(row);
     if (i >= 0) {
@@ -221,10 +222,11 @@ const rowHandlers = {
 function select(index: number, scroll = true): void {
   state.selected = index;
   applySelection(state.rows, index, scroll);
-  // The single selection choke point: every path (arrows, hover,
-  // Home/End, render reconciles, history recall, app:shown reset)
-  // funnels through here, so the preview pane sees them all. A no-op
-  // while the pane is disabled.
+  // The single selection choke point: every path (arrows, Home/End,
+  // render reconciles, history recall, app:shown reset) funnels
+  // through here, so the preview pane sees them all -- and hover
+  // deliberately never lands here, so it can never retarget the
+  // pane. A no-op while the pane is disabled.
   previewOnSelectionChange(state.items[index] ?? null);
 }
 
@@ -814,23 +816,31 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   // instant programmatic scroll cancels the animation mid-flight, so
   // fast detents lost distance. Applying deltas straight to
   // scrollTop interpolates nothing and can swallow nothing.
-  resultsEl.addEventListener(
-    "wheel",
-    (ev: WheelEvent) => {
-      if (ev.ctrlKey) {
-        return; // leave zoom to the webview
-      }
-      ev.preventDefault(); // needs { passive: false } to stick
-      let dy = ev.deltaY;
-      if (ev.deltaMode === 1) {
-        dy *= 40; // lines -> px (WebKitGTK sends pixels; defensive)
-      } else if (ev.deltaMode === 2) {
-        dy *= resultsEl.clientHeight; // pages -> px
-      }
-      resultsEl.scrollTop += dy;
-    },
-    { passive: false },
-  );
+  // macOS-GATED (wheel.ts): a non-passive always-preventDefault wheel
+  // listener forces WebKit's synchronous main-thread scroll path
+  // there, pinning scroll motion to the (Low-Power-Mode-halvable)
+  // rendering-update clock; with no listener macOS scrolls natively
+  // on the async scrolling thread at display rate. Linux behavior is
+  // byte-identical -- the listener registers exactly as before.
+  if (shouldInterceptWheel(navigator.platform)) {
+    resultsEl.addEventListener(
+      "wheel",
+      (ev: WheelEvent) => {
+        if (ev.ctrlKey) {
+          return; // leave zoom to the webview
+        }
+        ev.preventDefault(); // needs { passive: false } to stick
+        let dy = ev.deltaY;
+        if (ev.deltaMode === 1) {
+          dy *= 40; // lines -> px (WebKitGTK sends pixels; defensive)
+        } else if (ev.deltaMode === 2) {
+          dy *= resultsEl.clientHeight; // pages -> px
+        }
+        resultsEl.scrollTop += dy;
+      },
+      { passive: false },
+    );
+  }
   window.addEventListener("blur", () => {
     // The blur auto-hide is suppressed in config mode: users alt-tab
     // away to check things mid-edit, and losing the editor (plus its
@@ -852,6 +862,9 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   // disabled) before the first summon. Pre-first-summon the enabled
   // snapshot is all dashes -- the sampler has not run yet.
   refreshStats(app);
+  // Dev-only fps meter (fpsmeter.ts): registers NOTHING unless
+  // COMPETENT_SEARCH_FPS=1 -- the Go side answers the gate.
+  initFPSMeter(app);
 }
 
 // window.go and window.runtime are injected by the Wails runtime

@@ -9,6 +9,7 @@ import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/frecency"
 	"github.com/wow-look-at-my/competent-search-thing/internal/index"
+	"github.com/wow-look-at-my/competent-search-thing/internal/plugin"
 )
 
 // The frecency wiring: internal/frecency's signals built once at
@@ -127,16 +128,40 @@ func (a *App) frecencyStore() *frecency.Store {
 	return a.frecStore
 }
 
-// recordOpen is the single frecency capture hook: it counts one open
-// of an absolute path, asynchronously, never blocking the action that
-// triggered it. Open serves open_url actions too, so non-absolute
-// values (URLs) are filtered here rather than at the call sites.
-// Write errors log once and never fail the open (the in-memory count
-// still updated, so in-session ranking keeps working).
+// recordOpen is the file-side frecency capture hook: it counts one
+// open of an absolute path, asynchronously, never blocking the action
+// that triggered it. Open serves open_url actions too, so
+// non-absolute values (URLs) are filtered here rather than at the
+// call sites.
 func (a *App) recordOpen(path string) {
 	if !filepath.IsAbs(path) {
 		return
 	}
+	a.recordFrecencyKey(path)
+}
+
+// recordAppPick is the app-launch capture hook, called from the
+// RunPluginAction run_command success path: it counts one launch of
+// an installed app under its namespaced "app:" usage key
+// (plugin.AppPickKey -- non-empty only for the two builtin app
+// sources, so external plugins' run_commands record nothing). The
+// keys live in the SAME frecency store as file opens but can never
+// collide with the absolute paths the file-ranking blend looks up;
+// they feed only the apps sections' within-tier usage tie-break
+// (registry Options.AppUsage).
+func (a *App) recordAppPick(pluginID string, action *plugin.Action) {
+	key := plugin.AppPickKey(pluginID, action)
+	if key == "" {
+		return
+	}
+	a.recordFrecencyKey(key)
+}
+
+// recordFrecencyKey is the shared async store write behind recordOpen
+// and recordAppPick: write errors log once and never fail the action
+// (the in-memory count still updates, so in-session ranking keeps
+// working); a nil store (frecency disabled, pre-Startup) no-ops.
+func (a *App) recordFrecencyKey(key string) {
 	st := a.frecencyStore()
 	if st == nil {
 		return
@@ -144,12 +169,23 @@ func (a *App) recordOpen(path string) {
 	a.frecWG.Add(1)
 	go func() {
 		defer a.frecWG.Done()
-		if err := st.RecordOpen(path); err != nil {
+		if err := st.RecordOpen(key); err != nil {
 			a.frecErrOnce.Do(func() {
 				log.Printf("frecency: recording an open: %v (in-session ranking still works; further write errors suppressed)", err)
 			})
 		}
 	}()
+}
+
+// appUsage is the plugin registry's Options.AppUsage seam: the
+// decayed launch count recorded under one app usage key. It reads
+// through the LIVE store accessor on every call -- the config
+// live-apply path (applyFrecencyConfig) rebuilds and swaps the store,
+// and a registry built earlier must see the swap without a reload. A
+// nil store (frecency disabled) reads 0 for every key: the cold
+// pure-name app ordering.
+func (a *App) appUsage(key string) float64 {
+	return a.frecencyStore().Boost(key)
 }
 
 // captureFrecencyCwd derives the focused app's working directory for

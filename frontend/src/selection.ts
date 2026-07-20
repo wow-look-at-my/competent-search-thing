@@ -14,8 +14,9 @@ export interface ReconcileInput {
   prevSelected: number;
   rowCount: number;
   queryBlank: boolean;
-  // Whether the user has navigated (arrows / Home / End / hover)
-  // since the current query generation started.
+  // Whether the user has navigated (arrows / Home / End) since the
+  // current query generation started. Mouse hover is decorative
+  // (CSS :hover) and deliberately never counts as navigation.
   userNavigated: boolean;
 }
 

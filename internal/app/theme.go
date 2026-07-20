@@ -36,11 +36,55 @@ func (a *App) GetTheme() map[string]string {
 	dir, derr := config.Dir()
 	if derr != nil {
 		a.logThemeErr(derr)
-		return theme.Dark()
+		return a.tuneDarwinTranslucent(theme.Dark(), cfg.Window.Translucent)
 	}
 	tokens, err := theme.Resolve(cfg.Theme, dir)
 	a.logThemeErr(err)
+	return a.tuneDarwinTranslucent(tokens, cfg.Window.Translucent)
+}
+
+// darwinTranslucentBgOpacity is the bar-body alpha substituted on a
+// darwin translucent window when the theme keeps the builtin default:
+// the stock 0.97 reads effectively opaque over the NSVisualEffectView,
+// which fails the whole point of the frosted look, while 0.65 over the
+// (already semi-opaque) dark/light vibrant material keeps text
+// comfortably readable AND visibly frosted. Chosen over editing
+// dark.json because the builtin value is correct everywhere else --
+// linux has no compositor blur, so a globally lower alpha would put
+// text over raw desktop noise there (and the style.css :root block is
+// sync_test-locked to dark.json anyway).
+const darwinTranslucentBgOpacity = "0.65"
+
+// tuneDarwinTranslucent substitutes the platform-tuned bg-opacity
+// default on darwin translucent windows -- ONLY when the resolved
+// value still equals a BUILTIN default (dark's 0.97 or light's 0.98;
+// both were authored for opaque windows), so any user-customized
+// bg-opacity always wins untouched (a user value that happens to
+// equal a builtin default is indistinguishable from it and gets the
+// tuning too -- documented in the README). Every other platform/flag
+// combination returns the map unchanged.
+func (a *App) tuneDarwinTranslucent(tokens map[string]string, translucent bool) map[string]string {
+	if a.plat.goos != "darwin" || !translucent {
+		return tokens
+	}
+	if !builtinDefaultBgOpacity(tokens["bg-opacity"]) {
+		return tokens // user-customized value: hands off
+	}
+	tokens["bg-opacity"] = darwinTranslucentBgOpacity
 	return tokens
+}
+
+// builtinDefaultBgOpacity reports whether v is one of the builtin
+// themes' bg-opacity values. Builtins are not shadowable, so
+// resolving them needs no config dir (light's own file overrides
+// bg-opacity, which is why comparing against dark alone is not
+// enough).
+func builtinDefaultBgOpacity(v string) bool {
+	if v == theme.Dark()["bg-opacity"] {
+		return true
+	}
+	light, err := theme.Resolve("light", "")
+	return err == nil && v == light["bg-opacity"]
 }
 
 // GetCustomCSS is bound to the frontend: it returns the contents of

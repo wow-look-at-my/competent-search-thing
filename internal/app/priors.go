@@ -192,6 +192,16 @@ func (a *App) refreshPriorsNow() {
 			log.Printf("priors: %v (continuing without the frecency bootstrap; further read errors suppressed)", err)
 		})
 	}
+	// frecency.json also holds the namespaced app-launch usage keys
+	// now ("app:<id>", recordAppPick in frecency.go). The bootstrap
+	// derives FILE extension/folder pick distributions, so only real
+	// paths may feed it -- an "app:open -a /Applications/X.app" key
+	// would smear weight over garbage ext/dir buckets.
+	for k := range fw {
+		if !filepath.IsAbs(k) {
+			delete(fw, k)
+		}
+	}
 	store.SetTables(priors.BuildTables(recs, fw, now))
 	a.priorsLogOnce.Do(func() {
 		q, e, d := store.Counts()

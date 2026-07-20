@@ -48,6 +48,7 @@ const IDLE_INDEX_DEADLINE_MS = 60000; // scenario A: the ~200-file index must co
 const RAW_RTT_MS = 2000; // raw socket round-trip budget (version/ping checks)
 const CLI_RTT_MS = 2500; // `<bin> toggle|show|hide` must exit within this
 const WINDOW_DEADLINE_MS = 8000; // idle-scenario window appear/disappear budget
+const FPS_METER_MS = 12000; // a4: first meter report ~2.5s after the bar shows, wide margin
 const WINDOW_DEADLINE_BUSY_MS = 10000; // scenario B window budget while indexing
 const MIDINDEX_WINDOW_MS = 20000; // scenario B: progress line must appear within this
 const B_INDEX_DONE_MS = 180000; // scenario B: the big index must then COMPLETE within this
@@ -236,14 +237,15 @@ interface App {
 }
 const apps: Array<[string, App]> = [];
 
-function startApp(name: string, roots: string[]): App {
+function startApp(name: string, roots: string[], extraCfg: Record<string, unknown> = {}): App {
   const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), `css-cfg-${name}-`));
   // Minimal valid config; Load normalizes everything else (custom roots
   // survive the rootsVersion migration untouched -- only the legacy home
   // default gets rewritten). rescanIntervalMinutes 0 = no interval rescans.
+  // extraCfg lets a scenario opt into more (the translucent evidence run).
   fs.writeFileSync(
     path.join(cfgDir, "config.json"),
-    JSON.stringify({ roots, hotkey: "alt+space", rescanIntervalMinutes: 0 }, null, 2),
+    JSON.stringify({ roots, hotkey: "alt+space", rescanIntervalMinutes: 0, ...extraCfg }, null, 2),
   );
   // SHORT socket path: darwin sun_path caps at ~104 bytes and $TMPDIR on
   // macOS is a long /var/folders/... path, so use /tmp explicitly.
@@ -254,6 +256,13 @@ function startApp(name: string, roots: string[]): App {
     ...process.env,
     COMPETENT_SEARCH_CONFIG_DIR: cfgDir,
     COMPETENT_SEARCH_SOCKET: sock,
+    // The dev-only fps meter (internal/app fps.go + fpsmeter.ts):
+    // a4-fps-meter hard-gates that the whole chain -- env knob, bound
+    // methods, rAF loop, report, Go log line -- works end to end on a
+    // real WindowServer session. ABSOLUTE rates are evidence only:
+    // this is an AC-powered VM with a virtual display and no Low
+    // Power Mode; battery behavior is not reproducible in CI.
+    COMPETENT_SEARCH_FPS: "1",
   };
   const fd = fs.openSync(logFile, "a");
   // Zero args = the GUI path (internal/cli bare invocation).
@@ -540,7 +549,44 @@ async function scenarioA(): Promise<void> {
 
   await check("a2-show", async () => assertCli(app, "show"));
   await check("a3-window-appears", () => expectWindow(app, true, WINDOW_DEADLINE_MS));
-  await screenshotBestEffort("01-summoned-macos.png");
+
+  // NO screencapture before a4/a5: on the macOS 26 runner image the job's
+  // FIRST screencapture can pop the TCC screen-recording consent dialog
+  // ("bash is requesting to ... directly access your screen"), a system
+  // modal that steals key status from the bar. The webview then fires
+  // blur and the app's (deliberate, Spotlight-style) blur auto-hide hides
+  // the bar -- starving a4's rAF accumulation (a hidden WKWebView services
+  // no frames) and inverting a5's toggle into a re-SHOW. Proven by run
+  // 29728632030 (head 464438e): 02-reshown-macos.png captured the dialog,
+  // a4+a5 failed exactly that way while every focus-independent gate
+  // passed. The race is per-VM, so the ONLY safe ordering is to keep every
+  // capture behind the focus/visibility-sensitive hard gates; scenario A's
+  // one evidence shot now lands after a6 re-shows the bar (same summoned
+  // state), where the remaining gates (a7 hide, a9 hidden-IPC ack) are
+  // dialog-tolerant -- run 29728632030 itself proved a7/a9 and all of
+  // scenario B green with the dialog on screen.
+
+  // a4-fps-meter: with COMPETENT_SEARCH_FPS=1 and the bar visible, a
+  // parseable fps summary line must land in the app log (the meter's
+  // first report fires after ~2.5s of visible rAF time), and the
+  // startup context line must be present too -- it proves the darwin
+  // display/power probe (NSScreen/NSProcessInfo cgo) compiled and ran.
+  // The gate is the MECHANISM, never the absolute number (AC VM).
+  await check("a4-fps-meter", () =>
+    pollFor("an fps summary line in the app log", FPS_METER_MS, POLL_MS, async () => {
+      if (app.proc.exitCode !== null) throw new Error(`app exited (code ${app.proc.exitCode})`);
+      const log0 = readLog(app);
+      const ctx = /fps: meter on; display \d+Hz max, lowPowerMode=(on|off), thermalState=\w+/.exec(log0);
+      if (ctx === null) {
+        if (/fps: meter on;/.test(log0)) {
+          throw new Error(`fps context line present but unparseable (darwin power probe broken): ${/fps: meter on;[^\n]*/.exec(log0)?.[0] ?? ""}`);
+        }
+        return undefined;
+      }
+      const m = /fps: (\d+(?:\.\d+)?) avg, (\d+(?:\.\d+)?) max, (\d+)% frames >20ms over [\d.]+s \(rAF ~(\d+)Hz\)/.exec(log0);
+      return m !== null ? `"${ctx[0]}"; "${m[0]}" (absolute rate is informational: AC-powered CI VM)` : undefined;
+    }),
+  );
 
   await check("a5-toggle-hides", async () => {
     const d = assertCli(app, "toggle");
@@ -552,7 +598,10 @@ async function scenarioA(): Promise<void> {
     const d = assertCli(app, "toggle");
     return `${d}; ${await expectWindow(app, true, WINDOW_DEADLINE_MS)}`;
   });
-  await screenshotBestEffort("02-reshown-macos.png");
+  // Scenario A's one evidence shot: the a6-reshown bar IS the summoned
+  // state (01 keeps its docs-referenced name). Placed here, after the
+  // focus-sensitive gates, per the TCC-dialog note above a4.
+  await screenshotBestEffort("01-summoned-macos.png");
 
   await check("a7-hide", async () => {
     const d = assertCli(app, "hide");
@@ -577,6 +626,40 @@ async function scenarioA(): Promise<void> {
   });
 
   await stopApp(app);
+}
+
+// ---- translucent evidence run (best-effort, NEVER a gate) ---------------------
+// Boots one extra app with window.translucent=true (the macOS frosted-glass
+// path: Mac.WindowIsTranslucent + WebviewIsTransparent + vibrant appearance)
+// and captures a screenshot for the darwin-smoke artifact. EVIDENCE ONLY:
+// no SMOKE ids, every failure is logged as "evidence: ... unavailable" and
+// swallowed -- the real acceptance test for the frosted look is the user's
+// own screen, and screencapture flattens/TCC-blocks on some runner images
+// anyway.
+async function translucentEvidence(): Promise<void> {
+  core.info("---- translucent evidence (best-effort, no gates) ----");
+  const t0 = Date.now();
+  try {
+    const fixture = makeFixtureTree();
+    const app = startApp("translucent", [fixture], { window: { translucent: true } });
+    apps.push(["T", app]);
+    await pollFor("translucent app json ping", BOOT_DEADLINE_MS, POLL_MS, async () => {
+      if (app.proc.exitCode !== null) {
+        throw new Error(`app exited early (code ${app.proc.exitCode}); log tail:\n${logTail(app, 15)}`);
+      }
+      if (!fs.existsSync(app.sock)) return undefined;
+      const r = jsonSend(app.sock, "ping", BOOT_PING_MS);
+      return r.obj !== undefined && r.obj.ok === true ? true : undefined;
+    });
+    const show = cliSend(app, "show");
+    if (show.code !== 0) throw new Error(`show failed: exit=${show.code ?? "none"} ${show.stderr}`);
+    await expectWindow(app, true, WINDOW_DEADLINE_MS);
+    await screenshotBestEffort("03-translucent-macos.png");
+    await stopApp(app);
+    core.info(`evidence: translucent boot + capture completed in ${Date.now() - t0}ms`);
+  } catch (err) {
+    core.info(`evidence: translucent capture unavailable: ${errMsg(err)}`);
+  }
 }
 
 // ---- scenario B: mid-index (big root; the user-reported failure window) -------
@@ -736,7 +819,7 @@ function dumpAppLog(label: string, app: App): void {
 // The lines that make a green run self-explanatory without the full dump:
 // hotkey wiring, index build/progress/summary (which includes "startup
 // complete"), watch backend state, and anything that panicked.
-const SUMMARY_LINE_RE = /hotkey:|index:|watch:|startup complete|panic/;
+const SUMMARY_LINE_RE = /hotkey:|index:|watch:|fps:|startup complete|panic/;
 
 function dumpAppLogSummary(label: string, app: App): void {
   const lines = readLog(app)
@@ -764,6 +847,7 @@ try {
   core.info(`winlist probe compiled in ${Date.now() - tCompile}ms`);
 
   await scenarioA();
+  await translucentEvidence();
   await scenarioB();
 
   if (failures.length > 0) {

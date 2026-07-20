@@ -73,4 +73,36 @@ int csSetDockIcon(const uint8_t *rgba, int size);
 // csSpaceChanged. Returns 1 once the observer is installed.
 int csObserveSpaceChanges(void);
 
+// csPowerInfo fills the display/power state behind the fps meter's
+// context lines: maxFPS = the main screen's maximumFramesPerSecond
+// (0 when the selector is unavailable -- macOS < 12 -- or there is no
+// screen), lowPower = 1 while macOS Low Power Mode is active (0 when
+// off or unreadable), thermal = NSProcessInfo.thermalState's raw
+// value. Returns 1 on success (NSProcessInfo reachable), 0 otherwise.
+int csPowerInfo(int *maxFPS, int *lowPower, int *thermal);
+
+// csObservePowerChanges installs (once, idempotently) observers for
+// NSProcessInfo's power-state and thermal-state change notifications;
+// every change calls the Go export csPowerChanged. Returns 1 once the
+// observers are installed.
+int csObservePowerChanges(void);
+
+// csWebViewUncapNear60 status codes (mirrored by
+// internal/platform.UncapStatus -- keep in lockstep).
+#define CS_UNCAP_APPLIED 1
+#define CS_UNCAP_NO_WINDOW 0
+#define CS_UNCAP_NO_WEBVIEW (-1)
+#define CS_UNCAP_SPI_MISSING (-2)
+#define CS_UNCAP_FEATURE_NOT_FOUND (-3)
+
+// csWebViewUncapNear60 switches WebKit's stable
+// PreferPageRenderingUpdatesNear60FPSEnabled feature OFF on the app's
+// WKWebView (found as a subview of the first window's content view --
+// the same first-window assumption csMoveWindow/csConfigurePanel
+// rely on), so a ProMotion panel renders at its real refresh rate
+// instead of the near-60 default. Every SPI touch is
+// respondsToSelector-guarded; the return value reports exactly what
+// happened (CS_UNCAP_*). Synchronous (main-thread hop).
+int csWebViewUncapNear60(void);
+
 #endif

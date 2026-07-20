@@ -209,6 +209,77 @@ func TestNetCountersFromIfList2(t *testing.T) {
 	require.Equal(t, netCounters{rx: 1010, tx: 2020}, c)
 }
 
+func TestGpuPctFromStats(t *testing.T) {
+	tests := []struct {
+		name  string
+		stats []map[string]int64
+		want  float64
+		ok    bool
+	}{
+		{name: "nil stats: nothing published", stats: nil, want: 0, ok: false},
+		{name: "no accelerators", stats: []map[string]int64{}, want: 0, ok: false},
+		{
+			name:  "accelerator without utilization keys (VM paravirtual GPU)",
+			stats: []map[string]int64{{"In use system memory": 12345}},
+			want:  0, ok: false,
+		},
+		{
+			name:  "device utilization key",
+			stats: []map[string]int64{{"Device Utilization %": 37}},
+			want:  37, ok: true,
+		},
+		{
+			name:  "renderer fallback when the device key is absent",
+			stats: []map[string]int64{{"Renderer Utilization %": 21}},
+			want:  21, ok: true,
+		},
+		{
+			name: "device key preferred over renderer within one accelerator",
+			stats: []map[string]int64{{
+				"Device Utilization %":   10,
+				"Renderer Utilization %": 90,
+			}},
+			want: 10, ok: true,
+		},
+		{
+			name: "multiple accelerators report the busiest",
+			stats: []map[string]int64{
+				{"Device Utilization %": 12},
+				{"Renderer Utilization %": 55},
+				{},
+			},
+			want: 55, ok: true,
+		},
+		{
+			name:  "values clamp into 0..100",
+			stats: []map[string]int64{{"Device Utilization %": 250}},
+			want:  100, ok: true,
+		},
+		{
+			name: "negative garbage clamps to zero but still counts as live",
+			stats: []map[string]int64{
+				{"Device Utilization %": -5},
+			},
+			want: 0, ok: true,
+		},
+		{
+			name: "a keyless accelerator does not mask a keyed one",
+			stats: []map[string]int64{
+				{},
+				{"Device Utilization %": 7},
+			},
+			want: 7, ok: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pct, ok := gpuPctFromStats(tt.stats)
+			require.Equal(t, tt.ok, ok)
+			require.Equal(t, tt.want, pct)
+		})
+	}
+}
+
 /* --- scripted readers ---------------------------------------------- */
 
 // fakeDarwin scripts the darwinReaders seam with mutable readings,
@@ -222,6 +293,7 @@ type fakeDarwin struct {
 	swap     []byte
 	rib      []byte
 	names    map[int]string
+	gpu      []map[string]int64
 	errs     map[string]error
 	calls    map[string]int
 }
@@ -234,6 +306,7 @@ func newFakeDarwin() *fakeDarwin {
 		swap:     xswUsage(4<<30, 3<<30, 1<<30),
 		rib:      ribDump(ifInfo2Record(1, 999, 999), ifInfo2Record(4, 1000, 2000)),
 		names:    map[int]string{1: "lo0", 4: "en0"},
+		gpu:      []map[string]int64{{"Device Utilization %": 37}},
 		errs:     map[string]error{},
 		calls:    map[string]int{},
 	}
@@ -312,6 +385,14 @@ func (f *fakeDarwin) readers() *darwinReaders {
 			defer f.mu.Unlock()
 			return f.names, nil
 		},
+		gpuStats: func() ([]map[string]int64, error) {
+			if err := f.called("gpuStats"); err != nil {
+				return nil, err
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			return f.gpu, nil
+		},
 	}
 }
 
@@ -338,9 +419,27 @@ func TestNewDarwinSources(t *testing.T) {
 	lr := &logRecorder{}
 	s := newDarwinSampler(newFakeDarwin(), lr, nil)
 	require.True(t, s.hasSources())
-	require.Equal(t, 1, lr.count("stats: sources: cpu=host_statistics mem=vm_statistics64+hw.memsize swap=vm.swapusage net=sysctl(iflist2) gpu=none"),
-		"the darwin source line names every source and the honest gpu=none")
+	require.Equal(t, 1, lr.count("stats: sources: cpu=host_statistics mem=vm_statistics64+hw.memsize swap=vm.swapusage net=sysctl(iflist2) gpu=ioaccelerator"),
+		"the darwin source line names every source incl. the IOAccelerator gpu read")
 	require.Zero(t, lr.count("no sources on this platform"))
+}
+
+func TestNewDarwinSourcesNoGPUReader(t *testing.T) {
+	// A readers value without the gpu member (partial seams, older
+	// scripted fakes) is announced honestly as gpu=none and keeps the
+	// dash.
+	lr := &logRecorder{}
+	fake := newFakeDarwin()
+	rd := fake.readers()
+	rd.gpuStats = nil
+	opt := Options{GOOS: "darwin", Logf: lr.logf}
+	opt.darwin = rd
+	s := New(opt)
+	require.True(t, s.hasSources())
+	require.Equal(t, 1, lr.count("gpu=none"))
+	s.sample()
+	require.False(t, s.Snapshot().GPUOK, "nil gpu reader is the silent dash")
+	require.Zero(t, lr.count("stats: gpu:"))
 }
 
 func TestNewDarwinZeroReaders(t *testing.T) {
@@ -377,13 +476,14 @@ func TestDarwinSampleRatesAndStaleness(t *testing.T) {
 	clk := &fakeClock{t: time.Unix(1000, 0)}
 	s := newDarwinSampler(fake, lr, clk)
 
-	// Baseline: point-in-time metrics live, rates not yet, GPU an
-	// honest dash.
+	// Baseline: point-in-time metrics live (the IOAccelerator gpu read
+	// included), rates not yet.
 	s.sample()
 	snap := s.Snapshot()
 	require.False(t, snap.CPUOK, "no rate before a second read")
 	require.False(t, snap.NetOK)
-	require.False(t, snap.GPUOK, "darwin GPU is deliberately dashed")
+	require.True(t, snap.GPUOK, "the registry read is point-in-time: live on the first sample")
+	require.Equal(t, 37.0, snap.GPUPct)
 	require.True(t, snap.MemOK)
 	require.Equal(t, uint64(16<<30), snap.MemTotal)
 	require.Equal(t, uint64(1000-100+200+50)*16384, snap.MemUsed,
@@ -451,7 +551,7 @@ func TestDarwinPerReaderFailure(t *testing.T) {
 
 	// Break every reader: each metric degrades alone, one log per
 	// distinct message across repeated samples.
-	for _, name := range []string{"cpuTicks", "memTotal", "swapRaw", "ifRIB"} {
+	for _, name := range []string{"cpuTicks", "memTotal", "swapRaw", "ifRIB", "gpuStats"} {
 		fake.setErr(name, errors.New(name+" boom"))
 	}
 	s.sample()
@@ -462,13 +562,15 @@ func TestDarwinPerReaderFailure(t *testing.T) {
 	require.False(t, snap.MemOK)
 	require.False(t, snap.SwapOK)
 	require.False(t, snap.NetOK)
+	require.False(t, snap.GPUOK)
 	require.Equal(t, 1, lr.count("stats: cpu: host_statistics:"))
 	require.Equal(t, 1, lr.count("stats: mem: hw.memsize:"))
 	require.Equal(t, 1, lr.count("stats: swap: vm.swapusage:"))
 	require.Equal(t, 1, lr.count("stats: net: NET_RT_IFLIST2:"))
+	require.Equal(t, 1, lr.count("stats: gpu: ioaccelerator: gpuStats boom"))
 
 	// Heal everything: metrics come back (the rate baseline survived).
-	for _, name := range []string{"cpuTicks", "memTotal", "swapRaw", "ifRIB"} {
+	for _, name := range []string{"cpuTicks", "memTotal", "swapRaw", "ifRIB", "gpuStats"} {
 		fake.setErr(name, nil)
 	}
 	fake.set(func(f *fakeDarwin) {
@@ -479,14 +581,30 @@ func TestDarwinPerReaderFailure(t *testing.T) {
 	snap = s.Snapshot()
 	require.True(t, snap.MemOK)
 	require.True(t, snap.SwapOK)
+	require.True(t, snap.GPUOK, "the gpu read heals with its reader")
+	require.Equal(t, 37.0, snap.GPUPct)
 
-	// vmStat failing alone: mem degrades, swap unaffected.
+	// A registry that stops publishing utilization keys degrades gpu
+	// alone, with its own once-only log line.
+	fake.set(func(f *fakeDarwin) { f.gpu = []map[string]int64{{}} })
+	clk.Advance(time.Second)
+	s.sample()
+	clk.Advance(time.Second)
+	s.sample()
+	require.False(t, s.Snapshot().GPUOK)
+	require.Equal(t, 1, lr.count("stats: gpu: ioaccelerator: no utilization statistics published"))
+	fake.set(func(f *fakeDarwin) { f.gpu = []map[string]int64{{"Renderer Utilization %": 8}} })
+
+	// vmStat failing alone: mem degrades, swap unaffected -- and the
+	// gpu read comes back through the renderer-key fallback.
 	fake.setErr("vmStat", errors.New("vm boom"))
 	clk.Advance(time.Second)
 	s.sample()
 	snap = s.Snapshot()
 	require.False(t, snap.MemOK)
 	require.True(t, snap.SwapOK)
+	require.True(t, snap.GPUOK)
+	require.Equal(t, 8.0, snap.GPUPct)
 	require.Equal(t, 1, lr.count("stats: mem: vm_statistics64:"))
 
 	// ifNames failing alone: net degrades.
@@ -544,7 +662,7 @@ func TestDarwinSwapZeroTotalIsValid(t *testing.T) {
 	s := newDarwinSampler(fake, lr, &fakeClock{t: time.Unix(1000, 0)})
 	s.sample()
 	snap := s.Snapshot()
-	require.True(t, snap.SwapOK, "empty dynamic swap is a valid answer (dash)")
+	require.True(t, snap.SwapOK, "empty dynamic swap is a valid answer (the frontend renders 0M, never a dash)")
 	require.Zero(t, snap.SwapTotal)
 	require.Zero(t, snap.SwapUsed)
 }
@@ -599,5 +717,6 @@ func TestDarwinReadersOK(t *testing.T) {
 	require.False(t, (*darwinReaders)(nil).ok())
 	require.False(t, (&darwinReaders{}).ok())
 	require.True(t, (&darwinReaders{ifNames: func() (map[int]string, error) { return nil, nil }}).ok())
+	require.True(t, (&darwinReaders{gpuStats: func() ([]map[string]int64, error) { return nil, nil }}).ok())
 	require.True(t, newFakeDarwin().readers().ok())
 }

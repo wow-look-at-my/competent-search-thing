@@ -16,7 +16,7 @@ import {
 import type { PluginSection, RowHandlers } from "./render";
 import { reconcileSelection } from "./selection";
 
-const handlers: RowHandlers = { onHover: () => {}, onActivate: () => {} };
+const handlers: RowHandlers = { onActivate: () => {} };
 
 function section(
   plugin: string,

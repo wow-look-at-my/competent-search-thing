@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/wow-look-at-my/competent-search-thing/internal/match"
 )
 
 // builtinTimeout is the per-query timeout for builtin providers
@@ -165,6 +167,13 @@ type Options struct {
 	// InstalledApps supplies the installed-application snapshot for
 	// the builtin launcher; nil means the launcher returns nothing.
 	InstalledApps func() []InstalledApp
+	// AppUsage reports the decayed launch count recorded under an
+	// installed app's usage key (AppUsageKey) -- the app layer's
+	// frecency store behind a live accessor. The two app sources use
+	// it as the within-tier tie-break: equal-class rows order by
+	// usage (higher first), then name. nil (frecency disabled,
+	// tests) or an all-zero store keeps the pure name order.
+	AppUsage func(key string) float64
 	// OpenWindows supplies the open-window snapshot for the builtin
 	// window-title search. Unlike InstalledApps, nil means the
 	// provider is NOT REGISTERED at all: the app layer passes nil on
@@ -309,10 +318,10 @@ func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
 		r.register(newAppCommandProvider(opts.Version))
 	}
 	if !disabled(builtinAppsID) {
-		r.register(newAppsProvider(opts.InstalledApps))
+		r.register(newAppsProvider(opts.InstalledApps, opts.AppUsage))
 	}
 	if !disabled(builtinAppsSearchID) {
-		r.register(newAppsSearchProvider(opts.InstalledApps))
+		r.register(newAppsSearchProvider(opts.InstalledApps, opts.AppUsage))
 	}
 	if opts.OpenWindows != nil && !disabled(builtinWindowsID) {
 		r.register(newWindowsProvider(opts.OpenWindows))
@@ -372,11 +381,12 @@ type TargetInfo struct {
 // Emission is one provider's answer for one query generation, shaped
 // like the "plugin:results" Wails event payload. Priority is the
 // provider's source priority (the prioritized extension, stamped
-// HERE, never by a provider response): sections with priority > 0
-// render in the frontend zone ABOVE the file results, and the
-// magnitude orders prioritized sections among themselves. External
-// plugins can never set it -- their wire Response carries no such
-// field and *externalProvider does not implement prioritized.
+// HERE per emission from the strongest minted tier, never by a
+// provider response): sections with priority > 0 render in the
+// frontend zone ABOVE the file results, and the magnitude orders
+// prioritized sections among themselves. External plugins can never
+// set it -- their wire Response carries no such field and
+// *externalProvider does not implement prioritized.
 type Emission struct {
 	Plugin   string   `json:"plugin"`
 	Name     string   `json:"name"`
@@ -385,11 +395,12 @@ type Emission struct {
 	Priority int      `json:"priority,omitempty"`
 }
 
-// providerPriority reads a provider's optional source priority
-// (the prioritized extension); every provider without it is 0.
-func providerPriority(p provider) int {
+// providerPriority reads a provider's optional source priority for an
+// emission whose strongest engine-minted tier is best (the
+// prioritized extension); every provider without it is 0.
+func providerPriority(p provider, best match.Tier) int {
 	if pr, ok := p.(prioritized); ok {
-		return pr.priority()
+		return pr.priority(best)
 	}
 	return 0
 }
@@ -470,7 +481,7 @@ func (r *Registry) CheatSheet() Emission {
 		return Emission{}
 	}
 	sigil := r.bangs.Primary()
-	results, err := sourceResults(r.suggest, context.Background(), baseRequest(sigil, sigil, 0, nil), r.fuzzyDisabled)
+	results, best, err := sourceResults(r.suggest, context.Background(), baseRequest(sigil, sigil, 0, nil), r.fuzzyDisabled)
 	if err != nil {
 		r.logf("plugin %s: cheat sheet: %v", r.suggest.id(), err)
 		return Emission{}
@@ -479,7 +490,7 @@ func (r *Registry) CheatSheet() Emission {
 		Plugin:   r.suggest.id(),
 		Name:     r.suggest.displayName(),
 		Results:  results,
-		Priority: providerPriority(r.suggest), // suggestions are not prioritized: 0
+		Priority: providerPriority(r.suggest, best), // suggestions are not prioritized: 0
 	}
 }
 
@@ -509,10 +520,15 @@ func (r *Registry) dispatchOne(ctx context.Context, p provider, req Request, boo
 		var results []Result
 		var dropped []string
 		var err error
+		// The strongest tier the engine minted for this emission --
+		// the input to per-emission section priority. Only builtin
+		// candidate sources fill it; external providers cannot
+		// implement prioritized, so TierNone is fine for them.
+		bestTier := match.TierNone
 		switch src := p.(type) {
 		case candidateSource:
 			// Builtins: raw candidates through the engine mint.
-			results, err = sourceResults(src, qctx, req, r.fuzzyDisabled)
+			results, bestTier, err = sourceResults(src, qctx, req, r.fuzzyDisabled)
 		case *externalProvider:
 			// External plugins: sanitize, then the engine pass --
 			// triggered tier for claimed queries, text gating for the
@@ -543,7 +559,7 @@ func (r *Registry) dispatchOne(ctx context.Context, p provider, req Request, boo
 				Name:     p.displayName(),
 				Gen:      req.Gen,
 				Results:  results,
-				Priority: providerPriority(p),
+				Priority: providerPriority(p, bestTier),
 			})
 		}
 	}()

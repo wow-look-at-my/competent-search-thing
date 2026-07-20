@@ -18,8 +18,14 @@ const maxAppsSearchResults = 6
 // sourcePriorityApps places the untargeted apps section ABOVE the
 // file results (Emission.Priority via the prioritized extension:
 // priority > 0 = the frontend's above-files zone, magnitude orders
-// prioritized sections among themselves). Launchable apps are what
-// a Spotlight-style bar answers first; the targeted !app / !launch
+// prioritized sections among themselves) -- but ONLY when the
+// section's best row matched STRONG (word-start tier or better; see
+// strongTier in engine.go). Launchable apps are what a
+// Spotlight-style bar answers first when the query plausibly NAMES
+// an app; a section whose best hit is a substring or scattered
+// subsequence ("test" landing on "Keynote Creator Studio") has no
+// such claim and renders below the file results, where an exact-name
+// file or directory outranks it. The targeted !app / !launch
 // provider deliberately stays 0 -- bang queries have no file results
 // to outrank, so targeted mode keeps today's layout.
 const sourcePriorityApps = 1
@@ -37,9 +43,10 @@ type appsSearchProvider struct {
 	builtinBase
 	trigger   *Trigger
 	installed func() []InstalledApp
+	usage     func(string) float64
 }
 
-func newAppsSearchProvider(installed func() []InstalledApp) *appsSearchProvider {
+func newAppsSearchProvider(installed func() []InstalledApp, usage func(string) float64) *appsSearchProvider {
 	t := &Trigger{AllQueries: true}
 	// Compile never fails without regexes; keep the call so the
 	// trigger is in the same state a manifest-loaded one would be.
@@ -48,6 +55,7 @@ func newAppsSearchProvider(installed func() []InstalledApp) *appsSearchProvider 
 		builtinBase: builtinBase{pid: builtinAppsSearchID, name: "Apps"},
 		trigger:     t,
 		installed:   installed,
+		usage:       usage,
 	}
 }
 
@@ -64,13 +72,22 @@ func (p *appsSearchProvider) match(query string, focused *AppInfo) (string, int,
 
 func (p *appsSearchProvider) limit() int { return maxAppsSearchResults }
 
-// priority implements the optional prioritized extension: the apps
-// section renders above the file results.
-func (p *appsSearchProvider) priority() int { return sourcePriorityApps }
+// priority implements the optional prioritized extension DYNAMICALLY:
+// the apps section earns the above-files zone only when its best row
+// matched at the word-start tier or better; a weak (substring/fuzzy)
+// best hit keeps the section below the file results. The threshold is
+// the engine TIER, never the wire score bands, so a band re-tune can
+// not silently move the promotion line.
+func (p *appsSearchProvider) priority(best match.Tier) int {
+	if best <= strongTier {
+		return sourcePriorityApps
+	}
+	return 0
+}
 
 func (p *appsSearchProvider) candidates(_ context.Context, _ Request) ([]match.Candidate, error) {
 	if p.installed == nil {
 		return nil, nil
 	}
-	return appCandidates(p.installed()), nil
+	return appCandidates(p.installed(), p.usage), nil
 }

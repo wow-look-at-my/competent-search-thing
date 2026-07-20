@@ -256,3 +256,37 @@ func TestApplyConfigFrecencyPreservesPrior(t *testing.T) {
 	require.NotNil(t, m.Blend().Prior, "the priors resolver survives a frecency rebuild")
 	a.shutdownPriors()
 }
+
+// TestPriorsBootstrapIgnoresAppKeys: frecency.json also carries the
+// namespaced app-launch usage keys now ("app:<id>", recordAppPick in
+// frecency.go), and the priors FILE-ranking bootstrap must not smear
+// their weight over garbage extension/folder buckets -- only absolute
+// paths feed the rate tables.
+func TestPriorsBootstrapIgnoresAppKeys(t *testing.T) {
+	m, _, _ := priorsFixture(t)
+	a, _ := newTestApp(t, m, Options{
+		Frecency: config.DefaultFrecency(),
+		// Priors ride the zero value: ON by default since the ranking
+		// learning defaults flip (search.priors.disabled opts out).
+	})
+	dir, err := config.Dir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	frec := fmt.Sprintf(`{"v":1,"entries":{`+
+		`"/home/u/notes.txt":{"c":5,"t":%q},`+
+		`"app:open -a /Applications/Safari.app":{"c":9,"t":%q},`+
+		`"app:code.desktop":{"c":7,"t":%q}}}`, ts, ts, ts)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, frecencyFileName), []byte(frec), 0o600))
+
+	a.Startup(context.Background())
+	require.True(t, a.priorsConfigured())
+	a.refreshPriorsNow() // synchronous, so the counts below are settled
+
+	a.priorsMu.Lock()
+	store := a.priorsStore
+	a.priorsMu.Unlock()
+	_, exts, dirs := store.Counts()
+	require.Equal(t, 1, exts, "only the real path's extension may enter the bootstrap")
+	require.Equal(t, 1, dirs, "only the real path's folder prefix may enter the bootstrap")
+}

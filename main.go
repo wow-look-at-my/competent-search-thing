@@ -105,7 +105,7 @@ func runGUI(opts cli.RunOptions) error {
 	// window.translucent (config.json) requests a per-pixel-alpha
 	// window so the rounded bar corners are truly see-through where a
 	// compositor runs (README "Translucent window"). With the flag off
-	// BackgroundColour and Linux stay nil -- the exact pre-flag
+	// BackgroundColour, Linux and Mac stay nil -- the exact pre-flag
 	// wails.Run call.
 	if app.WindowTranslucent() {
 		// The zero-value RGBA (alpha 0) makes the GTK #webview-box
@@ -120,6 +120,12 @@ func runGUI(opts cli.RunOptions) error {
 			// non-nil Linux block would silently flip it to OnDemand.
 			WebviewGpuPolicy: linux.WebviewGpuPolicyNever,
 		}
+		// macOS: the Spotlight frosted glass (NSVisualEffectView +
+		// transparent webview + theme-tracked vibrant appearance).
+		// Decision logic and tests live in internal/app macwindow.go;
+		// options.Mac is read only by the darwin frontend, so setting
+		// it here cannot change linux behavior.
+		wailsOpts.Mac = app.MacWindowOptions()
 	}
 	return wails.Run(wailsOpts)
 }

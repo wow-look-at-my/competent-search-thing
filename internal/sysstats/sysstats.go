@@ -227,14 +227,18 @@ func New(opt Options) *Sampler {
 			break
 		}
 		s.dwn = dwn
-		// GPU is deliberately absent on darwin for now (the honest
-		// dash, GPUOK false): the only spawn-free source is IOKit's
-		// IOAccelerator "PerformanceStatistics" registry ("Device
-		// Utilization %"), a chunk of IOKit/CoreFoundation cgo whose
-		// key names are not API-stable across macOS releases -- the
-		// "intel: deliberately absent" precedent. That route is the
-		// known future source if the dash ever needs replacing.
-		opt.Logf("stats: sources: cpu=host_statistics mem=vm_statistics64+hw.memsize swap=vm.swapusage net=sysctl(iflist2) gpu=none")
+		// GPU is IOKit's IOAccelerator "PerformanceStatistics"
+		// registry (sampleGPUDarwin) whenever the reader is bound --
+		// binding is zero IO here, the first registry read happens on
+		// the sample path. A readers value without the gpu member
+		// (scripted fakes, partial seams) keeps the honest dash, and
+		// so does hardware whose registry publishes no utilization
+		// key (GPUOK false at sample time).
+		gpu := "none"
+		if dwn.gpuStats != nil {
+			gpu = "ioaccelerator"
+		}
+		opt.Logf("stats: sources: cpu=host_statistics mem=vm_statistics64+hw.memsize swap=vm.swapusage net=sysctl(iflist2) gpu=%s", gpu)
 	default:
 		opt.Logf("stats: no sources on this platform; stats row will show placeholders")
 	}
@@ -499,8 +503,9 @@ func (s *Sampler) updateCPURate(snap *Snapshot, cur cpuCounters, now time.Time) 
 // sampleMem fills the point-in-time memory and swap figures:
 // /proc/meminfo on linux, the mach/sysctl readers on darwin. A swap
 // total of zero is a valid answer (no swap configured; SwapOK stays
-// true and the frontend renders a dash for it), while a missing
-// MemAvailable line means the used figure cannot be computed.
+// true and the frontend renders it as the live "0M" value -- only
+// SwapOK=false earns the dash), while a missing MemAvailable line
+// means the used figure cannot be computed.
 func (s *Sampler) sampleMem(snap *Snapshot) {
 	if s.dwn != nil {
 		s.sampleMemDarwin(snap)
@@ -577,11 +582,17 @@ func (s *Sampler) updateNetRate(snap *Snapshot, cur netCounters, now time.Time) 
 }
 
 // sampleGPU fills the GPU percentage from whichever source New probed:
-// the amdgpu sysfs file is a ~16-byte read on the fast tick; the
-// nvidia value is the slow loop's last reading, expired after
-// 3*GPUInterval so a wedged nvidia-smi degrades to a dash instead of a
-// frozen number. No source leaves GPUOK false.
+// darwin reads the IOAccelerator registry on the fast tick (an
+// in-process IOKit call, the amdgpu-read analogue); the amdgpu sysfs
+// file is a ~16-byte read on the fast tick; the nvidia value is the
+// slow loop's last reading, expired after 3*GPUInterval so a wedged
+// nvidia-smi degrades to a dash instead of a frozen number. No source
+// leaves GPUOK false.
 func (s *Sampler) sampleGPU(snap *Snapshot, now time.Time) {
+	if s.dwn != nil {
+		s.sampleGPUDarwin(snap)
+		return
+	}
 	switch {
 	case s.amdPath != "":
 		data, err := os.ReadFile(s.amdPath)

@@ -146,6 +146,12 @@ type App struct {
 	// (darwin; the plat.watchSpaceChanges seam is nil elsewhere) --
 	// see startSpaceWatch in window.go.
 	spaceOnce sync.Once
+	// fpsOnce guards the one-time fps meter context logging + power
+	// observer arming (fps.go; a no-op unless COMPETENT_SEARCH_FPS=1),
+	// and uncapDone (under mu) latches the WebKit near-60 uncap
+	// outcome across its Startup and DomReady attempts.
+	fpsOnce   sync.Once
+	uncapDone bool
 
 	// sessionOnce caches desktop session detection (hotkey backend
 	// selection, the Wayland show path, and the open-windows provider
@@ -448,6 +454,10 @@ func (a *App) Startup(ctx context.Context) {
 	a.spaceOnce.Do(a.startSpaceWatch)
 	a.trayOnce.Do(a.startTray)
 	a.statsOnce.Do(a.startStats)
+	a.fpsOnce.Do(a.startFPSInfo)
+	// Early WebKit near-60 uncap attempt (fps.go; darwin only --
+	// before first render when possible; DomReady retries and logs).
+	a.applyNear60Uncap(false)
 	a.iconsOnce.Do(a.startIcons)
 	a.pluginOnce.Do(a.startPlugins)
 	// The bridge follows the plugin layer (its live tabs feed the
@@ -510,6 +520,9 @@ func (a *App) DomReady(ctx context.Context) {
 			a.plat.configurePanel()
 		}
 	})
+	// Final near-60 uncap attempt: the webview definitely exists now,
+	// so this one logs the outcome either way (fps.go).
+	a.applyNear60Uncap(true)
 	if pending {
 		a.captureAppContext()
 		a.showOnCursorDisplay()

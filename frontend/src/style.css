@@ -158,6 +158,17 @@ body {
   color: var(--sb-fg-dim);
 }
 
+/* Mouse hover is DECORATIVE: a faint wash, clearly weaker than the
+   active selection, applied purely by CSS -- main.ts registers no
+   hover listener, so the pointer can never move the selection that
+   Enter, the pick report, and the preview pane act on (clicking is
+   the explicit mouse choice). The :not(.selected) guard keeps the
+   full selection style authoritative when the pointer rests on the
+   selected row. Token-derived in both builtin themes. */
+.result:not(.selected):hover {
+  background: color-mix(in srgb, var(--sb-selection-bg) 40%, transparent);
+}
+
 .result.selected {
   background: var(--sb-selection-bg);
   color: var(--sb-selection-fg);
@@ -219,13 +230,24 @@ body {
 /* --- stats row ---------------------------------------------------- */
 /* The bottom-most chrome: five tiny label/value pairs (CPU GPU RAM
    SWP NET) fed by stats.ts. One fixed-height single line (flex 0 0
-   auto + nowrap + hidden overflow), so it can never squeeze or shift
-   the results area beyond its own height. All colors/sizes flow
-   through the --sb-* tokens, so it tracks dark and light themes. */
+   auto within #bar + nowrap + hidden overflow), so it can never
+   squeeze or shift the results area beyond its own height. LAYOUT
+   STABILITY (the shifting-metrics field report): the row is a
+   five-track grid whose value spans carry RESERVED min-widths --
+   each slot sized for its formatter's worst-case string (stats.ts
+   *_MAX_CHARS) plus 1ch slack for the non-tabular glyphs (%, /,
+   unit letters, arrows) -- plus tabular-nums, so a value changing
+   rendered width (9.9 -> 10.0, 26K -> 1.2M, 0M -> 6.2/15.9G) never
+   moves its neighbors. stats.test.ts pins the ch values against the
+   constants and the formatters; change them together. All colors/
+   sizes flow through the --sb-* tokens (subtle hues are color-mix
+   derivations of existing tokens -- deliberately NO new token), so
+   the row tracks dark and light themes. */
 
 #stats {
   flex: 0 0 auto;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(5, auto);
   align-items: baseline;
   justify-content: space-between;
   gap: var(--sb-gap);
@@ -237,7 +259,7 @@ body {
   overflow: hidden;
 }
 
-/* display: flex above would defeat the hidden attribute (author rules
+/* display: grid above would defeat the hidden attribute (author rules
    beat the UA sheet's [hidden] { display: none }), so re-assert it:
    the row vanishes entirely when stats are disabled. */
 #stats[hidden] {
@@ -252,16 +274,51 @@ body {
   overflow: hidden;
 }
 
+/* Subtle label tint ("not crazy brightness/saturation"): the accent
+   hue mixed into the dim foreground, further dimmed by the opacity --
+   a hint of color that stays legible on both builtin themes. */
 #stats .stat-label {
   flex: 0 0 auto;
   font-weight: 600;
   letter-spacing: 0.05em;
+  color: color-mix(in srgb, var(--sb-accent) 45%, var(--sb-fg-dim));
   opacity: 0.7;
 }
 
 #stats .stat-value {
   overflow: hidden;
   text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Reserved worst-case slot widths: stats.ts PCT_MAX_CHARS (4),
+   BYTES_PAIR_MAX_CHARS (10) and NET_MAX_CHARS (13) + 1ch slack each.
+   min-width (not width) so a beyond-domain machine degrades to a
+   wider slot instead of clipping -- and the vitest pin fails first. */
+#stat-cpu,
+#stat-gpu {
+  min-width: 5ch;
+}
+
+#stat-ram,
+#stat-swap {
+  min-width: 11ch;
+}
+
+#stat-net {
+  min-width: 14ch;
+}
+
+/* Net direction arrows (stats.ts renders them as spans): download
+   leans toward the accent, upload toward the warning amber -- the
+   same subtle token-mix scale as the labels, distinct from each
+   other in both builtin themes. */
+#stats .net-down {
+  color: color-mix(in srgb, var(--sb-accent) 60%, var(--sb-fg-dim));
+}
+
+#stats .net-up {
+  color: color-mix(in srgb, var(--sb-warning) 60%, var(--sb-fg-dim));
 }
 
 /* --- plugins (append-only, namespaced) ----------------------------- */

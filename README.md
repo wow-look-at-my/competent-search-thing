@@ -468,11 +468,12 @@ buildhost (see [Install](#install)):
       opt-in app-context awareness (focused/running/installed apps),
       built-in commands (`!rescan`, `!reload`, `!config`, `!version`,
       `!quit`, `!app`) and three documented example plugins
-- [x] Installed apps in normal results: matching apps show up as an
-      async Apps section ABOVE the file results for plain queries
-      (a source-priority placement, not a score hack; engine
-      exact/prefix/word-start/substring ranking, capped at 6; see
-      [Apps in normal results](#apps-in-normal-results))
+- [x] Installed apps in normal results: strongly matching apps show
+      up as an async Apps section ABOVE the file results for plain
+      queries (word-start tier or better earns the promotion; weak
+      substring/fuzzy matches render below the files), ordered by
+      your actual launch counts within a match class; capped at 6;
+      see [Apps in normal results](#apps-in-normal-results)
 - [x] Empty-query cheat sheet: an empty bar lists the available
       commands (the same list a bare `!` shows) with no row
       pre-selected; it disappears the moment you type, and no plugin
@@ -1797,23 +1798,37 @@ and macOS enumeration is best-effort.
 Installed apps also surface in plain queries -- no bang needed. Typing
 `fire` shows an **Apps** section ABOVE the file results with Firefox
 in it, auto-selected as row 0 (Spotlight-style: Enter launches the
-app) unless you have already arrowed or hovered into the list, in
-which case your selection stays put. Enter launches the selection
+app) unless you have already arrowed into the list, in which case
+your selection stays put. (Mouse hover only paints a faint
+highlight -- it never moves the selection Enter acts on; clicking a
+row activates that row.) Enter launches the selection
 exactly like `!app` does. This is the fourth built-in provider,
 `apps-search`:
 
 - It fires on every query of 2+ characters and matches app names
   case-insensitively. Ranking: exact name match, then name prefix,
   then word start (`code` matches `Visual Studio Code`), then
-  substring; ties break alphabetically. The section caps at 6 results
-  to stay out of the way -- use `!app` / `!launch` for the full list
-  of 15.
-- "Above the files" is a SOURCE PRIORITY, not a score: the section
-  carries priority 1 on its emission (every other section is 0 and
-  keeps rendering below the file results), the UI places priority > 0
-  sections in the zone above the file rows, and the engine's scoring
-  bands are untouched. The priority is stamped by the app for its
-  built-in sources; external plugins cannot set it.
+  substring; equal classes order by your decayed launch counts (the
+  apps you actually open first), then name. The section caps at 6
+  results to stay out of the way -- use `!app` / `!launch` for the
+  full list of 15.
+- "Above the files" must be EARNED: the section is promoted only
+  when its best row matched at the word-start tier or better, and a
+  promoted section carries only those strong rows. Weak matches
+  (substring, fuzzy) render below the file results instead -- a
+  scattered-subsequence app hit never outranks a directory literally
+  named like your query.
+- The placement is a SOURCE PRIORITY, not a score: the promoted
+  emission carries priority 1 (everything else is 0 and renders
+  below the file results), the UI places priority > 0 sections in
+  the zone above the file rows, and the engine's scoring bands are
+  untouched. The priority is stamped by the app for its built-in
+  sources; external plugins cannot set it.
+- Launch counts come from the frecency store: every successful app
+  launch through the bar counts, decaying with the same 14-day
+  half-life as file opens (under namespaced `app:` keys in
+  `frecency.json`, invisible to file ranking). Cold start -- or
+  `search.frecency.disabled` -- keeps the honest name order.
 - Bang routing keeps the two paths mutually exclusive: a `!app ...` /
   `!launch ...` query dispatches only the targeted launcher (in the
   classic below zone -- there are no file results to outrank on a
@@ -2258,6 +2273,14 @@ over the real interfaces -- loopback, container veths, bridges,
 tunnels, and VPN interfaces are excluded). Sizes use binary units
 (`G`/`M`) with one decimal below 10.
 
+Every metric sits in a fixed-width slot sized for its worst-case
+string, with tabular figures -- so a value changing width (`9.9` to
+`10`, `26K` to `1.2M`) never shifts the neighboring metrics around.
+The labels and the NET down/up arrows carry a subtle tint derived
+from the theme's accent and warning colors (no new theme tokens;
+legible in both builtin themes); the values stay the regular dim
+foreground.
+
 The design guarantee is that the stats can never slow the search
 experience down:
 
@@ -2275,7 +2298,8 @@ Per metric honesty, on Linux:
 
 - **CPU, memory, swap, network** are read from `/proc/stat`,
   `/proc/meminfo`, and `/proc/net/dev`. A swap total of zero (no swap
-  configured) renders as a dash.
+  configured) renders as `0M` -- a live zero is a value; only a
+  failed source shows a dash.
 - **GPU** is best-effort per hardware: AMD exposes a cheap sysfs busy
   file (`gpu_busy_percent`), read on the fast path; NVIDIA has no
   sysfs equivalent, so `nvidia-smi` is polled on a separate slow loop
@@ -2296,7 +2320,7 @@ On macOS the row is live too, from spawn-free system calls:
   will diff the row against -- "total - free" would overstate wildly,
   because macOS keeps `free_count` tiny by design (file cache).
 - **Swap** is the `vm.swapusage` sysctl. macOS swap is dynamic: while
-  it is empty the total reports 0 and the row shows a dash, exactly
+  it is empty the total reports 0 and the row shows `0M`, exactly
   like a swapless Linux box.
 - **Network** sums the 64-bit per-interface byte counters from the
   `NET_RT_IFLIST2` routing sysctl. Loopback and Apple's
@@ -2305,14 +2329,12 @@ On macOS the row is live too, from spawn-free system calls:
   Internet Sharing -- member traffic would double-count -- plus
   `gif`/`stf`/`anpi`/`pktap`/`feth`/`vmnet`); `en*` (Wi-Fi is `en0`
   on Macs, Thunderbolt/USB ethernet are `enN`) and `bond*` count.
-- **GPU deliberately shows a dash** on macOS for now. The only
-  spawn-free source is IOKit's IOAccelerator "PerformanceStatistics"
-  registry ("Device Utilization %"), which is a pile of
-  IOKit/CoreFoundation cgo whose key names are not API-stable across
-  macOS releases -- the same honesty call as Intel-on-Linux: a
-  reliable dash beats a fragile number. The startup probe log says
-  `gpu=none`; the IOAccelerator route is the documented future source
-  if the dash ever needs replacing.
+- **GPU** is IOKit's IOAccelerator `PerformanceStatistics` registry
+  read (`Device Utilization %`, `Renderer Utilization %` fallback;
+  busiest accelerator wins): in-process, spawn-free, no special
+  entitlements, works on Apple Silicon. The probe log says
+  `gpu=ioaccelerator`. Hardware publishing no utilization figures
+  (VM paravirtual GPUs) keeps the honest dash, logged once.
 
 Any metric whose source is missing or failing shows a dash instead of
 a stale or fake number, and the failure is logged once, not per
@@ -2628,6 +2650,44 @@ entries/s (4 workers, warm page cache -- this measures walker overhead
 rather than cold-disk latency). Numbers wobble up to ~2x with
 container load; the shape holds.
 
+### Frame pacing on macOS
+
+Three things decide how smooth the bar feels on a Mac:
+
+- **ProMotion (120Hz) panels**: WebKit caps web content at 60fps by
+  default. The app switches that cap off at startup (a guarded
+  private WebKit toggle -- it degrades to one log line if a macOS
+  update removes it; `COMPETENT_SEARCH_KEEP_NEAR60=1` opts out), so
+  animation and scrolling follow the display's real refresh rate.
+- **Low Power Mode**: macOS makes WebKit halve ALL web rendering to
+  30fps while Low Power Mode is on (System Settings > Battery; often
+  configured as "only on battery"). That is OS design -- no app-level
+  override exists. On a 120Hz panel the uncap above softens the halving
+  to 60fps; on a 60Hz panel expect 30fps until Low Power Mode is off.
+- **Scrolling** uses macOS-native asynchronous scrolling (momentum
+  included), which stays at display rate even when the two throttles
+  above cap the page's animation clock.
+
+To see what your machine is actually doing, run the meter from a
+terminal and read the `fps:` lines:
+
+    COMPETENT_SEARCH_FPS=1 competent-search-thing
+
+1. The startup line names the hardware and the active throttles:
+   `fps: meter on; display 120Hz max, lowPowerMode=off,
+   thermalState=nominal`.
+2. Summon the bar and hold arrow-key or wheel scrolling ~15s; a
+   summary prints every ~5s while the bar is visible:
+   `fps: 59.8 avg, 118.9 max, 2% frames >20ms over 5.0s (rAF ~120Hz)`.
+3. Repeat on battery with Low Power Mode as configured, with it set
+   to Never, and on AC. `~30 avg` with `lowPowerMode=on` is the Low
+   Power Mode throttle (it lifts within a second of turning it off --
+   the meter logs the flip); `rAF ~60Hz` on `display 120Hz max` means
+   the near-60 uncap did not take -- report that log pair.
+4. `thermalState=serious` or worse: thermal throttling; retest cool.
+
+The meter costs nothing when the variable is unset.
+
 ## Wayland
 
 Wayland compositors do not let ordinary clients grab global hotkeys
@@ -2853,6 +2913,11 @@ For debugging and unusual setups:
 - `COMPETENT_SEARCH_FFEXT_SOCKET` -- override the Firefox tab-bridge
   socket path (default
   `$XDG_RUNTIME_DIR/competent-search-thing-ffext.sock`).
+- `COMPETENT_SEARCH_FPS=1` -- dev-only fps meter: logs periodic
+  frame-rate summaries plus a display/power context line (see
+  [Frame pacing on macOS](#frame-pacing-on-macos)). Off = zero cost.
+- `COMPETENT_SEARCH_KEEP_NEAR60=1` -- macOS: skip the WebKit near-60
+  uncap (keep WebKit's default 60fps cap on >60Hz panels).
 
 ### What Wayland does not allow
 
@@ -2984,3 +3049,23 @@ Notes, all verified on this codebase (Wails v2.13.0, WebKitGTK 4.1):
   types, so the flag is *expected* to behave like the verified
   compositor rows -- if your GNOME session disagrees, file an issue
   with a screenshot.
+
+On **macOS** the same flag means the Spotlight look: frosted glass,
+not a hole in the screen.
+
+- The window gains an `NSVisualEffectView` blurring whatever is
+  behind it (that is also exactly what Spotlight is; wails v2.13.0
+  has no raw see-through-window path, and vibrancy is the better
+  look anyway).
+- The material tracks the configured theme: vibrant dark for `dark`
+  and custom themes, vibrant light for `light`.
+- The bar's own background drops to `bg-opacity` 0.65 so the frost
+  actually shows -- the stock values (dark 0.97, light 0.98) read
+  opaque. Only a builtin default is swapped: set your own
+  `bg-opacity` in a theme file and it wins verbatim -- unless it
+  equals a builtin default, which is indistinguishable (the blur
+  behind the window comes from macOS, not the CSS `blur` token).
+- To verify on your Mac: set `"window": {"translucent": true}`,
+  relaunch (this is the one next-launch knob), summon over a busy
+  desktop -- the bar body should show the wallpaper frosted through
+  it. Compare against Spotlight side by side.
