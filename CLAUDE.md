@@ -1101,17 +1101,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   paths) per iteration; ~3s budget in CI,
   COMPETENT_SEARCH_STRESS_SECONDS / COMPETENT_SEARCH_STRESS_CONC
   extend investigation runs. The 2026-07-20 investigation (v395
-  startup crash) proved this path clean on stock go1.25.0 --
-  race-detector-clean, ~700M entries verified across plain/checkptr/
-  clobberfree/gccheckmark/novarmake builds at up to 160 walker
-  goroutines -- and the org incident that day root-caused consumer
-  startup corruption to BUILD-CACHE POISONING (gosmopolitan
-  version-based tool IDs x the shared GOCACHEPROG web cache; fixed
-  by content-derived tool IDs, gosmopolitan#60), NOT app code. The
-  gate pins the walker/store concurrency+integrity invariants; it
-  deliberately CANNOT catch cache poisoning (wrong bytes linked into
-  the binary), so a green gate plus a corrupt field binary means
-  audit the build custody chain, not this package. `Manager`: owns the RWMutex contract (queries
+  startup crash: intermittent growslice len-out-of-range / GC
+  scanstack SIGSEGV on one field machine) CLEARED this package: no
+  app-code defect (race-detector-clean; ~700M entries verified
+  across plain/checkptr/clobberfree/gccheckmark/novarmake builds at
+  up to 160 walker goroutines); compiler excluded (v395 disassembly
+  matches stock go1.25.0 codegen for every crash-relevant function);
+  and the same day's gosmopolitan cache-poisoning incident EXCLUDED
+  for this build (stock-keyed action IDs are disjoint from the
+  fork's go1.26.4cosmo collision namespace; the orchestrator
+  predates the first-bad; opposite crash signatures -- team memory
+  competent-search-thing-v395-not-fork-cache-poisoned). Root cause
+  remains external to this repo: leading hypotheses are
+  machine-local memory or an unattributed stock-runtime issue
+  (golang/go#77955/#73259 family). The gate pins the walker/store
+  concurrency+integrity invariants only -- it cannot detect wrong
+  bytes linked into a binary -- so keep it green rather than
+  re-litigating the walker's ownership story. `Manager`: owns the RWMutex contract (queries
   RLock, mutations Lock); roots/excludes are LIVE-mutable now
   (`SetRoots`/`SetExcludes`, the config editor's index-scope apply;
   Roots/Excludes read under the lock and `BuildFromDisk` latches one
