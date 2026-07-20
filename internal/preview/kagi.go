@@ -1,33 +1,45 @@
 package preview
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 )
 
-// Kagi Search API client constants. The current (v1) API is a GET on
-// /api/v1/search with the query in ?q= and a "Bot <token>" auth
-// header -- verified against https://help.kagi.com/kagi/api/search.html
-// 2026-07-18. (The task originally described the deprecated v0 API,
-// whose flat "data" array this client still accepts on parse; see
-// parseKagiData.)
+// Kagi Search API client. Coded against the published OpenAPI spec
+// (https://kagi.redocly.app/_spec/openapi.yaml, fetched 2026-07-20):
+// the one production server is https://kagi.com/api/v1 (servers[0]),
+// searches are POST /search with a JSON body ({"query", "limit"}, per
+// the request schema), and auth is HTTP Bearer
+// (components.securitySchemes.kagi: type http, scheme bearer; keys
+// from https://kagi.com/api/keys). The pre-fix client did
+// GET {base}/api/v1/search?q=&limit= with an "Authorization: Bot"
+// header -- v0-era conventions the current API does not serve: the
+// /search route exists only for POST, so every GET earned a plain 404
+// (verified live 2026-07-20: GET = 404, POST = 401 without a key).
 const (
-	kagiDefaultBaseURL = "https://kagi.com"
-	kagiSearchPath     = "/api/v1/search"
+	// kagiDefaultBaseURL is the spec's production server URL. A
+	// configured preview.kagi.baseUrl REPLACES it verbatim (any
+	// /api/v1-style prefix included) -- the client appends only
+	// kagiSearchPath, so requests go to <base>/search.
+	kagiDefaultBaseURL = "https://kagi.com/api/v1"
+	kagiSearchPath     = "/search"
 	// kagiDefaultMaxResults mirrors config.DefaultPreviewKagiMax for
 	// callers that pass a non-positive cap.
 	kagiDefaultMaxResults = 8
 	// kagiMaxBody caps how much of a response body is ever read.
 	kagiMaxBody = 2 << 20
+	// kagiTraceCap bounds the logged trace id (the observed ids are
+	// 32 hex chars; never quote unbounded server bytes).
+	kagiTraceCap = 64
 	// Client-side courtesy rate limit: a token bucket of kagiBurst
 	// requests refilled at kagiRefillPerSec. Exceeding it fails fast
 	// without touching the network.
@@ -49,7 +61,9 @@ const providerErrMsgCap = 200
 // Authorization header -- it never appears in errors, logs, or
 // payloads.
 type KagiClient struct {
-	// BaseURL is the API origin (default https://kagi.com).
+	// BaseURL is the API base (default https://kagi.com/api/v1, the
+	// spec's server URL). A non-empty value replaces that WHOLE base;
+	// the client appends only "/search".
 	BaseURL string
 	// HTTPClient performs the requests (default http.DefaultClient;
 	// callers bound requests with their context).
@@ -57,6 +71,12 @@ type KagiClient struct {
 	// Now is the clock behind the rate limiter and the result cache
 	// (default time.Now).
 	Now func() time.Time
+	// Logf receives ONE line per failed (non-2xx) request carrying
+	// the Kagi trace id when the response supplied one (the
+	// X-Kagi-Trace header, else meta.trace -- the id Kagi support
+	// asks for). nil = silent. Never receives the key, the base URL,
+	// or the query.
+	Logf func(format string, v ...any)
 
 	key        string
 	maxResults int
@@ -73,6 +93,15 @@ type kagiCacheEntry struct {
 	at      time.Time
 }
 
+// kagiSearchRequest is the POST /search JSON body -- the subset of
+// the spec's request schema this client uses. query is the one
+// required field; limit ("Maximum number of results to return", spec
+// range 1..1024) carries the configured cap.
+type kagiSearchRequest struct {
+	Query string `json:"query"`
+	Limit int    `json:"limit"`
+}
+
 // NewKagiClient builds a client. maxResults caps one search
 // (non-positive means the default 8).
 func NewKagiClient(key string, maxResults int) *KagiClient {
@@ -87,6 +116,13 @@ func (c *KagiClient) now() time.Time {
 		return c.Now()
 	}
 	return time.Now()
+}
+
+// logf logs through Logf when set.
+func (c *KagiClient) logf(format string, v ...any) {
+	if c.Logf != nil {
+		c.Logf(format, v...)
+	}
 }
 
 // cached returns the fresh cache entry for query, if any. Expired
@@ -170,14 +206,14 @@ func (c *KagiClient) Search(ctx context.Context, query string) ([]WebResult, boo
 	if base == "" {
 		base = kagiDefaultBaseURL
 	}
-	q := url.Values{}
-	q.Set("q", query)
-	q.Set("limit", strconv.Itoa(c.maxResults))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+kagiSearchPath+"?"+q.Encode(), nil)
+	// A two-field struct of string+int cannot fail to marshal.
+	reqBody, _ := json.Marshal(kagiSearchRequest{Query: query, Limit: c.maxResults})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+kagiSearchPath, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, false, fmt.Errorf("kagi: %w", err)
 	}
-	req.Header.Set("Authorization", "Bot "+c.key)
+	req.Header.Set("Authorization", "Bearer "+c.key)
+	req.Header.Set("Content-Type", "application/json")
 	client := c.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
@@ -192,6 +228,14 @@ func (c *KagiClient) Search(ctx context.Context, query string) ([]WebResult, boo
 		return nil, false, fmt.Errorf("kagi: reading response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		// One log line per failure carrying the trace id, so users
+		// can quote it to Kagi support (the docs' guidance); the
+		// returned error stays terse for the pane.
+		if trace := kagiTrace(resp.Header, body); trace != "" {
+			c.logf("kagi: HTTP %d (trace %s -- quote this id to Kagi support)", resp.StatusCode, trace)
+		} else {
+			c.logf("kagi: HTTP %d (no trace id in the response)", resp.StatusCode)
+		}
 		return nil, false, kagiHTTPError(resp.StatusCode, body)
 	}
 	results, err := parseKagiData(body, c.maxResults)
@@ -202,21 +246,42 @@ func (c *KagiClient) Search(ctx context.Context, query string) ([]WebResult, boo
 	return results, false, nil
 }
 
+// kagiTrace extracts the request trace id from a response: the
+// X-Kagi-Trace header, else the body envelope's meta.trace (both
+// documented under the spec's support guidance). Empty when the
+// response carries neither.
+func kagiTrace(h http.Header, body []byte) string {
+	if t := strings.TrimSpace(h.Get("X-Kagi-Trace")); t != "" {
+		return capString(t, kagiTraceCap)
+	}
+	var envelope struct {
+		Meta struct {
+			Trace string `json:"trace"`
+		} `json:"meta"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return ""
+	}
+	return capString(strings.TrimSpace(envelope.Meta.Trace), kagiTraceCap)
+}
+
 // kagiHTTPError builds the terse non-2xx error: "kagi: HTTP <code>"
 // plus at most one short parsed error message -- never the raw body,
-// never the key.
+// never the key. The spec's errorEnvelope carries error[]{code, url,
+// message, location} with "message" as the human-readable field; the
+// legacy "msg" spelling is still read as a fallback.
 func kagiHTTPError(code int, body []byte) error {
 	var envelope struct {
 		Error []struct {
-			Msg     string `json:"msg"`
 			Message string `json:"message"`
+			Msg     string `json:"msg"`
 		} `json:"error"`
 	}
 	msg := ""
 	if err := json.Unmarshal(body, &envelope); err == nil && len(envelope.Error) > 0 {
-		msg = envelope.Error[0].Msg
+		msg = envelope.Error[0].Message
 		if msg == "" {
-			msg = envelope.Error[0].Message
+			msg = envelope.Error[0].Msg
 		}
 	}
 	if msg == "" {
@@ -226,10 +291,12 @@ func kagiHTTPError(code int, body []byte) error {
 }
 
 // parseKagiData extracts the web results from a 2xx body. The v1 API
-// answers {"data":{"search":[{url,title,snippet},...],...}}; the
-// deprecated v0 API answered {"data":[{"t":0,url,title,snippet},...]}
-// with t==0 marking a search result. Both shapes are accepted so a
-// BaseURL pointed at a legacy-compatible server keeps working.
+// answers {"meta":{...},"data":{"search":[{url,title,snippet},...],
+// ...}} (only data.search rows are web results; image/news/etc. ride
+// sibling arrays); the long-dead v0 API answered
+// {"data":[{"t":0,url,title,snippet},...]} with t==0 marking a search
+// result. Both shapes are accepted so a BaseURL pointed at a
+// legacy-compatible server keeps working.
 func parseKagiData(body []byte, maxResults int) ([]WebResult, error) {
 	var envelope struct {
 		Data json.RawMessage `json:"data"`

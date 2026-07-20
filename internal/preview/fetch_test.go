@@ -3,10 +3,13 @@ package preview
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -296,11 +299,14 @@ func TestNewRejectsInvalidBaseURLs(t *testing.T) {
 
 // TestNewWiresKagiBaseURLToClient proves the configured base reaches
 // the real Kagi client -- with ONE trailing slash trimmed, so the
-// request path is exactly the API path.
+// request path is exactly the API path. The configured base replaces
+// the WHOLE default base (https://kagi.com/api/v1); the client
+// appends only /search.
 func TestNewWiresKagiBaseURLToClient(t *testing.T) {
-	var gotPath atomic.Value
+	var gotPath, gotMethod atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath.Store(r.URL.Path)
+		gotMethod.Store(r.Method)
 		_, _ = w.Write([]byte(`{"data":{"search":[{"url":"https://r.example","title":"R","snippet":"s"}]}}`))
 	}))
 	defer srv.Close()
@@ -317,6 +323,44 @@ func TestNewWiresKagiBaseURLToClient(t *testing.T) {
 	require.Equal(t, KindWeb, p.Kind)
 	require.Len(t, p.Web.Results, 1)
 	require.Equal(t, "https://r.example", p.Web.Results[0].URL)
-	require.Equal(t, "/api/v1/search", gotPath.Load(),
+	require.Equal(t, "/search", gotPath.Load(),
 		"one trailing slash on the base is trimmed, no double slash")
+	require.Equal(t, http.MethodPost, gotMethod.Load(), "the spec's search operation is a POST")
+}
+
+// TestNewWiresKagiLogfWithTrace proves a failed Kagi request logs the
+// trace id through Options.Logf under the dispatcher's "preview: "
+// prefix, while the pane payload keeps the terse error.
+func TestNewWiresKagiLogfWithTrace(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Kagi-Trace", "97383064af92b8980b9b4d419b4ce4a9")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"meta":{"trace":"97383064af92b8980b9b4d419b4ce4a9"},"error":[{"code":"limit.exhausted","url":"x","message":"Usage limit exhausted"}]}`))
+	}))
+	defer srv.Close()
+
+	var mu sync.Mutex
+	var logs []string
+	ch := make(chan Payload, 4)
+	d := New(context.Background(), Options{
+		Emit:        func(p Payload) { ch <- p },
+		KagiAPIKey:  "k",
+		KagiBaseURL: srv.URL,
+		Logf: func(format string, v ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			logs = append(logs, fmt.Sprintf(format, v...))
+		},
+	})
+	d.FetchWeb("q", 1)
+	p := waitPayload(t, ch)
+	require.Equal(t, KindError, p.Kind)
+	require.Equal(t, "kagi: HTTP 429: Usage limit exhausted", p.Err)
+
+	mu.Lock()
+	joined := strings.Join(logs, "\n")
+	mu.Unlock()
+	require.Contains(t, joined, "preview: kagi: HTTP 429")
+	require.Contains(t, joined, "97383064af92b8980b9b4d419b4ce4a9")
+	require.NotContains(t, joined, srv.URL, "the base URL never reaches the log")
 }

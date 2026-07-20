@@ -314,9 +314,12 @@ Grant both on the installed binary:
 sudo setcap cap_sys_admin,cap_dac_read_search+ep /usr/local/bin/competent-search-thing
 ```
 
-The app logs this exact command, with the real installed path filled
-in, at every startup that runs without fanotify. Re-run it after any
-upgrade that replaces the file (file capabilities live on the inode).
+The app logs this exact command at every startup that runs without
+fanotify, with the RESOLVED real path filled in -- setcap refuses
+symlinks, so symlinked installs (Homebrew's `bin/` shim, Nix, stow)
+get the actual target printed. Re-run it after any upgrade that
+replaces the file (file capabilities live on the inode); the log says
+so right below the command.
 
 With the grant, a change anywhere under your roots reaches search
 results in about a second. Without it, the watcher falls back to the
@@ -350,6 +353,19 @@ capabilities apply process-wide to every run of that binary:
 anyone who can execute the binary gets both. Only do this on a
 single-user machine whose binary you trust.
 
+**Crash-visibility tradeoff.** A file-capability binary runs
+secure-exec (`AT_SECURE`): the Go runtime forces `GOTRACEBACK=none`
+(not overridable) and the process is non-dumpable -- a crash reports
+one line, with no traceback and no core file.
+When chasing a crash, drop the file caps for that session and grant
+AMBIENT capabilities instead -- full crash reports return while
+fanotify still marks (verified in
+[issue #58](https://github.com/wow-look-at-my/competent-search-thing/issues/58)):
+
+```
+sudo -E capsh --user=$USER --inh=cap_sys_admin,cap_dac_read_search --addamb=cap_sys_admin,cap_dac_read_search -- -c 'exec competent-search-thing'
+```
+
 ### How changes converge
 
 The consistency model in practice:
@@ -358,6 +374,10 @@ The consistency model in practice:
   reaches search results about a second after it happens: events are
   debounced (~250ms quiet / 1s max) and applied by re-checking the
   disk, so duplicated, merged, or reordered events all converge.
+- Changes during the initial startup index build are covered too: the
+  backend is armed BEFORE the walk starts, events queue while it runs,
+  and they apply the moment the fresh index is live (a queue overflow
+  converges via an immediately requested sweep).
 - A change anywhere else -- a directory outside the hot-set budget, a
   watch the OS refused, events lost to a kernel queue overflow --
   appears within one sweep interval: each pass walks every indexed
@@ -369,15 +389,19 @@ The consistency model in practice:
   mtime check and converge at the next full rescan (`!rescan`, or the
   `rescanIntervalMinutes` timer if you set one).
 
-Startup announces the active tier and its numbers in the log -- the
-second form means a whole-filesystem backend is on (`fanotify` on
-Linux, `fsevents` on macOS); the first is always followed, on Linux,
-by the ready-to-paste grant command. An unlimited budget prints as
-`unlimited`, never as a raw MaxInt:
+Startup arms the backend before the index walk (the `armed` line),
+then announces the active tier and its numbers -- the fsevents form
+means a whole-filesystem backend is on (`fanotify` on Linux,
+`fsevents` on macOS); the per-directory form is always followed, on
+Linux, by the ready-to-paste grant command plus its re-run caveat. An
+unlimited budget prints as `unlimited`, never as a raw MaxInt:
 
 ```
+watch: backend inotify armed before the initial index build; changes during indexing are queued and applied when it completes
 watch: backend inotify: 41230/612009 dirs live-watched (budget 65536); sweep interval 20m0s; full rescan interval off
-watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /usr/local/bin/competent-search-thing
+watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /home/linuxbrew/.linuxbrew/Cellar/competent-search-thing/0.412.0/bin/competent-search-thing
+watch: file capabilities stick to that exact file -- re-run the setcap command after any upgrade that replaces the binary (e.g. brew upgrade)
+watch: note: file capabilities force secure-exec (GOTRACEBACK=none, non-dumpable) -- crashes report as one line; ambient caps keep full crash reports (see README / issue #58)
 watch: backend fsevents: whole-filesystem coverage active; per-directory watches not needed
 watch: backend fsevents: 0/0 dirs live-watched (budget 3840); sweep interval 20m0s; full rescan interval off
 ```
@@ -2530,8 +2554,9 @@ Both endpoints are configurable for self-hosted or compatible
 servers -- empty (the default) means the official endpoint:
 
 - `preview.kagi.baseUrl` (config only, no environment fallback):
-  searches go to `<baseUrl>/api/v1/search`, so the target must speak
-  the Kagi Search API.
+  replaces the whole default base (`https://kagi.com/api/v1`);
+  searches go to `<baseUrl>/search`, so the target must speak the
+  Kagi Search API.
 - `preview.openai.baseUrl`, or the `OPENAI_BASE_URL` environment
   variable (the SDK convention; the config value wins): answers go to
   `<baseUrl>/v1/responses`, so the target must implement the OpenAI
@@ -2550,9 +2575,10 @@ the page -- the frontend only learns "configured or not", and an
 unconfigured provider's button renders disabled with a hint naming
 the config key.
 
-Web searches go to the Kagi Search API (v1: `GET
-<baseUrl>/api/v1/search`, default base `https://kagi.com`,
-`Authorization: Bot <key>`). Repeat
+Web searches go to the Kagi Search API (`POST <baseUrl>/search` with
+a JSON body, default base `https://kagi.com/api/v1`,
+`Authorization: Bearer <key>`). A failed search logs one line with
+the Kagi trace id (quote it to Kagi support). Repeat
 queries are served from a 15-minute in-memory cache (marked `cached`
 in the pane, zero network), and a client-side courtesy rate limit --
 a burst of 3 requests refilling at 1 per second -- fails fast with

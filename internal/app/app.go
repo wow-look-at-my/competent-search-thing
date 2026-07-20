@@ -162,11 +162,17 @@ type App struct {
 	waylandPlaceOnce   sync.Once
 	openWindowsLogOnce sync.Once
 
-	themeOnce    sync.Once
-	watchMu      sync.Mutex
-	watcher      *watch.Watcher
-	rescanner    *watch.Rescanner
-	sweeper      *watch.Sweeper
+	themeOnce sync.Once
+	watchMu   sync.Mutex
+	watcher   *watch.Watcher
+	rescanner *watch.Rescanner
+	sweeper   *watch.Sweeper
+	// earlyWatcher is the deferred-start watcher buildIndex arms
+	// BEFORE the initial walk (startEarlyWatch): backend live, events
+	// queued. The completion path's startWatch adopts and releases it;
+	// the cancel/failure paths, Shutdown, and a mid-build config apply
+	// stop it. Nil whenever the trio is up.
+	earlyWatcher *watch.Watcher
 	themeW       *themeWatcher
 	buildCancel  context.CancelFunc // cancels the initial build's walk
 	shuttingDown bool
@@ -560,6 +566,12 @@ func (a *App) buildIndex(ctx context.Context) {
 			Seconds: a.plat.now().Sub(start).Seconds(),
 		})
 	}
+	// Arm the live-watch backend BEFORE the walk (deferred start):
+	// changes landing while the build runs are queued and applied once
+	// the fresh index is swapped in -- startWatch below adopts and
+	// releases this watcher. Without it, everything that happened
+	// during a long first walk stayed invisible until the next sweep.
+	a.startEarlyWatch()
 	// Bound the walk's GC headroom for exactly the build window: the
 	// restore runs before the watch layer comes up, so steady-state
 	// behavior is untouched (gcbound.go has the full rationale).
@@ -579,6 +591,12 @@ func (a *App) buildIndex(ctx context.Context) {
 		a.watchMu.Unlock()
 	}()
 	if err != nil {
+		// The build never reached startWatch, so nothing adopts the
+		// pre-build watcher: stop it here rather than leak its marks
+		// and held queue.
+		if ew := a.takeEarlyWatcher(); ew != nil {
+			ew.Stop()
+		}
 		if errors.Is(err, context.Canceled) {
 			log.Printf("index: initial build cancelled")
 		} else {

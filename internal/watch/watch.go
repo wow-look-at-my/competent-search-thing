@@ -199,6 +199,17 @@ type Watcher struct {
 	// failed).
 	initialDone chan struct{}
 
+	// Deferred-start plumbing (StartDeferred/Release): releaseCh is
+	// non-nil exactly when the watcher was started deferred, and
+	// closing it (releaseOnce) tells the run loop to leave the hold
+	// phase. holdCap bounds the dirty-path set collected while held
+	// (defaultHoldCap; a test knob only -- there is deliberately no
+	// config knob); heldDropped is owned by the run loop like deb.
+	releaseCh   chan struct{}
+	releaseOnce sync.Once
+	holdCap     int
+	heldDropped bool
+
 	mu     sync.Mutex
 	n      notifier
 	budget int
@@ -377,7 +388,50 @@ func readInotifyMaxWatches() int {
 // home subtree, then everything else, up to the budget) and then
 // applies events until Stop. It fails if the watcher was already
 // started or stopped, or if the OS refuses a notifier instance.
-func (w *Watcher) Start() error {
+func (w *Watcher) Start() error { return w.start(false) }
+
+// StartDeferred is Start with the initial registration pass and ALL
+// event application HELD until Release. The notification backend is
+// live from this call: a whole-filesystem backend's marks (fanotify,
+// fsevents) cover everything immediately, and the per-directory model
+// watches the configured roots right away. Every event arriving while
+// held is collected as a dirty path (deduped, bounded by holdCap;
+// beyond the bound the loss degrades the watcher and a reconcile
+// sweep is requested at release). Release then runs the normal
+// initial fill against the CURRENT index contents and applies the
+// collected paths through the ordinary reconcile path.
+//
+// This closes the startup blind window: the app arms the backend
+// BEFORE the initial disk walk, so changes that land mid-walk are
+// queued and applied once the freshly built index is live, instead of
+// being invisible until the next sweep. Stop works at any point,
+// released or not.
+func (w *Watcher) StartDeferred() error {
+	w.releaseCh = make(chan struct{})
+	if w.holdCap <= 0 {
+		w.holdCap = defaultHoldCap
+	}
+	if err := w.start(true); err != nil {
+		w.releaseCh = nil
+		return err
+	}
+	return nil
+}
+
+// Release ends a StartDeferred hold: the run loop performs the initial
+// registration pass (InitialRegistration closes when it finishes) and
+// then applies everything collected while held. Callers wire the
+// Sweeper/Rescanner BEFORE releasing, so hold-loss recovery has a
+// requester to reach. Idempotent; a no-op for a watcher started with
+// plain Start.
+func (w *Watcher) Release() {
+	if w.releaseCh == nil {
+		return
+	}
+	w.releaseOnce.Do(func() { close(w.releaseCh) })
+}
+
+func (w *Watcher) start(deferred bool) error {
 	ctx, err := w.lc.begin()
 	if err != nil {
 		return err
@@ -397,6 +451,15 @@ func (w *Watcher) Start() error {
 	w.budget = resolveBudget(w.opt.MaxWatches, w.readMaxWatches, w.autoBudget)
 	w.stats.Budget = w.budget
 	w.mu.Unlock()
+	if deferred {
+		// The per-directory model can watch the configured roots
+		// before the index exists (everything else needs the fill's
+		// index enumeration, which waits for Release); on a wide or
+		// "none" backend addWatch is the usual no-op.
+		for _, d := range w.rootList {
+			w.addWatch(d)
+		}
+	}
 	go w.run(ctx)
 	return nil
 }
