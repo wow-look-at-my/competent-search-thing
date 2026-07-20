@@ -3,9 +3,13 @@
 // "preview:result" payloads (metadata cards, highlighted text, image
 // thumbnails, directory listings, web/AI answers, errors), and owns
 // the explicit web-search / AI command strip (Ctrl+K / Ctrl+I --
-// NEVER triggered by a keystroke or selection path). Inert unless
-// initPreview ran with the pane enabled: every exported hook then
-// no-ops -- zero listeners, zero overhead. All DOM building here is
+// NEVER triggered by a keystroke or selection path). initPreview
+// wires the (enabled-gated) listeners once; the effective state --
+// pane mounted or not, provider buttons, results-column width --
+// comes from applyPreviewConfig, re-applied by config.ts whenever the
+// preview config changes live (a GUI save or an external config.json
+// edit), so the pane mounts and unmounts without a relaunch. While
+// disabled every hook and handler no-ops. All DOM building here is
 // text-node-only; the single sanctioned markup sink is highlight.ts's
 // setHighlighted (see its invariant comment).
 
@@ -29,6 +33,7 @@ export type PreviewSelection =
   | { kind: "plugin"; pluginId: string; result: PluginResult };
 
 let app: WailsAppBindings | null = null;
+let wired = false; // initPreview grabbed elements + wired listeners
 let enabled = false;
 let kagiConfigured = false;
 let openaiConfigured = false;
@@ -49,21 +54,17 @@ let query = ""; // current query (strip labels + explicit triggers)
 let lastKey: string | null = null; // dedupes re-selects of the same row
 
 // initPreview wires the pane up -- called once from wire() with the
-// GetPreviewConfig answer. A disabled pane installs NOTHING: no body
-// class, no listeners, no keydown handler; the exported hooks all
-// no-op.
+// GetPreviewConfig answer. Elements and listeners are wired
+// unconditionally (each handler no-ops while the pane is disabled);
+// the effective state is applied by applyPreviewConfig, which
+// config.ts re-invokes with a fresh GetPreviewConfig answer whenever
+// the config changes live.
 export function initPreview(
   a: WailsAppBindings,
   rt: WailsRuntime,
   cfg: PreviewConfigInfo,
 ): void {
-  if (!cfg.enabled) {
-    return;
-  }
   app = a;
-  enabled = true;
-  kagiConfigured = cfg.kagiConfigured;
-  openaiConfigured = cfg.openaiConfigured;
 
   bodyEl = document.getElementById("preview-body") as HTMLDivElement;
   spinnerEl = document.getElementById("preview-spinner") as HTMLDivElement;
@@ -73,17 +74,6 @@ export function initPreview(
   folderTpl = document.getElementById("tpl-icon-folder") as HTMLTemplateElement;
   fileTpl = document.getElementById("tpl-icon-file") as HTMLTemplateElement;
 
-  document.body.classList.add("with-preview");
-  // The left results column keeps the flag-off bar width (config
-  // window.width) instead of a hardcoded 680px: the grid consumes
-  // this custom property (the --plugin-accent precedent -- a custom
-  // property, never an inline width style).
-  if (cfg.resultsWidth > 0) {
-    document.body.style.setProperty("--preview-results-col", `${cfg.resultsWidth}px`);
-  }
-
-  configureTrigger(webBtn, kagiConfigured, "preview.kagi.apiKey (or KAGI_API_KEY)");
-  configureTrigger(aiBtn, openaiConfigured, "preview.openai.apiKey (or OPENAI_API_KEY)");
   webBtn.addEventListener("click", triggerWeb);
   aiBtn.addEventListener("click", triggerAI);
 
@@ -94,14 +84,55 @@ export function initPreview(
 
   rt.EventsOn("preview:result", (...data: unknown[]) => {
     const p = data[0] as PreviewPayload | undefined;
-    if (p === undefined || p.gen !== gen) {
-      return; // stale generation (or malformed payload)
+    if (!enabled || p === undefined || p.gen !== gen) {
+      return; // pane off, stale generation, or malformed payload
     }
     cancelSpinner(); // first accepted payload wins over the spinner
     renderPayload(p);
   });
 
-  renderIdle();
+  wired = true;
+  applyPreviewConfig(cfg);
+}
+
+// applyPreviewConfig mounts, unmounts, or reconfigures the pane from
+// one GetPreviewConfig answer. The backend applies preview config
+// live (a GUI save or an external config.json edit rebuilds the
+// dispatcher and resizes the window), so the frontend follows here:
+// the with-preview body class toggles the grid layout, the results
+// column tracks config window.width, and the web/AI trigger buttons
+// track their providers' key state in both directions.
+export function applyPreviewConfig(cfg: PreviewConfigInfo): void {
+  if (!wired) {
+    return; // boot race: initPreview has not grabbed the elements yet
+  }
+  const was = enabled;
+  enabled = cfg.enabled;
+  kagiConfigured = cfg.kagiConfigured;
+  openaiConfigured = cfg.openaiConfigured;
+  if (!enabled) {
+    if (was) {
+      cancelSpinner();
+      lastKey = null;
+      document.body.classList.remove("with-preview");
+    }
+    return;
+  }
+  document.body.classList.add("with-preview");
+  // The left results column keeps the flag-off bar width (config
+  // window.width) instead of a hardcoded 680px: the grid consumes
+  // this custom property (the --plugin-accent precedent -- a custom
+  // property, never an inline width style).
+  if (cfg.resultsWidth > 0) {
+    document.body.style.setProperty("--preview-results-col", `${cfg.resultsWidth}px`);
+  }
+  setTrigger(webBtn, kagiConfigured, "preview.kagi.apiKey (or KAGI_API_KEY)");
+  setTrigger(aiBtn, openaiConfigured, "preview.openai.apiKey (or OPENAI_API_KEY)");
+  updateStripLabels();
+  if (!was) {
+    lastKey = null; // the next selection change repaints the pane
+    renderIdle();
+  }
 }
 
 /* --- hooks main.ts calls -------------------------------------------- */
@@ -204,18 +235,22 @@ function targetKey(t: PreviewTarget): string {
 
 /* --- explicit web / AI triggers ------------------------------------- */
 
-function configureTrigger(
+// setTrigger reflects one provider's key state on its strip button --
+// in BOTH directions, since a live config change can add or remove a
+// key while the app runs.
+function setTrigger(
   btn: HTMLButtonElement,
   configured: boolean,
   keyHint: string,
 ): void {
-  if (!configured) {
-    btn.disabled = true;
-    btn.title = "add " + keyHint + " to config";
-  }
+  btn.disabled = !configured;
+  btn.title = configured ? "" : "add " + keyHint + " to config";
 }
 
 function onPreviewKeydown(ev: KeyboardEvent): void {
+  if (!enabled) {
+    return;
+  }
   if (!(ev.ctrlKey || ev.metaKey) || ev.altKey || ev.shiftKey) {
     return;
   }
@@ -233,7 +268,7 @@ function onPreviewKeydown(ev: KeyboardEvent): void {
 // FetchAIPreview: the strip buttons and their hotkeys. No keystroke,
 // selection, or render path may ever call them.
 function triggerWeb(): void {
-  if (app === null || !kagiConfigured || query.trim() === "") {
+  if (app === null || !enabled || !kagiConfigured || query.trim() === "") {
     return;
   }
   const g = ++gen;
@@ -245,7 +280,7 @@ function triggerWeb(): void {
 }
 
 function triggerAI(): void {
-  if (app === null || !openaiConfigured || query.trim() === "") {
+  if (app === null || !enabled || !openaiConfigured || query.trim() === "") {
     return;
   }
   const g = ++gen;

@@ -59,13 +59,15 @@ func NewManager(roots, excludes []string, maxResults int) *Manager {
 func (m *Manager) BuildFromDisk(ctx context.Context, progress ProgressFunc) (int, time.Duration, error) {
 	start := time.Now()
 	fresh := NewStore()
-	excludes := m.excludes
-	if skips := mountSkips(m.roots); len(skips) > 0 {
+	// Roots and excludes are mutable now (SetRoots/SetExcludes); latch
+	// one consistent copy for the whole walk.
+	roots, excludes := m.Roots(), m.Excludes()
+	if skips := mountSkips(roots); len(skips) > 0 {
 		log.Printf("index: skipping %d mounted filesystems (network/virtual): %s",
 			len(skips), strings.Join(skips, ", "))
-		excludes = append(copyStrings(m.excludes), skips...)
+		excludes = append(excludes, skips...)
 	}
-	stats, err := Walk(ctx, fresh, m.roots, excludes, progress)
+	stats, err := Walk(ctx, fresh, roots, excludes, progress)
 	if err != nil {
 		return 0, time.Since(start), err
 	}
@@ -78,11 +80,31 @@ func (m *Manager) BuildFromDisk(ctx context.Context, progress ProgressFunc) (int
 // SetFuzzyDisabled turns the fuzzy (subsequence) name-match tier off
 // or on for subsequent queries. The zero value keeps fuzzy matching on
 // (config search.fuzzyDisabled; main.go wires it right after
-// construction).
+// construction, and the config editor's live apply re-wires it).
 func (m *Manager) SetFuzzyDisabled(disabled bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.fuzzyDisabled = disabled
+}
+
+// FuzzyDisabled reports the current fuzzy-tier switch (diagnostics and
+// the config live-apply tests).
+func (m *Manager) FuzzyDisabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.fuzzyDisabled
+}
+
+// SetMaxResults swaps the default query limit subsequent queries use
+// (config maxResults; the config editor's live apply calls it). A
+// non-positive value selects DefaultMaxResults, matching NewManager.
+func (m *Manager) SetMaxResults(n int) {
+	if n <= 0 {
+		n = DefaultMaxResults
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.maxResults = n
 }
 
 // SetBlend swaps the frecency ranking blend subsequent queries use
@@ -105,13 +127,14 @@ func (m *Manager) Blend() *Blend {
 }
 
 // Query searches the live store. limit <= 0 selects the configured
-// default. Returns nil when nothing matches.
+// default (read under the lock: SetMaxResults may change it live).
+// Returns nil when nothing matches.
 func (m *Manager) Query(q string, limit int) []Result {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if limit <= 0 {
 		limit = m.maxResults
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	return m.store.QueryWith(q, limit, QueryOptions{FuzzyDisabled: m.fuzzyDisabled, Blend: m.blend})
 }
 
@@ -210,14 +233,48 @@ func (m *Manager) Footprint() Footprint {
 	return m.store.Footprint()
 }
 
-// Roots returns a copy of the configured walk roots.
-func (m *Manager) Roots() []string { return copyStrings(m.roots) }
+// Roots returns a copy of the configured walk roots (read under the
+// lock: SetRoots may change them live).
+func (m *Manager) Roots() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return copyStrings(m.roots)
+}
 
-// Excludes returns a copy of the configured exclude patterns.
-func (m *Manager) Excludes() []string { return copyStrings(m.excludes) }
+// SetRoots swaps the walk roots subsequent rebuilds use (config roots;
+// the config editor's live apply calls it, then requests a rescan so
+// the index converges to the new scope). The live store is untouched
+// -- only a rebuild re-reads the roots.
+func (m *Manager) SetRoots(roots []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.roots = copyStrings(roots)
+}
 
-// MaxResults returns the default query limit.
-func (m *Manager) MaxResults() int { return m.maxResults }
+// Excludes returns a copy of the configured exclude patterns (read
+// under the lock: SetExcludes may change them live).
+func (m *Manager) Excludes() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return copyStrings(m.excludes)
+}
+
+// SetExcludes swaps the exclude patterns subsequent rebuilds use
+// (config excludes; the config editor's live apply calls it, like
+// SetRoots). The live store is untouched until the next rebuild.
+func (m *Manager) SetExcludes(excludes []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.excludes = copyStrings(excludes)
+}
+
+// MaxResults returns the default query limit (read under the lock:
+// SetMaxResults may change it live).
+func (m *Manager) MaxResults() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.maxResults
+}
 
 func copyStrings(s []string) []string {
 	if len(s) == 0 {

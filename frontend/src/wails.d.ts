@@ -229,6 +229,45 @@ interface PreviewConfigInfo {
   resultsWidth: number;
 }
 
+// GetConfigForEdit answer (internal/app ConfigForEdit): the current
+// configuration, freshly loaded and normalized, as indented JSON --
+// the editor's starting document -- plus the file path, a non-fatal
+// load warning, and the on-disk file's unknown keys (they survive
+// hand edits but are DROPPED by a GUI save; the editor warns).
+interface ConfigForEdit {
+  configJson: string;
+  path: string;
+  loadWarning?: string;
+  unknownKeys?: string[] | null;
+}
+
+// SaveConfig answer (internal/app SaveResult). error carries the
+// strict-decode or write failure (ok false); applied/pending mirror
+// the live-apply pass (Go nil slices arrive as null); applyErrors are
+// per-section apply failures (the save itself landed); nextLaunch
+// lists the ruled next-launch knobs by name -- today only
+// "window.translucent" -- surfaced verbatim, never as a generic
+// "restart" notion.
+interface ConfigSaveResult {
+  ok: boolean;
+  error?: string;
+  applied: string[] | null;
+  pending: string[] | null;
+  applyErrors?: string[] | null;
+  nextLaunch?: string[] | null;
+}
+
+// Payload of the "config:changed" event (internal/app
+// configChangedEvent): an external config.json edit hot-applied
+// (applied/pending/nextLaunch as in ConfigSaveResult) or failed to
+// load (error; the previous config stays applied).
+interface ConfigChangedEvent {
+  applied: string[] | null;
+  pending: string[] | null;
+  nextLaunch?: string[] | null;
+  error?: string;
+}
+
 interface WailsAppBindings {
   Search(query: string): Promise<WailsSearchResult[]>;
   Open(path: string): Promise<void>;
@@ -280,6 +319,17 @@ interface WailsAppBindings {
   GetPreviewConfig(): Promise<PreviewConfigInfo>;
   FetchWebPreview(query: string, gen: number): Promise<void>;
   FetchAIPreview(query: string, gen: number): Promise<void>;
+  // Config editor (internal/app configui.go). GetConfigSchema returns
+  // the embedded config.schema.json document (the editor renders from
+  // it); GetConfigForEdit starts an edit session over the current
+  // configuration; SaveConfig strictly validates the composed JSON,
+  // saves atomically, and live-applies the result; OpenConfigFile
+  // opens config.json itself with the OS default handler (the hand-
+  // edit escape hatch -- external edits hot-apply via config:changed).
+  GetConfigSchema(): Promise<string>;
+  GetConfigForEdit(): Promise<ConfigForEdit>;
+  SaveConfig(raw: string): Promise<ConfigSaveResult>;
+  OpenConfigFile(): Promise<void>;
 }
 
 // The subset of the Wails runtime API this app uses (see the wails v2

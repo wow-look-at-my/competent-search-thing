@@ -45,4 +45,9 @@ void cs_prepare_wayland(void);
 /* Free a CsMintResult id (NULL-safe). */
 void cs_mint_free(char *id);
 
+/* Resize the bar window, moving the non-resizable fixed-size floor
+ * with it (default size + resize; see launchmint_linux.c). GTK main
+ * thread only. 1 = a toplevel was found and asked to resize. */
+int cs_set_window_size(int w, int h);
+
 #endif /* CS_LAUNCHMINT_LINUX_H */

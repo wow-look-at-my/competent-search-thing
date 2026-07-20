@@ -29,7 +29,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   lives only in the nil branch, so an unpinned non-nil Linux block
   silently flips it to OnDemand -- and with the flag off both fields
   stay nil, byte-identical to the pre-flag call (CI screenshots run
-  flag-off). Zero-arg invocation boots the GUI exactly as before the
+  flag-off). runGUI also wires RunOptions.OpenConfig ->
+  app Options.OpenConfigOnStartup (the CLI config subcommand's
+  start-into-editor path). Zero-arg invocation boots the GUI exactly
+  as before the
   CLI existed (CI screenshots rely on that). Deliberately has NO test
   file and stays minimal (see coverage note below).
 - `internal/app` -- the Wails-bound App object and its methods
@@ -98,8 +101,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   icon activation -> the same toggle path the hotkey uses (pending-
   show deferral included), Rescan now -> requestRescan (the !rescan
   behavior minus the bar-hide; still-building = friendly logged
-  error), Open config -> openConfigFile (the !config behavior minus
-  the bar-hide), Quit -> runBuiltin("quit"); the tooltip getter wraps
+  error), Open config -> showConfig (the !config behavior: summon
+  into the in-app config editor, pre-DomReady deferral included; the
+  config FILE stays reachable via the OpenConfigFile bound method),
+  Quit -> runBuiltin("quit"); the tooltip getter wraps
   hotkeyDescription(), so no shortcut is promised until one is
   proven), arms the darwin dismiss-on-Space-change once (spaceOnce ->
   startSpaceWatch in window.go over the plat.watchSpaceChanges seam --
@@ -340,7 +345,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (the report carries row identities only, so the frontend can never
   forge signal values; a missing ring entry = Joined false, features
   zero), and the append runs async (telWG + telErrOnce, the
-  recordOpen pattern) with Shutdown draining telWG beside frecWG.
+  recordOpen pattern) with Shutdown draining telWG beside frecWG;
+  config changes to search.telemetry hot-apply through
+  applyTelemetry (the sectionAppliers row in configapply.go).
   `GetStats() sysstats.Snapshot` (stats.go) returns the
   sampler's cached snapshot -- instant, never IO on this path -- with
   Enabled stamped true (the sampler itself never sets that field;
@@ -369,16 +376,108 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   without one, byte-identical old behavior (run seam, detached, nil
   env); run_builtin -> rescan (Rescanner.Request;
   friendly error while the index is still building) / reload
-  (newRegistry, swap under mutex, Close the old) / config (open
-  config.json) / version (copy `Version`, stays open) / quit
+  (newRegistry, swap under mutex, Close the old) / config
+  (showConfig: summon into the in-app config editor, bar stays up) /
+  version (copy `Version`, stays open) / quit
   (runtime Quit); activate_window (parseWindowID: non-empty base-10
   uint32) -> the activateWindow seam (production
-  native.ActivateWindow); everything else hides the bar on success. Events
+  native.ActivateWindow); everything else hides the bar on success.
+  CONFIG EDITOR (configui.go + configapply.go): `showConfig()` is the
+  one summon-into-editor path (IPC "config", the !config builtin, the
+  tray item, Options.OpenConfigOnStartup -- which latches
+  pendingShow+pendingConfig at Startup): pre-DomReady = latch both
+  (Hide cancels both; DomReady runs the show then emits
+  "config:open"), hidden = the capture+show path then "config:open",
+  visible = "config:open" only -- the mode event ALWAYS follows
+  "app:shown" (the frontend's app:shown handler re-renders). Bound
+  methods: `GetConfigSchema()` (the embedded
+  schemas.ConfigSchemaJSON), `GetConfigForEdit()` (fresh
+  Load+Normalize as indented JSON + config path + LoadWarning +
+  config.UnknownKeys of the RAW file -- keys a GUI save would drop,
+  "$schema" included), `SaveConfig(raw)` (strict
+  DisallowUnknownFields decode with line-numbered error messages ->
+  force on-disk rootsVersion (a GUI save must never re-trigger the
+  Load migrations) -> Normalize -> atomic config.Save -> record
+  sha256 of the saved bytes (lastSavedSum, self-write suppression) ->
+  applyConfig(next, "gui-save")), and `OpenConfigFile()` (the file
+  escape hatch, wraps openConfigFile). The LIVE-APPLY ENGINE
+  (configapply.go): `applyConfig(next, origin)` diffs old->new per
+  section over the `sectionAppliers` table (cfgCurrent baseline,
+  seeded by Startup's startConfigState fresh Load, swapped per pass;
+  nil baseline = apply-all, appliers are idempotent; whole passes
+  serialized by applyMu and skipped once shuttingDown), runs each
+  changed row's apply plus each named GROUP once per pass, and
+  returns ApplyResult{Applied, Pending, Errors, NextLaunch}. The
+  table is TOTAL -- Pending stays empty; every section applies live:
+  maxResults (Manager.SetMaxResults), search.fuzzyDisabled
+  (Manager.SetFuzzyDisabled + registry), theme (existing
+  GetTheme/watcher machinery), plugins/bangs/rewrites/firefox (the
+  groupRegistry reloadRegistry), roots/excludes/watcher/
+  rescanIntervalMinutes (groupIndexLayer = restartIndexLayer in
+  watch.go: Manager.SetRoots/SetExcludes + swap the live watchConfig
+  (seeded from Options in New, consumed by startWatch) + stop the
+  trio in Shutdown's order + startWatch + one background
+  Rescanner.Request so the index converges while queries keep
+  serving; an in-flight initial build just stores the values and
+  arms rescanOnWatchUp (startWatch requests the rescan at watch-up),
+  a FAILED initial build (buildFinished + trio down) is revived with
+  a fresh buildIndex), hotkey (applyHotkey in hotkey.go:
+  teardownHotkey -- shared with Shutdown, bumps the hkGen generation
+  so a stale async chain discards instead of storing over the
+  replacement -- then startHotkeyBackends(spec, force=true); force
+  reaches the gsettings backend as
+  gsettings.EnsureBindingWith(BindingOptions{ForceBinding}), the ONE
+  path allowed to rewrite the sticky GNOME accelerator (Applied
+  gains Rebound/PreviousBinding/RebindSkipped; all-taken keeps the
+  working binding with an honest notice, never an error); empty spec
+  = release only), search.frecency (applyFrecencyConfig: rebuild
+  store+blend over the SAME frecency.json, disabled = SetBlend of a
+  Prior-only blend when priors ride it else nil -- frecBlend.Prior is
+  PRESERVED across both rebuild paths, so a live frecency change can
+  never drop an enabled priors layer), search.priors (applyPriors:
+  the applyTelemetry shape over the priors store + blend resolver;
+  disable detaches Prior and re-installs the blend only if it stays
+  Active, enable rebuilds the layer and kicks a table build, an
+  unresolvable config dir is a reported apply error),
+  search.telemetry (applyTelemetry: drop + rebuild the telemetry
+  layer -- the impression ring restarts empty, in-flight appends
+  drain via telWG, and an unresolvable config dir is a reported
+  apply error, unlike startTelemetry's quiet degrade),
+  tray/stats (teardown + rebuild through startTrayIcon/startStats;
+  disabling stats emits one Enabled-false snapshot so the row
+  hides), history (fresh store at the new persist flag: disk seed +
+  in-memory replay preserves recall), preview (applyPreview: live
+  previewCfg swap under previewMu + dispatcher rebuild;
+  GetPreviewConfig answers from live state), window.width/height
+  (groupWindowSize = applyWindowSize, fed by the window AND preview
+  rows: stores the live winW/winH/resultsW the positioning math and
+  GetPreviewConfig read, then resizes via plat.setWindowSize --
+  production native.SetWindowSize, linux-only GTK-thread
+  gtk_window_set_default_size + gtk_window_resize, because for a
+  DisableResize window GTK3 pins min=max to MAX(default size,
+  request) (gtk-3-24 gtk_window_update_fixed_size) so the Wails
+  runtime's bare gtk_window_resize can never shrink below the boot
+  size -- falling back to the rt.setSize runtime call, sufficient on
+  darwin/windows). The ONE ruled next-launch knob:
+  window.translucent (construction-time RGBA visual) is reported by
+  name in NextLaunch (ApplyResult/SaveResult/config:changed) with
+  one honest log line -- never a generic restart mechanism, and no
+  other knob may join it without an explicit ruling. External
+  config.json edits hot-apply through the
+  THEME watcher (theme.go: a debounce batch touching cfgPath also
+  runs handleConfigFileChange -- skip when the file's sha256 equals
+  lastSavedSum (our own save), else fresh Load -> applyConfig
+  (origin=external-edit) -> emit "config:changed"; Load failure =
+  log + emit with the error, previous config stays applied). Events
   emitted (all guarded so a nil ctx no-ops): "index:progress"
   {indexed,done,seconds}, "watch:degraded"
   {watched,dropped,overflows}, "watch:backend" {backend,full,hint}
   (once, from startWatch; see above), "app:shown", "theme:changed" (no
-  payload; frontend refetches GetTheme/GetCustomCSS),
+  payload; frontend refetches GetTheme/GetCustomCSS), "config:open"
+  (no payload; enter config-editor mode), "config:changed" (payload
+  {applied,pending,nextLaunch,error} -- an external edit hot-applied
+  or failed to load; nextLaunch lists only the ruled
+  window.translucent),
   "plugin:results" (payload plugin.Emission
   {plugin,name,gen,results,priority} -- priority omitempty, > 0 =
   the frontend's above-files zone), "stats:update" (payload
@@ -472,15 +571,27 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   starting up; it may take a moment to respond" notice (the instance
   is booting and shows itself). hide never starts the app: not
   running = plain notice on
-  stderr + exit 1 (cobra error/usage output suppressed). The CLI
-  branches ONLY on ipc.Reply fields (checkReply/summonReply); ALL
+  stderr + exit 1 (cobra error/usage output suppressed). config
+  (config.go) opens the in-app config editor: Send CmdConfig to the
+  running instance (OK -> "opening the config editor in the running
+  instance" exit 0; NotReady() -> the still-starting notice exit 0;
+  Reply.UnknownCommand() -- a running JSON daemon predating the
+  config command -- -> "older version without the config command;
+  restart it" on stderr, exit 1, cobra error line suppressed); not
+  running -> start the GUI in-process with RunOptions{Server,
+  ShowOnStartup: true, OpenConfig: true} (ErrAlreadyRunning race ->
+  Send CmdConfig again). The CLI
+  branches ONLY on ipc.Reply fields (checkReply/summonReply/
+  configReply); ALL
   wire parsing lives in ipc.Send -- a non-JSON reply (e.g. a
   still-running pre-JSON daemon's raw line) arrives in-band via Raw
   and lands in the "unexpected reply" error path. Convention:
   ONE self-registering subcommand per file (init -> registerCommand);
   newRoot() consumes the builder registry so Execute -- and every
   test -- gets a fresh command tree. RunOptions{Server,
-  ShowOnStartup} is the runGUI contract; the App takes ownership of
+  ShowOnStartup, OpenConfig} is the runGUI contract (main.go wires
+  OpenConfig to app Options.OpenConfigOnStartup); the App takes
+  ownership of
   the server (Shutdown closes it). Unit-tested headlessly: fake
   runGUI, real ipc servers on temp sockets, COMPETENT_SEARCH_SOCKET
   (t.Setenv) isolation.
@@ -490,8 +601,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   name under os.TempDir(). ONE request per conn (2s conn deadline,
   4 KiB line cap), one newline-terminated JSON object each way --
   JSON is the ONLY wire shape (the legacy v1 line protocol is
-  DELETED): request {"cmd":"toggle|show|hide|version|ping"} with
-  unknown JSON fields IGNORED on both sides (the documented
+  DELETED): request {"cmd":"toggle|show|hide|config|version|ping"}
+  with unknown JSON fields IGNORED on both sides (the documented
   tolerance contract), response {"ok":true} (ping) /
   {"ok":true,"version":v} / {"ok":true,"accepted":cmd} /
   {"ok":false,"error":"not ready"|"unknown command"|
@@ -501,12 +612,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   TestNonJSONRequestsAreRejected). Commands answer "not ready"
   until SetHandlers wires the app (nil handler members stay not
   ready; version/ping always answer), and the ack is
-  written BEFORE the toggle/show/hide handler runs -- ack = accepted,
+  written BEFORE the toggle/show/hide/config handler runs -- ack =
+  accepted,
   not completed, so an app whose main thread is briefly stalled
   (startup indexing) can never time the client out; the handler then
   runs on the same conn goroutine, so Close still waits for in-flight
-  handlers. Send(path, cmd, timeout) speaks JSON and returns a parsed
-  Reply{OK, Accepted, Version, Err, Raw} + NotReady() -- ALL
+  handlers. The config command (config_cmd_test.go) rides handlerFor
+  exactly like the others, so only its own JSON shapes are pinned.
+  Send(path, cmd, timeout) speaks JSON and returns a parsed
+  Reply{OK, Accepted, Version, Err, Raw} + NotReady() +
+  UnknownCommand() (an older JSON daemon rejecting a newer command;
+  the CLI's version-skew message branches on it) -- ALL
   reply parsing lives here, callers branch on fields, never wire
   strings. A reply line that does not parse as JSON -- incl. every
   pre-JSON daemon reply line -- comes back in-band (Raw set, OK
@@ -719,7 +835,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   append-ladder's measured 1.32x overshoot and copy churn are gone;
   pinned by TestWalkChildrenPresized, the scratch path by
   TestWalkFullPathPatternOnFiles + TestAppendJoinDir). `Manager`: owns the RWMutex contract (queries
-  RLock, mutations Lock); `BuildFromDisk` walks into a fresh store and
+  RLock, mutations Lock); roots/excludes are LIVE-mutable now
+  (`SetRoots`/`SetExcludes`, the config editor's index-scope apply;
+  Roots/Excludes read under the lock and `BuildFromDisk` latches one
+  consistent copy at entry -- the live store is untouched until the
+  next rebuild); `BuildFromDisk` walks into a fresh store and
   swaps it in, so queries keep working during rebuilds -- and first
   recomputes the mount skip list (mounts.go: `SystemMountSkips` reads
   /proc/self/mounts, linux-only, nil on any failure; pure
@@ -884,7 +1004,21 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   and firefox.openTabs numbers -> their defaults; negative
   watcher.sweepMinutes -> 0, while watcher.maxWatches keeps its sign
   and watchExcludes stays as written); entry settings are
-  opaque json.RawMessage forwarded verbatim to that plugin.
+  opaque json.RawMessage forwarded verbatim to that plugin. `Save` is
+  ATOMIC (temp-file-then-rename in the config dir, the
+  internal/history pattern at the file's historical 0644 perms; a
+  crash never truncates config.json and watchers see one rename per
+  save); `Encode(c)` returns exactly the bytes Save writes (two-space
+  indent + trailing newline -- the app's self-write suppression hashes
+  them); `CurrentRootsVersion()` exposes the build's rootsVersion
+  stamp (the GUI save path preserves the on-disk stamp so a full-file
+  rewrite can never re-trigger the Load migrations); and
+  `UnknownKeys(raw)` (unknown.go) reflectively walks a raw
+  config.json document against Config's json tags and reports the
+  dotted paths of keys a full rewrite would drop ("$schema" included;
+  maps by key, arrays by index, json.RawMessage settings opaque,
+  wrong-shaped values skipped -- unknown KEYS only, the strict decode
+  owns type errors), sorted; the config editor warns with it.
 - `internal/history` -- the query-history store behind the frontend's
   Up/Down recall, pure and exhaustively unit-tested. `New(path,
   persist)`; `Load()` (missing file or memory-only store = empty +
@@ -1930,12 +2064,21 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   lowercase letters/digits, F1, Return, Escape, Tab, Up/Down/...);
   accelerator normalization treats <Primary>/<Ctrl>/<Ctl> as control,
   ignores modifier order and case (conflict detection).
-  `EnsureBinding(ctx, run, hk, command)` -> `Applied{Binding,
-  Requested, FellBack, Changed, Existing, InList, DiskBinding,
+  `EnsureBinding(ctx, run, hk, command)` (=
+  `EnsureBindingWith(..., BindingOptions{})`; the options variant's
+  ForceBinding -- wired ONLY from the app's config live-apply path --
+  rewrites an existing entry's accelerator to the requested hotkey
+  through the same conflict-checked candidate ladder, filling
+  Rebound/PreviousBinding on success, or RebindSkipped (a notice,
+  never an error -- the working binding is kept) when every candidate
+  is taken) -> `Applied{Binding,
+  Requested, FellBack, Changed, Existing, Rebound, PreviousBinding,
+  RebindSkipped, InList, DiskBinding,
   DiskCommand, Verified, VerifyNote}`: reads the media-keys
   custom-keybindings list; if the app's entry (fixed path ...
   /custom-keybindings/competent-search-thing/) exists it is STICKY --
-  the binding is never rewritten (user edits in GNOME Settings
+  the binding is never rewritten without ForceBinding (user edits in
+  GNOME Settings
   survive; Existing=true) and the stored command SELF-HEALS: it is
   rewritten (command key only; Repaired=true + PreviousCommand for
   the app's loud old->new repair log) when it can no longer launch
@@ -2105,7 +2248,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   geometry, unaffected); launchmint_linux.{go,h,c} = the GTK-thread
   credential mint: runOnGTKThread (g_main_context_is_owner inline
   check, else g_idle_add + cgo.Handle trampoline csRunOnGtk, bounded
-  wait, abandoned callbacks self-clean) and cs_mint(desktop_id) --
+  wait, abandoned callbacks self-clean) -- also reused by
+  windowsize_linux.go's `SetWindowSize(w,h)` (windowsize_other.go =
+  always false off linux), the config editor's live window resize:
+  cs_set_window_size (launchmint_linux.c, cs_find_toplevel) runs
+  gtk_window_set_default_size THEN gtk_window_resize on the GTK
+  thread, because GTK3 pins a non-resizable window's hints to
+  min=max=MAX(default size, request) on every move-resize
+  (gtk-3-24 gtk_window_update_fixed_size), making the construction
+  default a permanent shrink floor for the Wails runtime's bare
+  gtk_window_resize; moving the default moves the floor (verified
+  end-to-end under Xvfb: 780x550 -> 900x600 -> 640x480) -- and
+  cs_mint(desktop_id) --
   the mint DESCRIBES the launch with a real GAppInfo (the resolved
   handler's desktop entry, else a synthesized commandline appinfo
   flagged SUPPORTS_STARTUP_NOTIFICATION): GLib >= 2.76 asserts
@@ -2181,7 +2335,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the value text; #preview-pane
   (spinner + #preview-body + command strip with the web/AI buttons
   and the pane flash) as one more #bar child, display:none unless
-  body.with-preview; <template>s for
+  body.with-preview; #config-pane (header with #config-title +
+  #config-filter, #config-notices, #config-body, #config-strip with
+  flash + dirty note + Open config.json / Close / Save buttons) as
+  the last #bar child, display:none unless body.with-config -- all
+  editor rows/controls are built dynamically by config.ts, so no
+  templates; <template>s for
   folder/file icons AND plugin section/row skeletons) + `src/main.ts`
   (search as-you-type: 15ms debounce + sequence-number stale-response
   drop; every generation also fire-and-forgets QueryPlugins(query,
@@ -2251,13 +2410,20 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   frontend-local (replace input, caret to end, re-run the pipeline),
   everything else goes to RunPluginAction -- Go owns bar-hide per
   action type; copy_text and run_builtin "version" stay open and flash
-  "Copied" ~1.2s in the status bar, action errors -- plugin actions
+  "Copied" ~1.2s in the status bar, run_builtin "config" stays open
+  WITHOUT the flash (Go summons the editor instead of hiding, so the
+  visible flag must survive), action errors -- plugin actions
   AND file-row open/reveal failures -- flash ~2s; #empty
   shows only when a non-blank query has neither files nor sections;
   Tab/Shift+Tab are preventDefaulted no-ops reserved for future use
   (the default focus traversal would leave the input -- the bar's
   only focusable element -- and the webview, tripping the blur-hide);
-  Esc + window blur -> Hide; runtime events: "app:shown" -> CLEAR
+  Esc + window blur -> Hide -- BOTH gated on !configModeActive()
+  (config.ts): in config mode the document keydown handler
+  early-returns entirely (arrows/Enter/Tab must behave like form
+  keys; config.ts's own window handler owns Esc + Ctrl/Cmd+S) and the
+  blur auto-hide is suppressed (users alt-tab away mid-edit) -- the
+  ONLY two main.ts config gates; runtime events: "app:shown" -> CLEAR
   the input (the bar always summons empty; the pre-hide text is
   deliberately dropped) + reset histCursor + focus + refresh (renders
   the cheat sheet; plugins re-query through the same path) + a
@@ -2343,13 +2509,22 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   preview-off and must stay that way, the 780x550 default-geometry
   window regex in
   screenshots.ts depends on it) + `src/preview.ts` (ALL pane logic;
-  initPreview is called from wire() with the GetPreviewConfig answer
-  and installs NOTHING when enabled is false -- no body class, no
-  listeners, hooks no-op; enabled: sets body.with-preview, subscribes
-  "preview:result" (drop unless payload.gen === its own previewGen
+  initPreview is called once from wire() with the GetPreviewConfig
+  answer and wires elements + listeners UNCONDITIONALLY -- each
+  handler gates on the live `enabled` flag -- then hands the answer
+  to the exported `applyPreviewConfig(cfg)`, which config.ts
+  re-invokes with a fresh GetPreviewConfig after every GUI save and
+  on every "config:changed" (the backend applies preview config
+  live, so the pane mounts/unmounts/resizes without a relaunch):
+  enabled toggles body.with-preview + renderIdle on mount, updates
+  --preview-results-col, and setTrigger reflects each provider's key
+  state on its strip button in BOTH directions; while disabled every
+  hook/handler no-ops. The subscription
+  "preview:result" (drop unless enabled AND payload.gen === its own
+  previewGen
   counter, cancel the 150ms-delayed spinner on the first accepted
   payload, REPLACE the pane content per emission -- a fast meta card
-  precedes the rich payload, cache hits skip it), and registers its
+  precedes the rich payload, cache hits skip it) and its
   OWN window keydown handler for Ctrl/Cmd+K (web) / Ctrl/Cmd+I (AI)
   -- main.ts's document handler is untouched, Tab and Ctrl+Enter
   stay reserved. previewOnSelectionChange (called from select(), the
@@ -2370,6 +2545,59 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Go validates, opens, hides the bar), ai (answer + model/cached
   badges + a Copy button through copy_text, <= 8 KiB Go-side, with a
   "Copied"/error flash in the pane strip), error card) +
+  `src/config.ts` + `src/config.css` (the CONFIG EDITOR MODE --
+  initConfig wires from wire(), everything else is lazy on the first
+  "config:open": fetch + cache GetConfigSchema (embedded, immutable)
+  and JSON.parse GetConfigForEdit's configJson into a WORKING COPY,
+  set body.with-config (config.css hides every normal bar region via
+  two-id selectors that out-rank the with-preview grid rules
+  regardless of bundle order; #config-pane fills the bar as flex
+  child OR spanning grid item), render the whole settings UI from
+  the schema's top-level properties IN SCHEMA ORDER and focus the
+  filter. The renderer is a generic schema walk (resolve() follows
+  "#/$defs/" refs; classify() picks the control): object-with-
+  properties = nested section (dotted-path header + title +
+  description note), boolean = checkbox, string enum = select,
+  integer/number = number input carrying schema min/max as UX ONLY
+  (Go owns validation; unparseable input marks the row invalid and
+  blocks save by name), string = text input -- except descriptions
+  starting "SECRET:" = password input + show/hide toggle, never
+  echoed elsewhere; array-of-string = one-per-line textarea
+  (trimmed, blanks dropped); object whose patternProperties values
+  are all strings = key/value row editor with add/remove
+  (bangs.aliases); EVERYTHING else (plugins.entries, rewrites, any
+  future shape) = raw-JSON textarea that must JSON.parse before save
+  ("invalid JSON" marks + blocks). rootsVersion and "$schema" are
+  hidden (app-managed / hint). The filter hides rows by dotted path
+  + description, then sections left empty. Controls write through
+  setVal -> setPath into the working copy (dirty note + accent Save
+  button); Save (button/Ctrl+S) = SaveConfig(JSON.stringify(doc)) ->
+  error strips verbatim on failure, else "Saved" flash + notices
+  (Applied live list, per-knob "<knob> takes effect at next launch"
+  for nextLaunch/pending -- NEVER "restart" wording -- applyErrors
+  as warnings), re-fetch (Normalize's repaired truth; fresh doc
+  clears the summary slate first) + re-render preserving scroll/
+  filter, and refreshPreviewConfig (GUI saves fire no config:changed
+  -- self-write suppression -- so the applyPreviewConfig refresh
+  runs here). GetConfigForEdit's unknownKeys render a persistent
+  warning strip (dropped-if-saved; points at Open config.json,
+  which calls OpenConfigFile and keeps the editor open).
+  "config:changed" (external edit): editor closed = preview refresh
+  only; open + clean = silent re-fetch/re-render + transient
+  "changed on disk -- reloaded" flash + the event's own summary;
+  open + dirty = keep the edits, show a "changed on disk" strip
+  with a Reload button; event error = error strip, doc kept. MODE
+  EXITS: Esc/Close clean = leave + focus #query (previous bar state
+  byte-identical); dirty = first press flashes "unsaved changes --
+  press Esc again to discard", second within 2s discards; every
+  "app:shown" drops the mode (hide from ANY path -> next summon is
+  a normal bar) while PRESERVING an unsaved working copy in memory
+  -- the next config:open this run restores it with the dirty note
+  + "restored unsaved edits" flash (a clean editor re-fetches
+  fresh). Own window keydown handler (Esc + Ctrl/Cmd+S, mode-gated);
+  configModeActive() is the export main.ts gates on. All DOM is
+  text-node-only; config.css consumes existing --sb-* tokens with
+  literal dark fallbacks -- NO new --sb-* token, no :root block) +
   `src/highlight.ts` (hljs lib/core + explicitly registered grammars
   covering every LangHint name in the hljs distribution plus
   shell/plaintext -- never import the full highlight.js bundle;
@@ -2393,11 +2621,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   unchanged)/PluginResult/PluginEmission plus the preview contract
   Preview{Target,Payload,ConfigInfo,MetaRow,Text,Image,Dir,DirEntry,
   Web,WebResult,AI}, ResolveIcons, and the four preview bound
-  methods, plus the telemetry report contract
+  methods, plus the config-editor contract ConfigForEdit/ConfigSaveResult/
+  ConfigChangedEvent (Go nil slices arrive as null -- the applied/
+  pending fields are `string[] | null`) and the four config bound
+  methods GetConfigSchema/GetConfigForEdit/SaveConfig/OpenConfigFile,
+  and the telemetry report contract
   Telemetry{PickReport,ShownRef,PickedRef} and RecordPick -- keep in
   sync with internal/app + internal/plugin + internal/preview +
   internal/sysstats + internal/telemetry payload
-  structs).
+  structs; field names lockstep with configui.go/configapply.go json
+  tags).
 - `examples/plugins/` -- three shipped example plugins, INERT until a
   user copies one into `<configDir>/plugins/` (each has a README with
   install/usage): `calc` (python3 command plugin: trigger prefix "=",
@@ -2433,7 +2666,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   every struct json tag against the schema properties (and the theme
   token set against TokenNames), so a struct/schema drift fails CI.
   The example manifests and builtin themes carry "$schema" keys
-  (loaders ignore unknown top-level keys).
+  (loaders ignore unknown top-level keys). `schemas/embed.go` makes
+  the directory a Go package too: it go:embeds config.schema.json as
+  `schemas.ConfigSchemaJSON` for the app's GetConfigSchema bound
+  method (the config editor validates client-side against it) --
+  deliberately data-only, no functions or statements, so it stays out
+  of the coverage math.
 
 ## Build / test
 
@@ -2516,7 +2754,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   session and asserts boot + JSON-shaped IPC round-trips within hard
   deadlines + the legacy-rejection check (a8-legacy-rejected: a bare
   v1 line must earn the JSON invalid-request error or a silent
-  close, never the old raw "ok") + a real on-screen window via a compiled
+  close, never the old raw "ok") + the config-command ack
+  (a9-config-ipc: {"cmd":"config"} must earn
+  {"ok":true,"accepted":"config"}, sent hidden after a7 and clear of
+  the toggle pair, then an explicit hide restores the hidden state
+  -- an IPC-ack check, not a UI check) + a real on-screen window via a compiled
   CGWindowList Swift probe, including while a big index build is
   PROVABLY in flight (the hard B-midindex-window check: progress
   line present, completion line absent, before b1 runs); scenario B

@@ -408,9 +408,10 @@ func parseWindowID(s string) (uint32, error) {
 
 // runBuiltin executes one app-level builtin command (the actions
 // behind the !rescan/!reload/!config/!version/!quit bangs). The bang
-// flow ends with the bar hidden; the underlying behaviors live in
-// requestRescan/openConfigFile so the tray menu (which has no bar
-// interaction to end) can share them without the hide.
+// flows that hand off elsewhere end with the bar hidden; !config
+// instead summons the in-app config editor (showConfig), and the
+// underlying behaviors live in requestRescan/showConfig so the tray
+// menu can share them.
 func (a *App) runBuiltin(value string) error {
 	switch value {
 	case builtinRescan:
@@ -424,10 +425,10 @@ func (a *App) runBuiltin(value string) error {
 		a.Hide()
 		return nil
 	case builtinConfig:
-		if err := a.openConfigFile(); err != nil {
-			return err
-		}
-		a.Hide()
+		// Opens the in-app config editor (the bar stays up, switching
+		// modes); the config FILE stays reachable through the editor's
+		// escape hatch (the OpenConfigFile bound method).
+		a.showConfig()
 		return nil
 	case builtinVersion:
 		return a.clipboardCopy(Version)

@@ -117,6 +117,9 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 			defer r.mu.Unlock()
 			return r.winX, r.winY
 		},
+		setSize: func(_ context.Context, w, h int) {
+			r.call(fmt.Sprintf("setSize:%dx%d", w, h))
+		},
 		emit: func(_ context.Context, name string, data ...interface{}) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
@@ -158,7 +161,7 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 		r.call("startPortal")
 		return nil, portal.ErrNoPortal
 	}
-	a.plat.ensureGnomeBinding = func(context.Context, platform.Hotkey, string) (gsettings.Applied, error) {
+	a.plat.ensureGnomeBinding = func(context.Context, platform.Hotkey, string, bool) (gsettings.Applied, error) {
 		r.call("ensureGnomeBinding")
 		return gsettings.Applied{}, errors.New("ensureGnomeBinding not stubbed")
 	}
@@ -185,6 +188,13 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// assertions stay untouched. The DomReady test overrides it with a
 	// counting fake.
 	a.plat.configurePanel = func() bool { return false }
+	// The native resize seam reports "no native path" (recorded), so
+	// the window-size applier falls through to the rt.setSize fake and
+	// tests see both breadcrumbs.
+	a.plat.setWindowSize = func(w, h int) bool {
+		r.call(fmt.Sprintf("setWindowSize:%dx%d", w, h))
+		return false
+	}
 	// The hint probe answers "nothing exists" so Search never touches
 	// the real disk; hint tests override it (some with the real
 	// os.Lstat over temp trees).

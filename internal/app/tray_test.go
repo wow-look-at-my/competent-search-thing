@@ -2,14 +2,12 @@ package app
 
 import (
 	"context"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/tray"
 )
 
@@ -178,17 +176,21 @@ func TestTrayRescanWhileIndexStillBuilding(t *testing.T) {
 	require.False(t, r.has("hide"), "tray rescan never touches bar visibility")
 }
 
-func TestTrayOpenConfigOpensWithoutHiding(t *testing.T) {
+func TestTrayOpenConfigSummonsEditor(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
-	dir := t.TempDir()
-	t.Setenv(config.EnvConfigDir, dir)
 	a.Startup(context.Background())
 	a.DomReady(context.Background())
 	opts := a.trayOptions()
 
+	// From the tray the bar is usually hidden: the click takes the
+	// full summon path and then enters editor mode.
 	trayMenuClick(t, opts, "Open config")
-	require.True(t, r.has("open:"+filepath.Join(dir, "config.json")))
+	require.Len(t, r.emitted(eventShown), 1, "the bar summons")
+	require.Len(t, r.emitted(eventConfigOpen), 1, "and enters config-editor mode")
 	require.False(t, r.has("hide"), "tray open-config never hides the bar")
+	for _, c := range r.callNames() {
+		require.NotContains(t, c, "open:", "no file opens; the editor's escape hatch owns that")
+	}
 }
 
 func TestTrayQuitUsesTheQuitSeam(t *testing.T) {

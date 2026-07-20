@@ -73,6 +73,7 @@ func runGUI(opts cli.RunOptions) error {
 		Hotkey:                 cfg.Hotkey,
 		IPC:                    opts.Server,
 		ShowOnStartup:          opts.ShowOnStartup,
+		OpenConfigOnStartup:    opts.OpenConfig,
 		TrayDisabled:           cfg.Tray.Disabled,
 		HistoryPersistDisabled: cfg.History.PersistDisabled,
 		ConfigNotes:            cfg.MigrationNotes,

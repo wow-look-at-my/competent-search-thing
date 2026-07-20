@@ -196,3 +196,62 @@ func TestPriorsCorruptSourcesDegrade(t *testing.T) {
 	q, e, d := a.priorsStore.Counts()
 	require.Zero(t, q+e+d, "nothing parsed, tables empty, no crash")
 }
+
+// TestApplyConfigPriorsTogglesLive: the search.priors sectionAppliers
+// row -- enabling in a live pass builds the layer and installs the
+// blend Prior; disabling drops both.
+func TestApplyConfigPriorsTogglesLive(t *testing.T) {
+	m, _, _ := priorsFixture(t)
+	a, _ := newTestApp(t, m, Options{Frecency: config.DefaultFrecency()})
+	a.frecOnce.Do(a.startFrecency)
+	seedBaseline(a, config.Default())
+	require.False(t, a.priorsConfigured())
+
+	next := config.Default()
+	next.Search.Priors.Enabled = true
+	res := a.applyConfig(&next, "test")
+	require.Contains(t, res.Applied, "search.priors")
+	require.Empty(t, res.Errors)
+	require.True(t, a.priorsConfigured(), "enabling search.priors builds the layer live")
+	require.NotNil(t, m.Blend().Prior, "the live enable installs the blend resolver")
+
+	off := config.Default()
+	res = a.applyConfig(&off, "test")
+	require.Contains(t, res.Applied, "search.priors")
+	require.False(t, a.priorsConfigured(), "disabling search.priors drops the layer live")
+	if b := m.Blend(); b != nil {
+		require.Nil(t, b.Prior, "the resolver is detached on disable")
+	}
+	a.shutdownPriors()
+}
+
+// TestApplyConfigFrecencyPreservesPrior pins the #48-vs-live-apply
+// interaction: a live frecency config change (either direction) must
+// not drop an enabled priors layer's blend resolver -- the frecency
+// applier rebuilds the SAME blend the priors resolver rides.
+func TestApplyConfigFrecencyPreservesPrior(t *testing.T) {
+	m, _, _ := priorsFixture(t)
+	a, _ := newTestApp(t, m, Options{Frecency: config.DefaultFrecency()})
+	a.frecOnce.Do(a.startFrecency)
+	seedBaseline(a, config.Default())
+
+	on := config.Default()
+	on.Search.Priors.Enabled = true
+	a.applyConfig(&on, "test")
+	require.NotNil(t, m.Blend().Prior)
+
+	// Disable frecency: the blend rebuild keeps the Prior (a
+	// prior-only blend still activates).
+	noFrec := on
+	noFrec.Search.Frecency.Disabled = true
+	res := a.applyConfig(&noFrec, "test")
+	require.Contains(t, res.Applied, "search.frecency")
+	require.NotNil(t, m.Blend(), "a prior-only blend stays installed")
+	require.NotNil(t, m.Blend().Prior, "the priors resolver survives a frecency disable")
+
+	// Re-enable frecency: still preserved through the rebuild.
+	res = a.applyConfig(&on, "test")
+	require.Contains(t, res.Applied, "search.frecency")
+	require.NotNil(t, m.Blend().Prior, "the priors resolver survives a frecency rebuild")
+	a.shutdownPriors()
+}

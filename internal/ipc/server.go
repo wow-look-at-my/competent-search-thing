@@ -42,6 +42,9 @@ type Handlers struct {
 	Toggle func()
 	Show   func()
 	Hide   func()
+	// Config summons the bar into its config editor (the CLI "config"
+	// subcommand); nil answers not-ready like the others.
+	Config func()
 }
 
 // Server owns the unix listener and the accept loop behind the
@@ -190,9 +193,9 @@ func (s *Server) plan(line string) (Response, func()) {
 	return Response{OK: true, Accepted: req.Cmd}, f
 }
 
-// handlerFor resolves a toggle/show/hide command to its wired handler
-// (nil = not wired yet, the not-ready answer); known is false for any
-// other command.
+// handlerFor resolves a toggle/show/hide/config command to its wired
+// handler (nil = not wired yet, the not-ready answer); known is false
+// for any other command.
 func (s *Server) handlerFor(cmd string) (f func(), known bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -203,6 +206,8 @@ func (s *Server) handlerFor(cmd string) (f func(), known bool) {
 		return s.handlers.Show, true
 	case CmdHide:
 		return s.handlers.Hide, true
+	case CmdConfig:
+		return s.handlers.Config, true
 	}
 	return nil, false
 }

@@ -210,6 +210,43 @@ func TestStartTelemetryUnresolvableConfigDirDisables(t *testing.T) {
 	require.NoError(t, a.RecordPick(telemetry.PickReport{Query: "x"}))
 }
 
+func TestApplyConfigTelemetryTogglesLive(t *testing.T) {
+	a, _ := newTestApp(t, index.NewManager(nil, nil, 0), Options{})
+	seedBaseline(a, config.Default())
+	require.Nil(t, a.telLayer(), "default config keeps telemetry off")
+
+	next := config.Default()
+	next.Search.Telemetry.Enabled = true
+	next.Search.Telemetry.RetainQueries = false
+	res := a.applyConfig(&next, "test")
+	require.Contains(t, res.Applied, "search.telemetry")
+	require.Empty(t, res.Errors)
+	l := a.telLayer()
+	require.NotNil(t, l, "enabling search.telemetry builds the layer live")
+	require.False(t, l.retainQueries, "the incoming config's knobs reach the fresh layer")
+
+	off := config.Default()
+	res = a.applyConfig(&off, "test")
+	require.Contains(t, res.Applied, "search.telemetry")
+	require.Nil(t, a.telLayer(), "disabling search.telemetry drops the layer live")
+}
+
+func TestApplyConfigTelemetryUnresolvableDirErrors(t *testing.T) {
+	a, _ := newTestApp(t, index.NewManager(nil, nil, 0), Options{})
+	seedBaseline(a, config.Default())
+	t.Setenv(config.EnvConfigDir, "")
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	next := config.Default()
+	next.Search.Telemetry.Enabled = true
+	res := a.applyConfig(&next, "test")
+	require.NotEmpty(t, res.Errors, "asking for telemetry without a config dir is a reported apply error")
+	require.Contains(t, res.Errors[0], "search.telemetry: ")
+	require.NotContains(t, res.Applied, "search.telemetry")
+	require.Nil(t, a.telLayer(), "the layer stays off when it cannot be built")
+}
+
 func TestTelemetryRingEvictsOldest(t *testing.T) {
 	l := &telemetryLayer{store: telemetry.New(filepath.Join(t.TempDir(), "t.jsonl"), 64)}
 	for i := 0; i < telemetryRingSize+2; i++ {

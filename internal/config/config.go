@@ -673,22 +673,56 @@ func Load() (Config, error) {
 	return c, nil
 }
 
-// Save writes the config file, creating the directory as needed.
+// Save writes the config file, creating the directory as needed. The
+// write is atomic (internal/history's temp-file-then-rename pattern,
+// at this file's historical 0644 perms): a crash mid-write never
+// leaves a truncated config.json behind, and watchers of the file see
+// exactly one rename event per save instead of a partial-content
+// window. The bytes written are Encode's.
 func Save(c Config) error {
 	p, err := Path()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return fmt.Errorf("config: creating %s: %w", filepath.Dir(p), err)
+	dir := filepath.Dir(p)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("config: creating %s: %w", dir, err)
 	}
-	data, err := json.MarshalIndent(c, "", "  ")
+	data, err := Encode(c)
 	if err != nil {
-		return fmt.Errorf("config: encoding: %w", err)
+		return err
 	}
-	data = append(data, '\n')
-	if err := os.WriteFile(p, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("config: creating temp file in %s: %w", dir, err)
+	}
+	name := tmp.Name()
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Chmod(0o644)
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(name, p)
+	}
+	if err != nil {
+		os.Remove(name)
 		return fmt.Errorf("config: writing %s: %w", p, err)
 	}
 	return nil
+}
+
+// Encode returns exactly the bytes Save writes for c: two-space
+// indented JSON plus a trailing newline. Callers that need to know
+// the on-disk representation of a config they saved (e.g. the app's
+// self-write suppression around the config-dir watcher) use it
+// instead of re-deriving the format.
+func Encode(c Config) ([]byte, error) {
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("config: encoding: %w", err)
+	}
+	return append(data, '\n'), nil
 }

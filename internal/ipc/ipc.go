@@ -10,8 +10,8 @@
 //
 // One request per connection, one newline-terminated line each way,
 // both lines JSON objects. The request is {"cmd":"toggle"} -- cmds
-// toggle, show, hide, version, ping -- and the response is one JSON
-// object:
+// toggle, show, hide, config, version, ping -- and the response is
+// one JSON object:
 //
 //	{"ok":true}                             ping
 //	{"ok":true,"version":"1.2.3"}           version
@@ -50,6 +50,7 @@ const (
 	CmdToggle  = "toggle"
 	CmdShow    = "show"
 	CmdHide    = "hide"
+	CmdConfig  = "config"
 	CmdVersion = "version"
 	CmdPing    = "ping"
 )

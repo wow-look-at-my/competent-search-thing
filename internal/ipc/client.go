@@ -30,6 +30,12 @@ type Reply struct {
 // booting instance acts once ready.
 func (r Reply) NotReady() bool { return !r.OK && r.Err == errNotReady }
 
+// UnknownCommand reports whether the running instance rejected the
+// command as one it does not know -- an OLDER daemon predating the
+// command (but already JSON-speaking), which callers surface as a
+// version-skew message instead of a generic failure.
+func (r Reply) UnknownCommand() bool { return !r.OK && r.Err == errUnknownCommand }
+
 // Send dials the single-instance socket, delivers cmd as one JSON
 // request line, and returns the parsed reply. timeout is one absolute
 // deadline bounding the dial and the exchange. A failure to dial --

@@ -782,6 +782,100 @@ WebView2 runtime is required (preinstalled on Windows 11).
 
 ## Configuration
 
+### Config editor
+
+The app carries a built-in config editor: run
+`competent-search-thing config`, type `!config` into the bar, or pick
+"Open config" from the tray icon, and the bar switches into editor
+mode (the same single window -- no second window, no dialog).
+
+The editor is rendered ENTIRELY from the shipped JSON Schema
+(`schemas/config.schema.json`), so every setting appears with its
+real type and its full documentation:
+
+- booleans are toggles, enums dropdowns, numbers spinners carrying
+  the schema's bounds, strings text fields; every control shows the
+  schema description as help text, and a filter box at the top
+  narrows the ~50 settings by name or description;
+- the two API keys (`preview.kagi.apiKey`, `preview.openai.apiKey`)
+  render as password fields with a show/hide toggle and are never
+  echoed anywhere else;
+- string lists (`roots`, `excludes`, `watcher.watchExcludes`,
+  `bangs.sigils`) are one-entry-per-line editors; `bangs.aliases` is
+  a key/value row editor with add/remove;
+- everything without a dedicated control -- `plugins.entries` (with
+  its opaque per-plugin `settings`), `rewrites`, and any shape the
+  schema grows later -- falls back to a raw-JSON sub-editor that must
+  parse before a save is allowed.
+
+Saving (the button or Ctrl+S) round-trips through the Go side: a
+strict decode (typos are named with a line number), atomic write,
+then the live-apply pass -- and the editor reports exactly what
+happened: the applied sections, any per-knob "takes effect at next
+launch" note (see below), and any apply errors, then re-fetches so
+the app-repaired values are what you see. Esc (or Close) leaves the
+editor; with unsaved edits the first press warns and a second within
+two seconds discards them. Hiding the bar mid-edit (hotkey, tray,
+`hide`) keeps the unsaved working copy in memory: the next summon is
+the normal search bar, and reopening the editor in the same run
+restores the edits with the unsaved-changes note showing. While the
+editor is up, alt-tabbing away does NOT hide the window (the normal
+focus-loss auto-hide is suspended so you can check things mid-edit).
+
+`config.json` itself stays reachable as an escape hatch via the
+"Open config.json" button: unknown keys a hand edit added are listed
+in a warning strip -- a GUI save would drop them, so make those edits
+in the file. If the file changes on disk while the editor is open
+(the app hot-applies external edits), a clean editor reloads
+silently; one with unsaved edits keeps them and offers a Reload
+button instead.
+
+EVERY setting applies LIVE -- no restarts, no "restart required"
+badges:
+
+- `theme`, `maxResults`, `search.fuzzyDisabled`, and everything the
+  plugin registry serves (`plugins`, `bangs`, `rewrites`, `firefox`)
+  as before;
+- `roots` / `excludes` / `watcher.*` / `rescanIntervalMinutes`: the
+  watch layer is rebuilt with the new knobs and a background rescan
+  converges the index to the new scope while queries keep answering
+  from the previous one (fixing a broken exclude pattern even revives
+  a failed startup index build);
+- `hotkey`: the old registration is released and the new combination
+  registered through the same backend chain (X11 grab, portal,
+  GNOME keybinding). On the GNOME-keybinding backend a config change
+  rewrites the installed accelerator -- the one case that overrides
+  the usual stickiness, because the setting you just changed must
+  win; a GNOME-Settings edit still survives restarts as before. The
+  portal backend may show its approval dialog again;
+- `search.frecency`: the ranking blend is rebuilt with the new
+  weights (the learned open counts in `frecency.json` are kept, and
+  an enabled priors layer survives the rebuild);
+- `search.priors`: the pick-memory layer starts or stops on the spot
+  (its tables rebuild from the local files it already reads);
+- `search.telemetry`: the opt-in ranking log starts or stops on the
+  spot (the log file itself is kept; delete it to erase);
+- `stats.disabled` / `tray.disabled`: the sampler/icon stops or
+  starts on the spot;
+- `history.persistDisabled`: the store flips persistence without
+  losing in-session recall;
+- `preview.*`: the pane's engine is rebuilt (keys, base URLs, caps)
+  and the window follows `preview.enabled`'s size;
+- `window.width` / `window.height`: the bar window resizes live (on
+  Linux via a native GTK path that also moves the fixed-size floor,
+  so shrinking below the boot size works).
+
+ONE deliberate exception: `window.translucent` takes effect at the
+next launch -- the per-pixel-alpha window visual can only be chosen
+when the window is created -- and the save/apply report says exactly
+that, by name (a `nextLaunch` list carrying `window.translucent`),
+rather than pretending a live path exists.
+
+Hand edits to `config.json` hot-apply through the same engine: the
+app watches the file (the theme hot-reload watcher) and re-applies
+external changes on save, so editing the file by hand is just as
+live as the GUI.
+
 Config lives at the platform config dir (set the
 `COMPETENT_SEARCH_CONFIG_DIR` environment variable to point at a
 different directory):
@@ -1537,7 +1631,7 @@ its disable knob -- `firefox-frequent`, `firefox-tabs`):
 |------|------|
 | `!rescan` | rebuild the file index from disk now (errors while the initial build is still running) |
 | `!reload` | re-read `config.json` and the plugin manifests, restart providers |
-| `!config` | open `config.json` with the OS default handler |
+| `!config` | open the in-app config editor (see "Config editor"; `config.json` itself stays reachable from there) |
 | `!version` | copy the app version to the clipboard |
 | `!quit` | exit the app |
 | `!app <text>` / `!launch <text>` | search installed applications and launch the selection |
@@ -2268,7 +2362,8 @@ GNOME desktop that is the top-right status area -- with a menu:
 
 - **Show/Hide** -- toggle the searchbar (same path as the hotkey)
 - **Rescan now** -- request a full re-index
-- **Open config** -- open `config.json` in your editor
+- **Open config** -- summon the bar into the in-app config editor
+  (see "Config editor"; `config.json` stays reachable from there)
 - **Quit** -- exit the app
 
 The bar itself stays hidden until summoned, so the tray icon is the
@@ -2374,7 +2469,7 @@ keybinding backend; everything else: to a logged manual-binding hint).
 Declining the portal's approval dialog is respected -- the app logs it
 and stops, it does not go on to write a keybinding after you said no.
 
-### The CLI: toggle, show, hide
+### The CLI: toggle, show, hide, config
 
 The binary doubles as its own remote control. The app runs as a
 single instance around one unix socket (in `$XDG_RUNTIME_DIR`):
@@ -2402,10 +2497,15 @@ single instance around one unix socket (in `$XDG_RUNTIME_DIR`):
 - `competent-search-thing hide` -- hides the running instance's bar;
   unlike the others it never starts the app (prints a notice and
   exits 1 when nothing is running).
+- `competent-search-thing config` -- opens the running instance's
+  in-app config editor (see "Config editor"); starts the app when it
+  is not running, opening the editor once the frontend is ready. A
+  running instance too old to know the command earns a clear
+  "older version without the config command" notice and exit 1.
 - `competent-search-thing --version` -- prints the app version.
 
-The running instance acknowledges each `toggle`/`show`/`hide`
-immediately and executes the action right after the reply, so an
+The running instance acknowledges each `toggle`/`show`/`hide`/
+`config` immediately and executes the action right after the reply, so an
 instance busy with the initial index build can no longer time the
 client out -- the command is accepted instantly and acts as soon as
 the app gets to it.
@@ -2418,8 +2518,8 @@ the bar. That is the whole Wayland story in one line: bind a key to
 
 The socket speaks newline-delimited JSON, one request per
 connection: write one object like `{"cmd":"toggle"}` (commands
-`toggle`, `show`, `hide`, `version`, `ping`) and read one object
-back -- `{"ok":true,"accepted":"toggle"}` for an accepted command
+`toggle`, `show`, `hide`, `config`, `version`, `ping`) and read one
+object back -- `{"ok":true,"accepted":"toggle"}` for an accepted command
 (written before the action runs: "ok" means accepted, not
 completed), `{"ok":true,"version":"..."}` for `version`,
 `{"ok":true}` for `ping`, and `{"ok":false,"error":"not ready"}` /

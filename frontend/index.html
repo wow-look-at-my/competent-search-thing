@@ -80,6 +80,33 @@
           </button>
         </div>
       </div>
+      <div id="config-pane">
+        <div id="config-header">
+          <span id="config-title">Settings</span>
+          <input
+            id="config-filter"
+            type="text"
+            placeholder="Filter settings..."
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
+        <div id="config-notices"></div>
+        <div id="config-body"></div>
+        <div id="config-strip">
+          <span id="config-flash" class="config-flash" hidden></span>
+          <span id="config-dirty-note" hidden>unsaved changes</span>
+          <button id="config-open-file-btn" class="config-btn" type="button">
+            Open config.json
+          </button>
+          <button id="config-close-btn" class="config-btn" type="button">
+            Close
+          </button>
+          <button id="config-save-btn" class="config-btn" type="button">
+            Save (Ctrl+S)
+          </button>
+        </div>
+      </div>
     </div>
 
     <template id="tpl-icon-folder">

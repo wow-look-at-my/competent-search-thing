@@ -39,6 +39,7 @@ type runtimeSeams struct {
 	center           func(ctx context.Context)
 	setPos           func(ctx context.Context, x, y int)
 	getPos           func(ctx context.Context) (int, int)
+	setSize          func(ctx context.Context, w, h int)
 	emit             func(ctx context.Context, name string, data ...interface{})
 	clipboardSetText func(ctx context.Context, text string) error
 	quit             func(ctx context.Context)
@@ -51,6 +52,7 @@ func defaultRuntimeSeams() runtimeSeams {
 		center:           runtime.WindowCenter,
 		setPos:           runtime.WindowSetPosition,
 		getPos:           runtime.WindowGetPosition,
+		setSize:          runtime.WindowSetSize,
 		emit:             runtime.EventsEmit,
 		clipboardSetText: runtime.ClipboardSetText,
 		quit:             runtime.Quit,
@@ -85,8 +87,11 @@ type platformSeams struct {
 	startPortal func(ctx context.Context, hk platform.Hotkey, onActivated func()) (portalHandle, error)
 	// ensureGnomeBinding installs/refreshes the GNOME custom
 	// keybinding running command; production wraps
-	// gsettings.EnsureBinding with the real gsettings CLI runner.
-	ensureGnomeBinding func(ctx context.Context, hk platform.Hotkey, command string) (gsettings.Applied, error)
+	// gsettings.EnsureBindingWith with the real gsettings CLI runner.
+	// force (the config live-apply path only) rewrites an existing
+	// entry's accelerator to the new config hotkey; the default sticky
+	// path never touches it.
+	ensureGnomeBinding func(ctx context.Context, hk platform.Hotkey, command string, force bool) (gsettings.Applied, error)
 	// mediaKeysDaemon reports whether gsd-media-keys owns its
 	// session-bus name -- the daemon a GNOME keybinding is inert
 	// without; production is gsettings.DaemonRunning. An error means
@@ -99,6 +104,15 @@ type platformSeams struct {
 	// nothing to configure). Called exactly once, at DomReady -- the
 	// earliest point every platform has a native window.
 	configurePanel func() bool
+	// setWindowSize resizes the native window to w x h, moving the
+	// non-resizable window's fixed-size floor with it (linux: GTK
+	// default-size + resize on the GTK thread -- the Wails runtime's
+	// bare gtk_window_resize cannot shrink below the construction-time
+	// default; production native.SetWindowSize, false off linux or
+	// when the GTK loop is unreachable, and the caller falls back to
+	// the Wails runtime setSize, which is sufficient on
+	// darwin/windows).
+	setWindowSize func(w, h int) bool
 	// lstat probes the disk for the outside-roots hint (hint.go) and
 	// the launch path's directory check; production is os.Lstat, tests
 	// pin it so no real IO happens.
@@ -177,13 +191,14 @@ func defaultPlatformSeams() platformSeams {
 		setGCPercent:  debug.SetGCPercent,
 		startHotkey:   native.StartHotkey,
 		startPortal:   startPortalShortcut,
-		ensureGnomeBinding: func(ctx context.Context, hk platform.Hotkey, command string) (gsettings.Applied, error) {
-			return gsettings.EnsureBinding(ctx, gsettings.Run, hk, command)
+		ensureGnomeBinding: func(ctx context.Context, hk platform.Hotkey, command string, force bool) (gsettings.Applied, error) {
+			return gsettings.EnsureBindingWith(ctx, gsettings.Run, hk, command, gsettings.BindingOptions{ForceBinding: force})
 		},
 		mediaKeysDaemon: gsettings.DaemonRunning,
 		cursorInfo:      native.CursorDisplays,
 		moveWindow:      native.MoveWindow,
 		configurePanel:  native.ConfigurePanel,
+		setWindowSize:   native.SetWindowSize,
 		lstat:           os.Lstat,
 		open:            launcher.OpenEnv,
 		reveal:          launcher.RevealEnv,
@@ -257,8 +272,9 @@ func (a *App) Hide() {
 	a.lastHide = a.plat.now()
 	// A hide also cancels a show that has not executed yet (e.g. an
 	// IPC hide racing a pre-DomReady summon): the ordered outcome is
-	// hidden.
+	// hidden. A latched summon-into-config dies with it.
 	a.pendingShow = false
+	a.pendingConfig = false
 	a.mu.Unlock()
 	// The stats sampler goes idle with the bar (a flag flip, no IO;
 	// runs even pre-Startup, where it is a nil-safe no-op).

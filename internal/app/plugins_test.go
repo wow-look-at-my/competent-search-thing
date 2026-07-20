@@ -467,16 +467,19 @@ func TestRunBuiltinReloadSwapsRegistry(t *testing.T) {
 	require.Equal(t, 0, f.callCount(), "the old registry is out of the loop")
 }
 
-func TestRunBuiltinConfigOpensConfigJSON(t *testing.T) {
-	// newTestApp (inside newPluginTestApp) points EnvConfigDir at its
-	// own temp dir, so pin ours AFTER building the app.
+func TestRunBuiltinConfigOpensEditor(t *testing.T) {
+	// !config summons the in-app config editor now: with the bar
+	// already visible (the bang was typed into it), that is just the
+	// mode event -- no file open, no hide, the bar switches modes.
 	a, r, _ := newPluginTestApp(t)
-	dir := t.TempDir()
-	t.Setenv(config.EnvConfigDir, dir)
+	a.DomReady(context.Background())
+	a.showOnCursorDisplay() // the bar is visible, as it is when a bang runs
 	require.NoError(t, a.RunPluginAction("app", plugin.Action{Type: plugin.ActionRunBuiltin, Value: "config"}))
-	cfgPath := filepath.Join(dir, "config.json")
-	require.Equal(t, []string{"resolve:" + cfgPath, "mint", "open:" + cfgPath, "hide"}, r.callNames(),
-		"the config file opens through the credentialed launch path too")
+	require.Len(t, r.emitted(eventConfigOpen), 1, "the editor mode event fires")
+	require.False(t, r.has("hide"), "the bar stays up, switching modes")
+	for _, c := range r.callNames() {
+		require.NotContains(t, c, "open:", "no file opens; the editor's escape hatch owns that")
+	}
 }
 
 func TestRunBuiltinVersionCopiesWithoutHiding(t *testing.T) {

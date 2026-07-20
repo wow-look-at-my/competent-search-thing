@@ -3,6 +3,7 @@ package index
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -196,6 +197,67 @@ func TestManagerConfigAccessors(t *testing.T) {
 	empty := NewManager(nil, nil, 0)
 	require.Nil(t, empty.Roots())
 	require.Nil(t, empty.Excludes())
+}
+
+func TestManagerSetRootsExcludesLive(t *testing.T) {
+	dirA, dirB := t.TempDir(), t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dirA, "alpha.txt"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dirB, "bravo.txt"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dirB, "skip.log"), []byte("x"), 0o644))
+
+	m := NewManager([]string{dirA}, nil, 0)
+	_, _, err := m.BuildFromDisk(context.Background(), nil)
+	require.NoError(t, err)
+	require.Len(t, m.Query("alpha", 0), 1)
+
+	// The setters take copies and are read back under the lock; the
+	// live store is untouched until the next rebuild.
+	newRoots := []string{dirB}
+	m.SetRoots(newRoots)
+	newRoots[0] = "/mutated"
+	require.Equal(t, []string{dirB}, m.Roots(), "SetRoots stores a copy")
+	m.SetExcludes([]string{"skip.log"})
+	require.Equal(t, []string{"skip.log"}, m.Excludes())
+	require.Len(t, m.Query("alpha", 0), 1, "queries keep serving the old store until a rebuild")
+
+	// The next rebuild walks the NEW roots under the NEW excludes.
+	_, _, err = m.BuildFromDisk(context.Background(), nil)
+	require.NoError(t, err)
+	require.Empty(t, m.Query("alpha", 0))
+	require.Len(t, m.Query("bravo", 0), 1)
+	require.Empty(t, m.Query("skip", 0), "the new exclude pattern applied")
+}
+
+func TestManagerSetMaxResultsLive(t *testing.T) {
+	m := NewManager(nil, nil, 10)
+	for i := 0; i < 5; i++ {
+		require.NoError(t, m.Add("/d", fmt.Sprintf("file-%d.txt", i), false))
+	}
+	require.Len(t, m.Query("file", 0), 5)
+
+	m.SetMaxResults(2)
+	require.Equal(t, 2, m.MaxResults())
+	require.Len(t, m.Query("file", 0), 2, "the new default limit applies to subsequent queries")
+	require.Len(t, m.Query("file", 4), 4, "an explicit limit still wins")
+
+	m.SetMaxResults(0)
+	require.Equal(t, DefaultMaxResults, m.MaxResults(), "non-positive repairs to the default, matching NewManager")
+}
+
+func TestManagerSetFuzzyDisabledLive(t *testing.T) {
+	m := NewManager(nil, nil, 10)
+	require.False(t, m.FuzzyDisabled(), "the zero value keeps fuzzy on")
+	// "fzy" matches "frenzy" only as a subsequence: present with the
+	// fuzzy tier on, gone when it is switched off live.
+	require.NoError(t, m.Add("/d", "frenzy.txt", false))
+	require.Len(t, m.Query("fzy", 0), 1)
+
+	m.SetFuzzyDisabled(true)
+	require.True(t, m.FuzzyDisabled())
+	require.Empty(t, m.Query("fzy", 0), "the fuzzy tier is off for subsequent queries")
+
+	m.SetFuzzyDisabled(false)
+	require.Len(t, m.Query("fzy", 0), 1)
 }
 
 func TestManagerBuildErrorKeepsOldStore(t *testing.T) {

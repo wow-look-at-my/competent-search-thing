@@ -40,6 +40,42 @@ func (a *App) historyStore() *history.Store {
 	return a.history
 }
 
+// applyHistory is the config live-apply path for
+// history.persistDisabled: build a fresh store at the same path with
+// the new persist flag, seed it -- from disk when persistence turns
+// on, so older entries survive -- then replay the current in-memory
+// entries on top (Add's move-to-newest dedup keeps the recall order
+// sane), and swap it in. In-session recall survives the flip either
+// way; turning persistence off leaves history.json on disk untouched
+// (persist off means "stop writing", not "delete").
+func (a *App) applyHistory(next *config.Config) error {
+	dir, err := config.Dir()
+	if err != nil {
+		return err
+	}
+	st := history.New(filepath.Join(dir, historyFileName), !next.History.PersistDisabled)
+	if err := st.Load(); err != nil {
+		log.Printf("history: %v (starting from the in-memory entries)", err)
+	}
+	old := a.historyStore()
+	if old != nil {
+		logged := false
+		for _, e := range old.Entries() {
+			// Add updates the in-memory list even when the persist
+			// write fails, so the replay always completes; the first
+			// write failure is logged once (the rest would repeat it).
+			if err := st.Add(e); err != nil && !logged {
+				logged = true
+				log.Printf("history: %v", err)
+			}
+		}
+	}
+	a.mu.Lock()
+	a.history = st
+	a.mu.Unlock()
+	return nil
+}
+
 // GetHistory returns the committed query history, oldest to newest,
 // always as a non-nil private copy. The frontend fetches it at
 // wire-up and refetches after every AddHistory.

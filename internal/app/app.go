@@ -47,93 +47,6 @@ type indexProgress struct {
 // keeps the bound method signature and the frontend contract stable.
 type Result = index.Result
 
-// Options configures an App.
-type Options struct {
-	// RescanEvery > 0 enables periodic full rescans at that interval
-	// (wire config.RescanIntervalMinutes here); 0 disables them.
-	RescanEvery time.Duration
-	// WatchMaxWatches bounds the live-watch hot set (wire config's
-	// watcher.maxWatches here): 0 = automatic budget, negative =
-	// explicitly unlimited, positive taken as-is. See
-	// watch.Options.MaxWatches.
-	WatchMaxWatches int
-	// SweepInterval is the reconcile-sweep cadence (wire config's
-	// watcher.sweepMinutes here, as a Duration); 0 selects the watch
-	// layer's default (20 minutes).
-	SweepInterval time.Duration
-	// SweepDisabled turns the sweep tier off entirely (wire config's
-	// watcher.sweepDisabled here). startWatch then logs a loud
-	// warning: without sweeps, directories without a live watch
-	// converge only at full rescans.
-	SweepDisabled bool
-	// WatchExcludes are exclude patterns applied to live watching
-	// only (wire config's watcher.watchExcludes here): matching
-	// directories and their subtrees stay indexed and swept but never
-	// hold a watch. See watch.Options.WatchEx.
-	WatchExcludes []string
-	// WatchBackend selects the notification backend (wire config's
-	// watcher.backend here): "auto"/"" = automatic detection,
-	// "fanotify" = strict fanotify-or-nothing, "inotify" = skip the
-	// fanotify probe. See watch.Options.Backend; the effective backend
-	// is announced to the frontend via eventWatchBackend either way.
-	WatchBackend string
-	// Hotkey is the config hotkey string ("alt+space"); empty disables
-	// the global hotkey.
-	Hotkey string
-	// IPC is the single-instance IPC server the CLI layer acquired
-	// (nil when IPC is unavailable; everything degrades to no-ops).
-	// Startup wires the toggle/show/hide handlers into it and the App
-	// owns it from then on: Shutdown closes it.
-	IPC *ipc.Server
-	// ShowOnStartup asks for the bar to be shown as soon as the
-	// frontend is ready (set when a CLI toggle/show started the app).
-	ShowOnStartup bool
-	// TrayDisabled turns the tray icon off (wire config's
-	// tray.disabled here); the default zero value keeps it on.
-	TrayDisabled bool
-	// HistoryPersistDisabled keeps the query history in memory only
-	// (wire config's history.persistDisabled here); the default zero
-	// value persists it to <configDir>/history.json. See history.go.
-	HistoryPersistDisabled bool
-	// ConfigNotes are the human-readable migration notes config.Load
-	// produced (wire cfg.MigrationNotes here); Startup logs each one
-	// loudly, exactly once, so a changed index scope is never silent.
-	ConfigNotes []string
-	// Frecency configures the frecency ranking blend (wire config's
-	// search.frecency here; see frecency.go). Weights arrive
-	// Normalize-repaired; Disabled leaves the whole layer unwired.
-	Frecency config.FrecencyConfig
-	// Priors configures the pick-memory ranking priors (wire config's
-	// search.priors here; see priors.go in this package). OPT-IN: the
-	// zero value keeps the layer entirely unwired -- no file reads,
-	// no goroutines, no blend term.
-	Priors config.PriorsConfig
-	// Telemetry configures the opt-in local ranking telemetry log
-	// (wire config's search.telemetry here; see telemetry.go in this
-	// package). The zero value keeps the whole feature off.
-	Telemetry config.TelemetryConfig
-	// Preview is the preview pane configuration (wire config's
-	// preview section here); the zero value keeps the pane off and
-	// every preview method degrades to a no-op. See preview.go.
-	Preview config.PreviewConfig
-	// WindowWidth and WindowHeight are the effective bar window size
-	// in pixels; the positioning math uses them, so they must match
-	// what the native window was built with (main.go feeds both from
-	// the one app.PreviewWindowSize() read -- the configured
-	// window.width/height, or the preview-widened size when the pane
-	// is on). Zero values fall back to the config defaults, keeping
-	// bare-Options tests working.
-	WindowWidth  int
-	WindowHeight int
-	// ResultsWidth is the pixel width the left results column keeps
-	// while the preview pane is on -- the flag-off bar width (wire
-	// config's window.width here), so the column matches what the bar
-	// would be without the pane. Zero or negative values fall back to
-	// config.DefaultWindowWidth in GetPreviewConfig, keeping
-	// bare-Options tests working. Unused while the pane is off.
-	ResultsWidth int
-}
-
 // App is the Wails-bound application object. It carries the Wails
 // runtime context after Startup has run and owns the index manager,
 // the live-update layer (watcher + rescanner), and the platform hooks
@@ -148,7 +61,7 @@ type App struct {
 	// (see logFanotifyGrant).
 	grantOnce sync.Once
 
-	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, history, launchCtx, launchCancel, progress
+	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, hkGen, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, pendingConfig, history, launchCtx, launchCancel, progress, winW, winH, resultsW
 	ctx        context.Context
 	visible    bool
 	lastToggle time.Time
@@ -168,11 +81,22 @@ type App struct {
 	launchOnce sync.Once
 	// hotkeyCancel aborts the async portal/gsettings backend chain;
 	// portalHK is the active portal shortcut (nil otherwise);
-	// hotkeyDesc describes the effective summon trigger (see
-	// hotkey.go).
+	// hotkeyDesc describes the effective summon trigger; hkGen is the
+	// registration generation -- teardownHotkey bumps it, and a chain
+	// completing under a stale generation discards its result instead
+	// of storing it over a re-registration's (see hotkey.go).
 	hotkeyCancel context.CancelFunc
 	portalHK     portalHandle
 	hotkeyDesc   string
+	hkGen        int
+	// winW/winH are the LIVE effective bar window size the positioning
+	// math uses (seeded from Options.WindowWidth/Height, swapped by the
+	// config window-size applier); resultsW is the live window.width
+	// GetPreviewConfig reports as the preview pane's results-column
+	// width. Zero values fall back to the config defaults in the
+	// accessors, keeping bare-Options tests wiring-free.
+	winW, winH int
+	resultsW   int
 	// Tray icon (see tray.go in this package): the running handle and
 	// the cancel func aborting a Start still waiting on the bus.
 	// newTray is a seam over buildTray so unit tests never dial a
@@ -186,6 +110,12 @@ type App struct {
 	// pendingShow and executed once by DomReady.
 	domReady    bool
 	pendingShow bool
+	// pendingConfig remembers a summon-into-config-editor request
+	// (the config IPC/CLI command, the !config bang, the tray item,
+	// Options.OpenConfigOnStartup) that arrived before DomReady; it
+	// rides pendingShow (always latched together) and Hide cancels
+	// both. See showConfig in configui.go.
+	pendingConfig bool
 	// panelOnce guards the one-time Spotlight-style panel configuration
 	// DomReady applies through the plat.configurePanel seam -- DomReady
 	// is the earliest point every platform has a native window to
@@ -214,6 +144,18 @@ type App struct {
 	themeW       *themeWatcher
 	buildCancel  context.CancelFunc // cancels the initial build's walk
 	shuttingDown bool
+	// watchCfg is the LIVE watch-layer configuration startWatch
+	// consumes (seeded from Options in New, swapped by the config
+	// index-layer applier so a watch rebuild picks the new knobs up).
+	// buildFinished flips when the initial build ended (success or
+	// failure) -- with the trio down it distinguishes "still walking"
+	// (store the new values, the completion path picks them up) from
+	// "failed" (kick a fresh build). rescanOnWatchUp asks the next
+	// startWatch to request one rescan: the in-flight initial walk
+	// latched the previous roots/excludes. All under watchMu.
+	watchCfg        watchConfig
+	buildFinished   bool
+	rescanOnWatchUp bool
 
 	// Plugin layer (see plugins.go). pluginGen is the current query
 	// generation; emissions from older generations are dropped.
@@ -266,19 +208,39 @@ type App struct {
 
 	// Preview pane layer (see preview.go in this package): the
 	// dispatcher (nil while the pane is disabled), the cancel func for
-	// its parent context (Shutdown), and the generation gate mirroring
-	// the plugin layer's pluginGen.
+	// its parent context (Shutdown), the generation gate mirroring
+	// the plugin layer's pluginGen, and the LIVE preview configuration
+	// (seeded from Options in New, swapped by the config preview
+	// applier; GetPreviewConfig and the dispatcher builds read it).
 	previewOnce   sync.Once
 	previewGen    atomic.Int64
-	previewMu     sync.Mutex // guards previewDisp, previewCancel
+	previewMu     sync.Mutex // guards previewDisp, previewCancel, previewCfg
 	previewDisp   *preview.Dispatcher
 	previewCancel context.CancelFunc
+	previewCfg    config.PreviewConfig
 
 	// Query history (see history.go): built once at Startup, nil
 	// before that -- the bound methods degrade to no-ops, which keeps
 	// newTestApp working without extra wiring.
 	histOnce sync.Once
 	history  *history.Store
+
+	// Config editor state (configui.go / configapply.go): the
+	// currently APPLIED configuration (the live-apply engine's diff
+	// baseline, seeded once at Startup, swapped by every apply pass)
+	// and the checksum of the last GUI-saved config.json bytes (the
+	// config-dir watcher skips re-applying the app's own writes). A
+	// nil cfgCurrent (pre-Startup) makes an apply pass treat every
+	// section as changed -- appliers are idempotent, so that is safe.
+	cfgOnce      sync.Once
+	cfgMu        sync.Mutex // guards cfgCurrent, lastSavedSum
+	cfgCurrent   *config.Config
+	lastSavedSum [32]byte
+	// applyMu serializes whole applyConfig passes (a GUI save racing an
+	// external edit runs one after the other), so individual appliers
+	// need no cross-pass locking of their own. Never taken by anything
+	// an applier calls.
+	applyMu sync.Mutex
 
 	// Frecency ranking (see frecency.go): the open-count store and
 	// the blend the Manager serves, built once at Startup; nil/zero
@@ -343,6 +305,20 @@ func New(m *index.Manager, opt Options) *App {
 		rt:      defaultRuntimeSeams(),
 		plat:    defaultPlatformSeams(),
 	}
+	// Seed the live-mutable configuration state from the boot Options;
+	// the config appliers swap these at runtime (the Options themselves
+	// stay boot-frozen).
+	a.watchCfg = watchConfig{
+		rescanEvery:   opt.RescanEvery,
+		maxWatches:    opt.WatchMaxWatches,
+		sweepInterval: opt.SweepInterval,
+		sweepDisabled: opt.SweepDisabled,
+		watchExcludes: opt.WatchExcludes,
+		backend:       opt.WatchBackend,
+	}
+	a.winW, a.winH = opt.WindowWidth, opt.WindowHeight
+	a.resultsW = opt.ResultsWidth
+	a.previewCfg = opt.Preview
 	a.newRegistry = a.buildRegistry
 	a.newTray = a.buildTray
 	a.newStats = a.buildStats
@@ -373,6 +349,12 @@ func (a *App) Startup(ctx context.Context) {
 	if a.opt.ShowOnStartup {
 		a.pendingShow = true
 	}
+	if a.opt.OpenConfigOnStartup {
+		// A start-into-config request is a show plus the editor mode
+		// event, executed together by DomReady (the showConfig latch).
+		a.pendingShow = true
+		a.pendingConfig = true
+	}
 	a.mu.Unlock()
 	// The IPC handlers are wired BEFORE everything else, in particular
 	// before registerHotkey: on darwin the hotkey registration can
@@ -386,6 +368,7 @@ func (a *App) Startup(ctx context.Context) {
 			Toggle: a.toggle,
 			Show:   a.showIfHidden,
 			Hide:   a.Hide,
+			Config: a.showConfig,
 		})
 	}
 	a.notesOnce.Do(func() {
@@ -403,6 +386,10 @@ func (a *App) Startup(ctx context.Context) {
 	a.previewOnce.Do(a.startPreview)
 	a.histOnce.Do(a.startHistory)
 	a.frecOnce.Do(a.startFrecency)
+	// The live-apply baseline exists BEFORE the config-dir watcher
+	// (startThemeWatch also feeds config.json hot-apply), so an
+	// external edit always diffs against a real baseline.
+	a.cfgOnce.Do(a.startConfigState)
 	a.priorsOnce.Do(a.startPriors)
 	a.telOnce.Do(a.startTelemetry)
 	a.themeOnce.Do(a.startThemeWatch)
@@ -434,7 +421,9 @@ func (a *App) DomReady(ctx context.Context) {
 	}
 	a.domReady = true
 	pending := a.pendingShow
+	pendingCfg := a.pendingConfig
 	a.pendingShow = false
+	a.pendingConfig = false
 	a.mu.Unlock()
 	// Spotlight-style collection behavior must be applied after the
 	// window exists; DomReady is the earliest point every platform has
@@ -448,6 +437,13 @@ func (a *App) DomReady(ctx context.Context) {
 	if pending {
 		a.captureAppContext()
 		a.showOnCursorDisplay()
+	}
+	if pendingCfg {
+		// A deferred summon-into-config: the mode event follows the
+		// eventShown the show above emitted (the frontend's app:shown
+		// handler re-renders the bar; an earlier config event would be
+		// clobbered).
+		a.emitEvent(eventConfigOpen)
 	}
 }
 
@@ -486,6 +482,14 @@ func (a *App) buildIndex(ctx context.Context) {
 	// or error log line, so none of them can collide with a
 	// still-rendered progress row.
 	pr.Done()
+	// The build ended either way; the config index-layer applier uses
+	// the flag to tell "still walking" from "failed" (see
+	// restartIndexLayer).
+	defer func() {
+		a.watchMu.Lock()
+		a.buildFinished = true
+		a.watchMu.Unlock()
+	}()
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			log.Printf("index: initial build cancelled")
@@ -535,12 +539,6 @@ func (a *App) Shutdown(_ context.Context) {
 	}
 
 	a.mu.Lock()
-	hkStop := a.hotkeyStop
-	a.hotkeyStop = nil
-	hkCancel := a.hotkeyCancel
-	a.hotkeyCancel = nil
-	ph := a.portalHK
-	a.portalHK = nil
 	th := a.trayH
 	a.trayH = nil
 	trayCancel := a.trayCancel
@@ -561,17 +559,9 @@ func (a *App) Shutdown(_ context.Context) {
 	if launchCancel != nil {
 		launchCancel()
 	}
-	if hkCancel != nil {
-		hkCancel()
-	}
-	if hkStop != nil {
-		hkStop()
-	}
-	if ph != nil {
-		if err := ph.Close(); err != nil {
-			log.Printf("hotkey: closing the portal shortcut: %v", err)
-		}
-	}
+	// The hotkey teardown (native stop, chain cancel, portal close)
+	// is shared with the config live-apply's re-registration path.
+	a.teardownHotkey()
 	if trayCancel != nil {
 		trayCancel()
 	}
