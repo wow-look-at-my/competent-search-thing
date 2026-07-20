@@ -138,12 +138,13 @@ export function applyPreviewConfig(cfg: PreviewConfigInfo): void {
 /* --- hooks main.ts calls -------------------------------------------- */
 
 // previewOnSelectionChange is called from main.ts's select() -- the
-// single selection choke point, so every path (arrow move, hover,
-// render reconcile, history recall, app:shown reset) lands here.
-// null idles the pane and cancels the in-flight preview; a row paints
-// an instant zero-IO header and debounces the QueryPreview dispatch.
-// Re-selecting the same row (hover jitter, plugin re-renders) is a
-// no-op.
+// single selection choke point, so every path (arrow move, render
+// reconcile, history recall, app:shown reset) lands here; mouse
+// hover is decorative-only and never does (the pane tracks the
+// ACTIVE selection). null idles the pane and cancels the in-flight
+// preview; a row paints an instant zero-IO header and debounces the
+// QueryPreview dispatch. Re-selecting the same row (plugin
+// re-renders) is a no-op.
 export function previewOnSelectionChange(sel: PreviewSelection | null): void {
   if (!enabled || app === null) {
     return;

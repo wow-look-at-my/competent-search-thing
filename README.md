@@ -1728,8 +1728,10 @@ and macOS enumeration is best-effort.
 Installed apps also surface in plain queries -- no bang needed. Typing
 `fire` shows an **Apps** section ABOVE the file results with Firefox
 in it, auto-selected as row 0 (Spotlight-style: Enter launches the
-app) unless you have already arrowed or hovered into the list, in
-which case your selection stays put. Enter launches the selection
+app) unless you have already arrowed into the list, in which case
+your selection stays put. (Mouse hover only paints a faint
+highlight -- it never moves the selection Enter acts on; clicking a
+row activates that row.) Enter launches the selection
 exactly like `!app` does. This is the fourth built-in provider,
 `apps-search`:
 
@@ -2166,6 +2168,14 @@ used/total (`SWP 0.5/8.0G`), and network throughput received/sent
 over the real interfaces -- loopback, container veths, bridges,
 tunnels, and VPN interfaces are excluded). Sizes use binary units
 (`G`/`M`) with one decimal below 10.
+
+Every metric sits in a fixed-width slot sized for its worst-case
+string, with tabular figures -- so a value changing width (`9.9` to
+`10`, `26K` to `1.2M`) never shifts the neighboring metrics around.
+The labels and the NET down/up arrows carry a subtle tint derived
+from the theme's accent and warning colors (no new theme tokens;
+legible in both builtin themes); the values stay the regular dim
+foreground.
 
 The design guarantee is that the stats can never slow the search
 experience down:

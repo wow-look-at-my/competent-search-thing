@@ -1,8 +1,9 @@
 // System stats row rendering: pure formatting helpers plus the one
 // update function main.ts calls with each sysstats Snapshot (the
-// GetStats return / "stats:update" payload). Text-node writes only
-// (textContent), matching render.ts conventions; row visibility (the
-// enabled flag) is owned by main.ts.
+// GetStats return / "stats:update" payload). Element/text-node DOM
+// building only, matching render.ts conventions (the NET value
+// carries two tinted arrow spans; everything else is textContent);
+// row visibility (the enabled flag) is owned by main.ts.
 
 // The five value nodes of the static #stats row in index.html.
 export interface StatsNodes {
@@ -21,6 +22,24 @@ const UP = "\u2191"; // up arrow: net sent
 const KI = 1024;
 const MI = 1024 * KI;
 const GI = 1024 * MI;
+
+// WIDTH CONTRACT (the metric layout-stability gate): the maximum
+// characters each formatter can emit over its documented input
+// domain. style.css reserves each value slot at MAX + 1ch (slack for
+// the non-tabular-width glyphs: %, /, ., unit letters, arrows) with
+// font-variant-numeric: tabular-nums, so a value changing width can
+// never shift its neighbors; stats.test.ts pins BOTH sides -- the
+// formatters against these maxima over input sweeps, and the
+// style.css ch literals against the constants. Domains: percentages
+// 0..100 (the Go sampler clamps); byte pairs with used <= total <=
+// 9999 GiB (~9.8 TiB); rates below 9999 GiB/s. A machine beyond
+// those bounds widens its slot (min-width degrades gracefully) --
+// bump the constant AND the style.css reservation together.
+export const PCT_MAX_CHARS = 4; // "100%"
+export const BYTES_PAIR_MAX_CHARS = 10; // "1024/1024M"
+export const RATE_MAX_CHARS = 5; // "1024M" / "9999G"
+// down-arrow + rate + space + up-arrow + rate
+export const NET_MAX_CHARS = 2 * RATE_MAX_CHARS + 3;
 
 // num formats an already-scaled value with the shared decimal rule:
 // one decimal below 10, none from 10 up (6.234 -> "6.2", 15.9 -> "16").
@@ -57,6 +76,20 @@ export function formatRate(bps: number): string {
   return String(Math.round(bps)) + "B";
 }
 
+// renderNet rebuilds the NET value as <down-arrow>rx <up-arrow>tx
+// with each arrow in its own span (.net-down / .net-up) so style.css
+// can tint the two directions independently -- element + text-node
+// building only (the render.ts convention; never innerHTML).
+function renderNet(el: HTMLElement, rxBps: number, txBps: number): void {
+  const down = document.createElement("span");
+  down.className = "net-down";
+  down.textContent = DOWN;
+  const up = document.createElement("span");
+  up.className = "net-up";
+  up.textContent = UP;
+  el.replaceChildren(down, formatRate(rxBps) + " ", up, formatRate(txBps));
+}
+
 // renderStats writes one snapshot into the five value nodes. Any
 // metric whose Ok flag is false renders the dash placeholder (missing
 // source, failed read, rate not accumulated yet). Swap with a live
@@ -77,7 +110,9 @@ export function renderStats(snap: StatsSnapshot, nodes: StatsNodes): void {
     : snap.swapTotal > 0
       ? formatBytesPair(snap.swapUsed, snap.swapTotal)
       : "0M";
-  nodes.net.textContent = snap.netOk
-    ? DOWN + formatRate(snap.netRxBps) + " " + UP + formatRate(snap.netTxBps)
-    : DASH;
+  if (snap.netOk) {
+    renderNet(nodes.net, snap.netRxBps, snap.netTxBps);
+  } else {
+    nodes.net.textContent = DASH;
+  }
 }

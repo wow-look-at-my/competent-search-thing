@@ -2571,9 +2571,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   before render.ts's module-load template grabs, so the DOM-order
   tests fail if the zones/templates change shape; src/priority.test.ts
   pins priority-above-files rendering, the flat traversal order, and
-  the reconcileSelection rules, and src/stats.test.ts pins the stats
-  formatters + renderStats' dash-vs-value rules -- run in the CI
-  linux job's frontend step). `index.html`
+  the reconcileSelection rules, src/stats.test.ts pins the stats
+  formatters + renderStats' dash-vs-value rules + the stats-row WIDTH
+  CONTRACT (formatter-maxima sweeps and the style.css ch-reservation
+  structure -- jsdom computes no layout, so those two sides ARE the
+  mechanical gate), and src/hover.test.ts drives the REAL main.ts
+  over faked Wails bindings to pin the hover-vs-selection model
+  (hover changes nothing, Enter runs the keyboard-selected row, click
+  runs the clicked row) -- run in the CI linux job's frontend step).
+  `index.html`
   (query row with inline SVG magnifier + hidden bang chip; #results
   split into #priority-results (plugin sections with priority > 0,
   ABOVE the files) / #file-results / static #empty ("No matches") /
@@ -2582,7 +2588,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   BELOW the status bar -- the bottom-most chrome, five STATIC
   label/value span pairs (CPU GPU RAM SWP NET, value ids
   stat-cpu/-gpu/-ram/-swap/-net), starts hidden, JS only ever writes
-  the value text; #preview-pane
+  INSIDE the value spans (plain text, except the NET value's two
+  tinted arrow spans stats.ts builds -- see the stats.ts bullet);
+  #preview-pane
   (spinner + #preview-body + command strip with the web/AI buttons
   and the pane flash) as one more #bar child, display:none unless
   body.with-preview; #config-pane (header with #config-title +
@@ -2636,12 +2644,22 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the file rows -- the apps section -- everything else below;
   compareSections = priority desc, max score desc, plugin id);
   selection is one flat list in DOM order -- priority rows, then file
-  rows, then below-zone plugin rows: ArrowUp/Down wrap, Home/End,
-  hover; row handlers resolve their index at EVENT time
+  rows, then below-zone plugin rows: ArrowUp/Down wrap, Home/End.
+  TWO DISTINCT POINTER STATES (the hover-steals-selection field
+  report): the ACTIVE selection (state.selected) moves ONLY through
+  keyboard navigation and the auto-select/reconcile paths and is the
+  single source of truth for Enter, the pick report, AND the preview
+  pane, while mouse HOVER is a purely decorative CSS :hover wash
+  (style.css .result:not(.selected):hover -- render.ts registers NO
+  hover listener at all, RowHandlers has no onHover), so sweeping the
+  cursor can never change what Enter runs, mark the generation
+  navigated, or retarget the preview; a CLICK is the explicit mouse
+  choice and activates the clicked row (src/hover.test.ts pins all
+  three). Row handlers resolve their index at EVENT time
   (rows.indexOf(row) -- render-time captured indices went stale when
   a late priority emission PREPENDED rows above the files), and every
   re-render reconciles the selection through selection.ts
-  reconcileSelection: userNavigated (set by arrows/Home/End/hover,
+  reconcileSelection: userNavigated (set by arrows/Home/End,
   cleared per generation in runSearch) preserves the selected item BY
   IDENTITY at its shifted index, while an un-navigated bar re-runs
   auto-select on row 0 so a late apps section takes the selection
@@ -2649,8 +2667,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   unselected, and its section is always priority 0/below);
   selection scrollIntoView fires ONLY for keyboard/auto-
   select navigation (applySelection/select carry a scroll flag;
-  hover and the plugin-area re-render select without scrolling, so
-  they never move the viewport), and wheel input on #results is
+  the plugin-area re-render selects without scrolling, so
+  it never moves the viewport), and wheel input on #results is
   handled manually OFF-MAC ONLY (wheel.ts shouldInterceptWheel,
   vitest-pinned: navigator.platform "Mac*" = NO listener at all --
   a non-passive always-preventDefault wheel listener forces WebKit's
@@ -2706,10 +2724,21 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   BOTH values in the unit the TOTAL picks, GiB else MiB below 1 GiB,
   shared decimal rule one-decimal-below-10-else-none; formatRate
   humanizes bytes/sec B/K/M/G (binary) with the same rule, net
-  renders as "<down>rx <up>tx" arrow pairs; any *Ok=false -> em-dash
+  renders as "<down>rx <up>tx" arrow pairs whose arrows renderNet
+  builds as .net-down/.net-up SPANS (element+text-node building, the
+  render.ts convention -- style.css tints the two directions; the
+  rates stay plain text); any *Ok=false -> em-dash
   placeholder, while swapOk=true with swapTotal 0 (no swap configured
   / empty dynamic macOS swap) renders the live "0M" -- a real zero is
   a value, only a dead source dashes (the macOS SWP field report);
+  the WIDTH CONTRACT constants (PCT_MAX_CHARS 4 "100%",
+  BYTES_PAIR_MAX_CHARS 10 "1024/1024M", RATE_MAX_CHARS 5,
+  NET_MAX_CHARS 13 = 2 rates + arrows + space) are the formatters'
+  maximum emit widths over documented input domains (pcts 0..100,
+  byte pairs used <= total <= 9999 GiB, rates < 9999 GiB/s);
+  style.css reserves each value slot at MAX + 1ch and stats.test.ts
+  pins BOTH sides -- bump a constant and the CSS reservation
+  together;
   glyphs (em dash, arrows) are \uXXXX escapes -- ASCII-only source;
   src/stats.test.ts pins the formatters + the swap dash-vs-0M rules)
   + `src/fpsmeter.ts` (the dev-only fps meter; wire() ends with
@@ -2760,12 +2789,25 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   before the name; thin scrollbar; ALL colors/sizes/effects flow
   through var(--sb-*) -- the :root block holds the dark fallbacks and
   MUST stay identical to internal/theme/builtin/dark.json, enforced
-  by internal/theme/sync_test.go; the #stats row block (flex 0 0
-  auto single nowrap line so it can never squeeze the results area,
-  ~0.85x small font, fg-dim on a --sb-border top border, tokens only
-  -- and an explicit #stats[hidden]{display:none} because the
-  author-level display:flex would defeat the UA sheet's [hidden]
-  rule); appended namespaced plugin block
+  by internal/theme/sync_test.go; the decorative hover wash
+  .result:not(.selected):hover (a 40% color-mix of --sb-selection-bg,
+  clearly weaker than the full .selected style -- the :not() guard
+  keeps the selected row's look authoritative under the pointer); the
+  #stats row block (a single nowrap flex-0-0-auto line so it can
+  never squeeze the results area: a five-track grid
+  (repeat(5, auto) + space-between) whose value spans carry RESERVED
+  min-widths -- 5ch pct / 11ch byte-pair / 14ch net = the stats.ts
+  *_MAX_CHARS + 1ch slack, stats.test.ts-pinned -- plus tabular-nums,
+  so a value changing rendered width never shifts its neighbors;
+  ~0.85x small font, fg-dim on a --sb-border top border; the subtle
+  metric hues are color-mix derivations of EXISTING tokens --
+  labels = accent 45% into fg-dim under the 0.7 opacity, .net-down =
+  accent 60%, .net-up = warning 60% -- deliberately NO new theme
+  token, so the sync_test.go :root contract is untouched and both
+  builtin themes stay legible -- and an explicit
+  #stats[hidden]{display:none} because the author-level display:grid
+  would defeat the UA sheet's [hidden] rule); appended namespaced
+  plugin block
   (.plugin-*, .bang-chip, .status-flash) where every accent rule
   consumes var(--plugin-accent, var(--accent, #89b4fa)) and a :root
   bridge defines --accent: var(--sb-accent, #89b4fa), so the theming
