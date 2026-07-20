@@ -441,6 +441,7 @@ func (a *App) Startup(ctx context.Context) {
 			Show:   a.showIfHidden,
 			Hide:   a.Hide,
 			Config: a.showConfig,
+			Quit:   a.quitViaIPC,
 		})
 	}
 	a.notesOnce.Do(func() {
@@ -491,6 +492,19 @@ func (a *App) Startup(ctx context.Context) {
 		a.watchMu.Unlock()
 		go a.buildIndex(ctx)
 	})
+}
+
+// quitViaIPC backs the ipc quit command -- the version-skew
+// new-instance-wins handshake's graceful half: a newer launcher asks
+// this instance to quit before falling back to SIGTERM. It takes the
+// same runtime-quit path as the !quit builtin; the no-runtime-ctx
+// guard is logged instead of surfaced because ipc.Handlers members
+// are plain func()s (Startup stores the ctx before wiring handlers,
+// so the guard only fires in never-started test shells).
+func (a *App) quitViaIPC() {
+	if err := a.runBuiltin(builtinQuit); err != nil {
+		log.Printf("ipc: quit request: %v", err)
+	}
 }
 
 // DomReady is wired to the Wails OnDomReady hook: the frontend is
