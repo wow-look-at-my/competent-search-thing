@@ -1087,7 +1087,25 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   loop, so walk-built children slices end at cap == len (the
   append-ladder's measured 1.32x overshoot and copy churn are gone;
   pinned by TestWalkChildrenPresized, the scratch path by
-  TestWalkFullPathPatternOnFiles + TestAppendJoinDir). `Manager`: owns the RWMutex contract (queries
+  TestWalkFullPathPatternOnFiles + TestAppendJoinDir). WALK STRESS
+  GATE (walkstress_test.go, the v395 field-crash regression rig:
+  intermittent "growslice: len out of range" in appendName plus GC
+  scanstack SIGSEGVs during startup indexing -- memory-corruption
+  signatures): TestWalkStressIntegrity swaps readDirFn for an
+  in-memory synthetic tree (~113k entries/walk, fresh name strings
+  per call, base + full-path excludes so the per-file scratch/unsafe
+  path runs, a stack-pump recursion per readdir so walker stacks
+  grow-then-park as shrinkstack fodder) and runs 16 concurrent Walks
+  under the production GOGC=40 window, verifying every store's full
+  integrity (counts, monotonic offset table, NUL-free names, parent
+  paths) per iteration; ~3s budget in CI,
+  COMPETENT_SEARCH_STRESS_SECONDS extends investigation runs. The
+  2026-07-20 investigation (v395 crash) proved this path clean on
+  stock go1.25.0 -- race-detector-clean, ~200M entries verified
+  across plain/checkptr/clobberfree/gccheckmark builds -- and
+  disassembly-matched the shipped v395 binary to stock go1.25.0
+  codegen, so keep the gate green rather than re-litigating the
+  walker's ownership story. `Manager`: owns the RWMutex contract (queries
   RLock, mutations Lock); roots/excludes are LIVE-mutable now
   (`SetRoots`/`SetExcludes`, the config editor's index-scope apply;
   Roots/Excludes read under the lock and `BuildFromDisk` latches one

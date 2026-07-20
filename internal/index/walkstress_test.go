@@ -82,6 +82,24 @@ func stressFileName(d, i int) string {
 	return fmt.Sprintf("f_%d_%04d_%s.dat", d, i, strings.Repeat("q", (i*7+d*13)%89))
 }
 
+// stackPump forces the calling walker goroutine's stack to grow by a
+// few frames' worth of locals and then unwind, so the walk's park
+// points (queue pop, store mutex) leave large dead stacks behind --
+// prime shrinkstack candidates for the GC that GOGC=40 keeps running.
+// The field crash's first trace died inside scanstack/shrinkstack
+// machinery; this recreates the stack grow/park/shrink churn the real
+// walk produces via os.ReadDir's own frames.
+//
+//go:noinline
+func stackPump(depth int, seed byte) byte {
+	var buf [256]byte
+	buf[0] = seed
+	if depth <= 0 {
+		return buf[0]
+	}
+	return stackPump(depth-1, buf[0]+1)
+}
+
 // synthReadDir serves the deterministic in-memory tree: every dir has
 // stressWidth subdirs while depth < stressDepth, stressFiles(depth)
 // plain files, and two base-excluded ".tmp" files.
@@ -90,6 +108,7 @@ func synthReadDir(dir string) ([]fs.DirEntry, error) {
 	if d < 0 {
 		return nil, fs.ErrNotExist
 	}
+	stackPump(24, byte(len(dir))) // grow-then-unwind: shrinkstack fodder
 	out := make([]fs.DirEntry, 0, stressWidth+stressFiles(d)+2)
 	if d < stressDepth {
 		for i := 0; i < stressWidth; i++ {
