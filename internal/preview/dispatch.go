@@ -46,8 +46,12 @@ type Options struct {
 	// The key is confined to the provider client -- never logged or
 	// emitted.
 	KagiAPIKey string
-	// KagiBaseURL overrides the web-search API origin; empty = the
-	// official endpoint. Normalized by normalizeBaseURL: one trailing
+	// KagiBaseURL overrides the web-search API base; empty = the
+	// official endpoint (the spec's server URL,
+	// https://kagi.com/api/v1). A non-empty value replaces that WHOLE
+	// base verbatim -- the client appends only "/search" -- so a
+	// compatible server is named by its full base, /api/v1-style
+	// prefix included. Normalized by normalizeBaseURL: one trailing
 	// "/" is trimmed, and an invalid value (not http(s) with a host)
 	// leaves the provider unavailable -- FetchWeb answers with a
 	// terse invalid-baseUrl error, never a broken client. The value
@@ -72,7 +76,9 @@ type Options struct {
 	// memory-only for this run).
 	AICachePath string
 	// Logf receives provider-layer degradations (AI cache load/save
-	// problems); nil = silent. Never receives key material.
+	// problems, and one line per failed Kagi request carrying the
+	// Kagi trace id for support); nil = silent. Never receives key
+	// material.
 	Logf func(format string, v ...any)
 }
 
@@ -183,6 +189,10 @@ func New(parent context.Context, opt Options) *Dispatcher {
 		} else {
 			kagi := NewKagiClient(opt.KagiAPIKey, opt.KagiMaxResults)
 			kagi.BaseURL = base
+			// One "preview: kagi: HTTP <code> (trace <id> ...)" line
+			// per failed request -- the trace id Kagi support asks
+			// for; the pane error stays terse.
+			kagi.Logf = func(format string, v ...any) { d.logf("preview: "+format, v...) }
 			d.webErr = ""
 			d.webFn = func(ctx context.Context, query string) (*WebPreview, error) {
 				results, cached, err := kagi.Search(ctx, query)
