@@ -34,6 +34,12 @@ type QueryOptions struct {
 	// or an inactive blend -- leaves the ranking byte-identical to
 	// the pre-blend engine.
 	Blend *Blend
+	// Trace, when non-nil, receives one ResultSignals per returned
+	// Result, in order -- the per-candidate ranking components the
+	// selection stage computed (see signalstrace.go). Nil is zero
+	// cost and byte-identical to today; non-nil never changes the
+	// results or their order.
+	Trace *[]ResultSignals
 }
 
 // Query returns up to limit entries whose name matches q,
@@ -72,11 +78,15 @@ func (s *Store) QueryWith(q string, limit int, opts QueryOptions) []Result {
 		// false-match across the blob separator.
 		return nil
 	}
+	// A requested signals trace rides a per-query blend copy so every
+	// path below stays untouched (signalstrace.go); with Trace nil
+	// this is exactly opts.Blend.
+	b := traceBlend(opts)
 	if hasPathSep(pat) {
 		// Path mode stays literal single-pattern: paths legitimately
 		// contain spaces, so a separator disables term splitting.
 		// (queryPath normalizes '/' to the native separator IN pat.)
-		res := s.queryPath(pat, ascii, limit, opts.Blend)
+		res := s.queryPath(pat, ascii, limit, b)
 		fillPathRanges(res, string(pat), ascii)
 		return res
 	}
@@ -91,12 +101,12 @@ func (s *Store) QueryWith(q string, limit int, opts QueryOptions) []Result {
 		// (" report ") behaves as its trimmed term.
 		t := terms[0]
 		if opts.FuzzyDisabled {
-			res = s.queryNamesSub(t.Pat, t.ASCII, n, limit, opts.Blend)
+			res = s.queryNamesSub(t.Pat, t.ASCII, n, limit, b)
 		} else {
-			res = s.queryNamesFuzzy(t.Pat, t.ASCII, n, limit, opts.Blend)
+			res = s.queryNamesFuzzy(t.Pat, t.ASCII, n, limit, b)
 		}
 	default:
-		res = s.queryNamesMulti(terms, n, limit, opts.FuzzyDisabled, opts.Blend)
+		res = s.queryNamesMulti(terms, n, limit, opts.FuzzyDisabled, b)
 	}
 	fillNameRanges(res, terms, !opts.FuzzyDisabled)
 	return res
@@ -338,6 +348,23 @@ func (s *Store) selectTop(heaps []*topK, limit int, b *Blend) []Result {
 	out := make([]Result, len(all))
 	for i, c := range all {
 		out[i] = Result{Path: s.EntryPath(c.id), Name: s.Name(c.id), IsDir: c.isDir}
+	}
+	if tr := b.traceBuf(); tr != nil {
+		// The inactive-blend trace records only what this path
+		// computed: match class and alignment; the signal components
+		// stay zero (they never participated), EffClass == Class.
+		sig := make([]ResultSignals, len(all))
+		for i, c := range all {
+			sig[i] = ResultSignals{
+				Path:     out[i].Path,
+				Class:    c.class,
+				EffClass: c.class,
+				Align:    c.score,
+				IsDir:    c.isDir,
+				PathLen:  c.pathLen,
+			}
+		}
+		*tr = sig
 	}
 	return out
 }

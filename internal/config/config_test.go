@@ -187,6 +187,20 @@ func TestNormalize(t *testing.T) {
 	empty.Normalize()
 	require.Equal(t, Default().Roots, empty.Roots, "no roots falls back to default root")
 	require.Equal(t, WatcherBackendAuto, empty.Watcher.Backend, "an empty watcher.backend means auto")
+	require.Equal(t, DefaultTelemetryMaxSizeKB, empty.Search.Telemetry.MaxSizeKB,
+		"zero telemetry maxSizeKB repairs to the default")
+	require.False(t, empty.Search.Telemetry.Enabled, "telemetry stays opt-in: never enabled by repair")
+
+	negTel := Config{Search: SearchConfig{Telemetry: TelemetryConfig{MaxSizeKB: -5}}}
+	negTel.Normalize()
+	require.Equal(t, DefaultTelemetryMaxSizeKB, negTel.Search.Telemetry.MaxSizeKB,
+		"negative telemetry maxSizeKB repairs to the default")
+
+	keepTel := Config{Search: SearchConfig{Telemetry: TelemetryConfig{Enabled: true, MaxSizeKB: 64, RetainQueries: true}}}
+	keepTel.Normalize()
+	require.Equal(t, 64, keepTel.Search.Telemetry.MaxSizeKB, "a configured telemetry size cap is preserved")
+	require.True(t, keepTel.Search.Telemetry.Enabled)
+	require.True(t, keepTel.Search.Telemetry.RetainQueries)
 
 	allEmpty := Config{Roots: []string{""}}
 	allEmpty.Normalize()
