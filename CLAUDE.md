@@ -35,7 +35,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/app` -- the Wails-bound App object and its methods
   (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/DomReady/
   Shutdown/QueryPlugins/RunPluginAction/CheatSheet/GetHistory/
-  AddHistory/GetStats/ResolveIcons). Bound methods
+  AddHistory/GetStats/ResolveIcons/RecordPick). Bound methods
   appear in JS as `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
   saves the runtime ctx, brings up the global hotkey once through a
   session-dependent backend plan (hotkey.go: empty spec = skip, parse
@@ -308,7 +308,25 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   values sharing Open are filtered by its absolute-path guard, and
   openConfigFile bypasses Open deliberately -- recording async, write
   errors logged once (frecErrOnce), never blocking or failing the
-  action. `GetStats() sysstats.Snapshot` (stats.go) returns the
+  action. Ranking telemetry wiring (telemetry.go in this package):
+  Startup's startTelemetry (config search.telemetry, OPT-IN -- zero
+  value = OFF, the preview.enabled privacy precedent; unresolvable
+  config dir = one log line + disabled) builds the telemetryLayer --
+  an internal/telemetry.Store at <configDir>/telemetry.jsonl plus an
+  8-slot query->signals impression ring; Search routes through
+  queryWithTelemetry (nil layer = exactly Manager.Query; enabled =
+  Manager.QueryTraced capturing index.ResultSignals + a ring stash
+  keyed by the TRIMMED query, blendActive from Blend.Active());
+  `RecordPick(rep telemetry.PickReport) error` is the frontend's
+  activation-success report (called beside AddHistory): nil layer or
+  blank query = silent no-op, everything echoed back RE-validated
+  (telemetry.ValidatePickReport -- the RunPluginAction defense-in-
+  depth stance), file-row features joined EXCLUSIVELY from the ring
+  (the report carries row identities only, so the frontend can never
+  forge signal values; a missing ring entry = Joined false, features
+  zero), and the append runs async (telWG + telErrOnce, the
+  recordOpen pattern) with Shutdown draining telWG beside frecWG.
+  `GetStats() sysstats.Snapshot` (stats.go) returns the
   sampler's cached snapshot -- instant, never IO on this path -- with
   Enabled stamped true (the sampler itself never sets that field;
   emitStats stamps the event payloads the same way); nil sampler
@@ -619,7 +637,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   EXACT pre-blend selectTop path, byte-identical ordering pinned by
   TestBlendInactiveIsNoOp, and pruning stays pre-blend: a candidate
   outside its shard's top-limit heap cannot be resurrected
-  (TestBlendMergedSetOnly, documented). A query
+  (TestBlendMergedSetOnly, documented). signalstrace.go is the OPT-IN
+  ranking-signals trace seam consumed by the app's telemetry:
+  QueryOptions.Trace (*[]ResultSignals) + Manager.QueryTraced (Query
+  itself untouched) fill one ResultSignals per returned Result --
+  Path/Class/EffClass/Align/Boost/Recency/Cwd/Penalty/IsDir/PathLen,
+  captured in selectTop's assembly tail and selectBlended exactly as
+  the components participated (inactive blend = class/align only,
+  EffClass == Class, signals zero) -- with the buffer riding an
+  unexported field on a PER-QUERY Blend copy (traceBlend) so no scan
+  path or per-mode query function changes; nil Trace is zero-cost
+  byte-identical (TestTraceNilIsByteIdentical) and a non-nil Trace
+  never changes results or order (TestTraceDoesNotChangeResults).
+  Blend.Active() exports the participation probe. A query
   containing a path
   separator (on windows '/' too, normalized) dispatches to path mode
   (path.go): matched against the FULL path via a per-query dir-table
@@ -706,7 +736,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   UNIQUE HERE: Normalize repairs only the EXACT zero to the default
   (halfLifeDays repairs <= 0), a NEGATIVE value is the documented
   per-signal off switch and passes through, and the schema rejects
-  the ambiguous literal 0},
+  the ambiguous literal 0 -- and telemetry {enabled, maxSizeKB 4096,
+  retainQueries}, the OPT-IN ranking telemetry knob main.go wires to
+  app.Options.Telemetry: zero value = the whole feature OFF (the
+  preview.enabled privacy precedent, deliberately NOT tray.disabled),
+  Normalize repairs maxSizeKB <= 0 while the schema rejects it, and
+  retainQueries false logs query text as "" (note the bare zero value
+  is false = the privacy-conservative direction; Default() writes
+  true)},
   watcher {maxWatches 0 = auto-budget / negative = unlimited,
   sweepMinutes 0 = the 20m default, sweepDisabled (zero value = sweeps
   ON, the tray.disabled convention), watchExcludes
@@ -885,6 +922,38 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Exhaustively unit-tested, headless, table-driven: fake clocks,
   counting/blocking lstat fakes, scripted ProcTree fakes, real
   tempdir files (os.Chtimes) for the atime/mtime max path.
+- `internal/telemetry` -- the opt-in ranking telemetry log (config
+  search.telemetry, zero value = OFF; wired by internal/app's
+  telemetry.go, fed by internal/index's signalstrace.go seam), pure
+  (stdlib only) and exhaustively unit-tested. One JSON line per PICK
+  at <configDir>/telemetry.jsonl: Record {v 1, ts RFC3339 (both
+  stamped by the store when unset, injectable clock), query ("" under
+  retainQueries false), blendActive, joined (impression found in the
+  app's ring), refined (reserved, always false), shown, picked}.
+  ShownRow marshals KIND-SHAPED (custom MarshalJSON): file rows carry
+  path + the full feature vector explicitly -- class/effClass/align/
+  boost/recency/cwd/penalty/isDir/depth/ext, zeros included so class
+  0 = exact is never ambiguous with omitted -- while plugin rows
+  carry exactly rank/kind/plugin/score (titles deliberately never
+  logged). Store: append-only JSONL (deliberate divergence from
+  history.json's whole-file rewrite -- immutable append-heavy
+  records), O_APPEND single-write() lines so appends never interleave
+  mid-record, mutex-guarded, 0600 (re-tightened best-effort per
+  open), MkdirAll parent, nil-receiver-safe no-ops; rotation = an
+  append that would cross MaxSizeKB (New repairs <= 0 to 4096)
+  renames the live file over telemetry.jsonl.1 first, so the disk cap
+  is two generations, an empty live file never rotates, and a torn
+  final line is reader-skipped (loss-tolerant log, not a ledger; no
+  Load step, only offline tooling reads). The wire half:
+  PickReport{query, shown []ShownRef{kind, path|plugin+score},
+  picked PickedRef{rank, action, revealed}} -- deliberately row
+  IDENTITIES only, so a frontend can never forge feature values --
+  and ValidatePickReport (bounded sizes 256 rows/4096-byte strings,
+  per-kind field consistency incl. abs paths + plugin-id shape +
+  score 0..100, in-range rank, open/reveal + revealed-flag
+  consistency for file picks, charset-gated action kind for plugin
+  picks). Deliberately NO schema in schemas/ (internal single-party
+  format, the history.json / frecency.json precedent).
 - `internal/sysstats` -- the system-stats sampler behind the
   frontend's stats row, pure and headless-tested (fixture proc/sys
   trees, injectable clock + gpuExec seams). `Snapshot` is the wire
@@ -2075,7 +2144,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (AddHistory(state.query), fire-and-forget, then refetch) only when
   an activation actually executed: a file row's Open/Reveal resolved
   without error, or RunPluginAction resolved without error --
-  set_query and blank queries never commit;
+  set_query and blank queries never commit; the SAME two success
+  sites also fire reportPick (RecordPick, fire-and-forget, errors to
+  console.warn only -- telemetry must never break an activation) with
+  a report SNAPSHOTTED at activation time via pickReport (the flat
+  state.items as {kind, path | plugin+score} identity rows, the
+  picked rank, the action kind + revealed flag), a Go-side no-op
+  unless search.telemetry opted in;
   "plugin:results" emissions are dropped unless gen === seq, else
   upsert that plugin's section (keyed by id; priority = e.priority ??
   0) and renderPluginArea re-renders BOTH plugin zones
@@ -2250,9 +2325,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   unchanged)/PluginResult/PluginEmission plus the preview contract
   Preview{Target,Payload,ConfigInfo,MetaRow,Text,Image,Dir,DirEntry,
   Web,WebResult,AI}, ResolveIcons, and the four preview bound
-  methods -- keep in
+  methods, plus the telemetry report contract
+  Telemetry{PickReport,ShownRef,PickedRef} and RecordPick -- keep in
   sync with internal/app + internal/plugin + internal/preview +
-  internal/sysstats payload
+  internal/sysstats + internal/telemetry payload
   structs).
 - `examples/plugins/` -- three shipped example plugins, INERT until a
   user copies one into `<configDir>/plugins/` (each has a README with

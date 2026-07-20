@@ -85,6 +85,12 @@ const (
 	DefaultFrecencyTierJump     = 3.0
 )
 
+// DefaultTelemetryMaxSizeKB is the ranking telemetry log's rotation
+// threshold (see TelemetryConfig.MaxSizeKB): an append crossing it
+// rotates telemetry.jsonl to telemetry.jsonl.1, so the disk cap is two
+// generations of this size.
+const DefaultTelemetryMaxSizeKB = 4096
+
 // Window size defaults and floors (see WindowConfig). The defaults are
 // ~15% larger than the original fixed 680x460 bar; the floors keep a
 // hand-edited config from producing an unusably tiny window.
@@ -221,6 +227,36 @@ type SearchConfig struct {
 	FuzzyDisabled bool `json:"fuzzyDisabled"`
 	// Frecency configures the frecency/recency/noise ranking blend.
 	Frecency FrecencyConfig `json:"frecency"`
+	// Telemetry configures the opt-in local ranking telemetry log.
+	Telemetry TelemetryConfig `json:"telemetry"`
+}
+
+// TelemetryConfig configures the opt-in ranking telemetry log (see
+// internal/telemetry and the README's "Ranking telemetry"): one local,
+// size-capped JSONL record per activated result, carrying the query,
+// the delivered result list with its ranking signals, and which row
+// was picked. Behavioral data is privacy-sensitive, so the zero value
+// keeps the WHOLE feature off -- the preview.enabled opt-IN precedent,
+// deliberately NOT the tray.disabled zero-value-on convention. Nothing
+// is ever uploaded; the log exists so future ranking work can learn
+// from the user's own picks, offline.
+type TelemetryConfig struct {
+	// Enabled turns the telemetry log on. The zero value -- the
+	// default -- records nothing at all.
+	Enabled bool `json:"enabled"`
+	// MaxSizeKB is the log rotation threshold in KiB (default 4096):
+	// an append that would cross it first rotates telemetry.jsonl to
+	// telemetry.jsonl.1 (replacing the previous .1), so at most two
+	// generations exist. Zero or negative values are repaired to the
+	// default by Normalize.
+	MaxSizeKB int `json:"maxSizeKB"`
+	// RetainQueries false logs every record's query text as "" while
+	// keeping result paths and ranking signals -- for users who want
+	// ranking to learn without their query strings on disk. The
+	// default config writes true; note the bare zero value (a
+	// hand-added telemetry section omitting the key) is false, i.e.
+	// the privacy-conservative direction.
+	RetainQueries bool `json:"retainQueries"`
 }
 
 // FrecencyConfig tunes the frecency ranking blend (see the README's
@@ -507,6 +543,16 @@ func DefaultFirefox() FirefoxConfig {
 	}
 }
 
+// DefaultTelemetry returns the default ranking telemetry config:
+// disabled (opt-in), with the size cap at its documented default and
+// query retention on, so enabling is a one-key edit.
+func DefaultTelemetry() TelemetryConfig {
+	return TelemetryConfig{
+		MaxSizeKB:     DefaultTelemetryMaxSizeKB,
+		RetainQueries: true,
+	}
+}
+
 // DefaultBangSigils returns the default bang sigil set. It returns a
 // fresh slice on every call so callers may modify it safely.
 func DefaultBangSigils() []string { return []string{"!", "/", "@"} }
@@ -535,7 +581,7 @@ func Default() Config {
 		Hotkey:                DefaultHotkey,
 		RescanIntervalMinutes: 0,
 		MaxResults:            DefaultMaxResults,
-		Search:                SearchConfig{Frecency: DefaultFrecency()},
+		Search:                SearchConfig{Frecency: DefaultFrecency(), Telemetry: DefaultTelemetry()},
 		Theme:                 DefaultTheme,
 		Plugins:               PluginsConfig{Entries: map[string]PluginEntry{}},
 		Bangs:                 BangsConfig{Sigils: DefaultBangSigils(), Aliases: map[string]string{}},
