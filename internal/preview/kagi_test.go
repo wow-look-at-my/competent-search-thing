@@ -2,10 +2,13 @@ package preview
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,8 +33,47 @@ func newKagiTestClient(srv *httptest.Server, maxResults int) (*KagiClient, *fake
 	return c, clk
 }
 
+// logCapture collects Logf lines (mutex-guarded so callers on other
+// goroutines stay race-detector clean).
+type logCapture struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *logCapture) logf(format string, v ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, fmt.Sprintf(format, v...))
+}
+
+func (l *logCapture) all() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Join(l.lines, "\n")
+}
+
+// TestKagiEndpointConstants pins the request line against the spec
+// (https://kagi.redocly.app/_spec/openapi.yaml): servers[0].url is
+// https://kagi.com/api/v1 and the search operation is POST /search.
+// The original field bug was exactly this drifting -- a GET on the
+// path earns a plain 404 (the route exists only for POST).
+func TestKagiEndpointConstants(t *testing.T) {
+	require.Equal(t, "https://kagi.com/api/v1", kagiDefaultBaseURL)
+	require.Equal(t, "/search", kagiSearchPath)
+}
+
+// decodeKagiReq decodes one POST /search request body.
+func decodeKagiReq(t *testing.T, r *http.Request) kagiSearchRequest {
+	t.Helper()
+	var body kagiSearchRequest
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+	return body
+}
+
+// kagiV1Body mirrors the spec's documented 200 example: a meta object
+// (trace/node/ms) beside data.search rows.
 const kagiV1Body = `{
-  "meta": {"id": "x", "node": "us", "ms": 12},
+  "meta": {"trace": "97383064af92b8980b9b4d419b4ce4a9", "node": "us-east4", "ms": 314},
   "data": {
     "search": [
       {"url": "https://one.example", "title": "One", "snippet": "first hit"},
@@ -39,7 +81,7 @@ const kagiV1Body = `{
       {"url": "", "title": "keyless row dropped", "snippet": ""},
       {"url": "https://three.example", "title": "Three", "snippet": "third"}
     ],
-    "related_search": [{"query": "ignored"}]
+    "news": [{"url": "https://n.example", "title": "ignored sibling array"}]
   }
 }`
 
@@ -47,11 +89,13 @@ func TestKagiSearchV1RequestAndParse(t *testing.T) {
 	var hits atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
-		require.Equal(t, http.MethodGet, r.Method)
-		require.Equal(t, "/api/v1/search", r.URL.Path)
-		require.Equal(t, "how to previews", r.URL.Query().Get("q"))
-		require.Equal(t, "8", r.URL.Query().Get("limit"))
-		require.Equal(t, "Bot kagi-secret-key", r.Header.Get("Authorization"))
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/search", r.URL.Path)
+		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		require.Equal(t, "Bearer kagi-secret-key", r.Header.Get("Authorization"))
+		body := decodeKagiReq(t, r)
+		require.Equal(t, "how to previews", body.Query)
+		require.Equal(t, 8, body.Limit)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(kagiV1Body))
 	}))
@@ -98,7 +142,7 @@ func TestKagiLegacyV0ArrayShape(t *testing.T) {
 
 func TestKagiMaxResultsCap(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "2", r.URL.Query().Get("limit"), "the cap rides the limit param")
+		require.Equal(t, 2, decodeKagiReq(t, r).Limit, "the cap rides the body's limit field")
 		_, _ = w.Write([]byte(kagiV1Body))
 	}))
 	defer srv.Close()
@@ -110,8 +154,11 @@ func TestKagiMaxResultsCap(t *testing.T) {
 }
 
 func TestKagiHTTPErrorsAreTerse(t *testing.T) {
+	// The spec's errorEnvelope: meta + error[]{code (string), url,
+	// message, location}.
 	status := 401
-	body := `{"error":[{"code":1,"msg":"Invalid token"}]}`
+	body := `{"meta":{"trace":"abc123def456"},"data":null,` +
+		`"error":[{"code":"auth.invalid_key","url":"https://help.kagi.com/api/errors#auth.invalid_key","message":"Invalid token"}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
@@ -125,14 +172,14 @@ func TestKagiHTTPErrorsAreTerse(t *testing.T) {
 	require.Contains(t, err.Error(), "Invalid token")
 	require.NotContains(t, err.Error(), "kagi-secret-key", "the key never leaks into errors")
 
-	// v1 spells the message field "message"; both spellings parse.
-	status, body = 400, `{"error":[{"code":2,"message":"Bad query"}]}`
+	// The legacy "msg" spelling still parses.
+	status, body = 400, `{"error":[{"code":2,"msg":"Bad query"}]}`
 	clk.advance(time.Second)
 	_, _, err = c.Search(context.Background(), "q2")
 	require.ErrorContains(t, err, "kagi: HTTP 400: Bad query")
 
 	// A huge server message is capped, never quoted wholesale.
-	status, body = 500, `{"error":[{"code":3,"msg":"`+strings.Repeat("x", 5000)+`"}]}`
+	status, body = 500, `{"error":[{"code":"internal","url":"x","message":"`+strings.Repeat("x", 5000)+`"}]}`
 	clk.advance(time.Second)
 	_, _, err = c.Search(context.Background(), "q3")
 	require.Error(t, err)
@@ -151,6 +198,70 @@ func TestKagiHTTPErrorsAreTerse(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, cached)
 	require.Len(t, results, 1)
+}
+
+// TestKagiFailureLogCarriesTrace pins the support-guidance log line:
+// every non-2xx logs exactly once through Logf, quoting the Kagi
+// trace id (X-Kagi-Trace header first, else the envelope's
+// meta.trace) -- and never the key. Successes log nothing.
+func TestKagiFailureLogCarriesTrace(t *testing.T) {
+	var (
+		status     = 500
+		traceHdr   = "hdr-trace-11112222333344445555666677778888"
+		body       = `{}`
+		withHeader = true
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if withHeader {
+			w.Header().Set("X-Kagi-Trace", traceHdr)
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	c, clk := newKagiTestClient(srv, 8)
+	logs := &logCapture{}
+	c.Logf = logs.logf
+
+	// The X-Kagi-Trace response header wins.
+	_, _, err := c.Search(context.Background(), "q1")
+	require.Error(t, err)
+	require.Contains(t, logs.all(), "kagi: HTTP 500")
+	require.Contains(t, logs.all(), traceHdr)
+	require.Contains(t, logs.all(), "Kagi support")
+
+	// Without the header, the envelope's meta.trace is read.
+	withHeader, body = false, `{"meta":{"trace":"body-trace-97383064af92b8980b9b4d419b4ce4a9"},"error":[{"code":"internal","url":"x","message":"boom"}]}`
+	clk.advance(time.Second)
+	_, _, err = c.Search(context.Background(), "q2")
+	require.Error(t, err)
+	require.Contains(t, logs.all(), "body-trace-97383064af92b8980b9b4d419b4ce4a9")
+
+	// Neither: the line says so instead of inventing one.
+	body = `<html>gateway error</html>`
+	clk.advance(time.Second)
+	_, _, err = c.Search(context.Background(), "q3")
+	require.Error(t, err)
+	require.Contains(t, logs.all(), "no trace id in the response")
+
+	// The key never reaches the log.
+	require.NotContains(t, logs.all(), "kagi-secret-key")
+
+	// A success logs nothing new.
+	before := logs.all()
+	status, body = 200, `{"data":{"search":[{"url":"https://ok.example","title":"OK"}]}}`
+	clk.advance(time.Second)
+	_, _, err = c.Search(context.Background(), "q4")
+	require.NoError(t, err)
+	require.Equal(t, before, logs.all(), "2xx responses never log")
+
+	// An oversized trace is capped, never quoted wholesale.
+	status, withHeader, traceHdr = 502, true, strings.Repeat("t", 500)
+	clk.advance(time.Second)
+	_, _, err = c.Search(context.Background(), "q5")
+	require.Error(t, err)
+	require.Contains(t, logs.all(), strings.Repeat("t", kagiTraceCap))
+	require.NotContains(t, logs.all(), strings.Repeat("t", kagiTraceCap+1))
 }
 
 func TestKagiMalformedJSON(t *testing.T) {

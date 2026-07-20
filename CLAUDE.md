@@ -1991,18 +1991,30 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (preview.openai.baseUrl / OPENAI_BASE_URL)"; provider failure; 10s
   web / 90s ai hard
   timeouts spelled out by fetchErrMsg). kagi.go: KagiClient
-  (NewKagiClient(key, maxResults); BaseURL/HTTPClient/Now exported
-  seams -- BaseURL doubles as the production preview.kagi.baseUrl
-  override) -- Kagi Search API v1 verified 2026-07-18: GET
-  {base}/api/v1/search?q=&limit=, header `Authorization: Bot <key>`,
-  response data.search rows {url,title,snippet} (the deprecated v0
-  flat data array with t==0 rows is still accepted on parse);
-  Search(ctx, q) -> (results, cachedBool, err) with an exact-query
+  (NewKagiClient(key, maxResults); BaseURL/HTTPClient/Now/Logf
+  exported seams -- BaseURL doubles as the production
+  preview.kagi.baseUrl override and REPLACES the whole default base
+  verbatim) -- coded against the Kagi OpenAPI spec
+  (https://kagi.redocly.app/_spec/openapi.yaml, fetched 2026-07-20):
+  POST {base}/search (default base = the spec's server URL
+  https://kagi.com/api/v1), JSON body {"query","limit"}, header
+  `Authorization: Bearer <key>` -- the earlier GET
+  /api/v1/search?q=&limit= + "Bot" header combo 404s, the /search
+  route exists only for POST (verified live: GET = 404, POST = 401
+  keyless) -- response data.search rows {url,title,snippet} (the
+  long-dead v0 flat data array with t==0 rows is still accepted on
+  parse); Search(ctx, q) -> (results, cachedBool, err) with an
+  exact-query
   TTL cache (15min, 100 entries, oldest-inserted evicted; hits =
   zero network + no token spend) and a client-side token bucket
   (burst 3, refill 1/s; empty = "kagi: rate limited, retry shortly"
   WITHOUT dialing); non-2xx = "kagi: HTTP <code>" + at most a
-  200-char parsed error message -- never the raw body, never the key.
+  200-char parsed error message (spec errorEnvelope
+  error[].message, legacy "msg" fallback) -- never the raw body,
+  never the key -- plus ONE Logf line per failure quoting the Kagi
+  trace id (X-Kagi-Trace header else meta.trace, capped 64 bytes;
+  the id Kagi support asks for), wired by dispatch.go's New under
+  the "preview: " prefix.
   openai.go: OpenAIClient (NewOpenAIClient(key, model,
   maxOutputTokens); same exported seams) -- OpenAI Responses API
   verified 2026-07-18: POST {base}/v1/responses `Authorization:
