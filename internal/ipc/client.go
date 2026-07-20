@@ -21,8 +21,14 @@ type Reply struct {
 	OK       bool   // the request was accepted (or answered)
 	Accepted string // the acked command (ack = accepted, not completed)
 	Version  string // the version answer
+	Build    string // the version answer's build stamp (empty from older daemons and unstamped builds)
 	Err      string // wire error text ("not ready", "unknown command") when not OK
 	Raw      string // the raw reply line as received (evidence for error reports)
+	// Parsed reports whether the reply line parsed as JSON. False
+	// means Raw holds a raw non-JSON line -- a pre-JSON daemon -- and
+	// every other field is zero; callers classify that as "no healthy
+	// instance" (never as a structured wire error).
+	Parsed bool
 }
 
 // NotReady reports whether the reply is the instance-still-booting
@@ -82,12 +88,14 @@ func exchange(path, line string, deadline time.Time) (string, error) {
 
 // parseReply maps one response line to a Reply: a line that parses as
 // JSON maps field-for-field (unknown fields ignored -- the same
-// tolerance the server applies to requests); anything else is
-// garbage, returned in-band via Raw with OK false and an empty Err.
+// tolerance the server applies to requests) with Parsed true;
+// anything else is garbage, returned in-band via Raw with OK false,
+// an empty Err and Parsed false.
 func parseReply(line string) Reply {
 	var resp Response
 	if err := json.Unmarshal([]byte(line), &resp); err == nil {
-		return Reply{OK: resp.OK, Accepted: resp.Accepted, Version: resp.Version, Err: resp.Error, Raw: line}
+		return Reply{OK: resp.OK, Accepted: resp.Accepted, Version: resp.Version,
+			Build: resp.Build, Err: resp.Error, Raw: line, Parsed: true}
 	}
 	return Reply{Raw: line}
 }

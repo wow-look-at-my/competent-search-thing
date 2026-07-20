@@ -5,7 +5,6 @@ package cli
 // local live-server helper so the shared one stays untouched.
 
 import (
-	"net"
 	"path/filepath"
 	"testing"
 	"time"
@@ -86,61 +85,12 @@ func TestConfigAgainstBootingInstance(t *testing.T) {
 	require.Equal(t, 0, gui.count())
 }
 
-func TestConfigAgainstOlderDaemon(t *testing.T) {
-	// A running daemon from before the config command existed answers
-	// unknown-command; the CLI must say so plainly instead of dumping
-	// a generic unexpected-reply error, and must NOT start a second
-	// GUI over the live instance.
-	path := testSocketEnv(t)
-	ln, err := net.Listen("unix", path)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln.Close() })
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			buf := make([]byte, 256)
-			_, _ = conn.Read(buf)
-			_, _ = conn.Write([]byte(`{"ok":false,"error":"unknown command"}` + "\n"))
-			_ = conn.Close()
-		}
-	}()
-	gui := &guiRecorder{}
-
-	code, stdout, stderr := run(t, gui, "config")
-	require.Equal(t, 1, code)
-	require.Empty(t, stdout)
-	require.Contains(t, stderr, "older version without the config command")
-	require.NotContains(t, stderr, "Error:", "the notice prints once, no cobra Error line on top")
-	require.Equal(t, 0, gui.count())
-}
-
-func TestConfigUnexpectedReplyIsAnError(t *testing.T) {
-	path := testSocketEnv(t)
-	ln, err := net.Listen("unix", path)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln.Close() })
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			buf := make([]byte, 256)
-			_, _ = conn.Read(buf)
-			_, _ = conn.Write([]byte("wat\n"))
-			_ = conn.Close()
-		}
-	}()
-	gui := &guiRecorder{}
-
-	code, _, stderr := run(t, gui, "config")
-	require.Equal(t, 1, code)
-	require.Contains(t, stderr, "unexpected reply")
-	require.Equal(t, 0, gui.count())
-}
+// The old TestConfigAgainstOlderDaemon ("older version without the
+// config command; restart it", exit 1) and
+// TestConfigUnexpectedReplyIsAnError pinned dead ends the self-heal
+// work DELIBERATELY retired: version skew and pre-JSON daemons now
+// converge automatically -- see TestConfigReplacesOlderDaemon and
+// TestConfigReplacesPreJSONDaemon in takeover_test.go.
 
 func TestConfigHelpMentionsStarting(t *testing.T) {
 	testSocketEnv(t)

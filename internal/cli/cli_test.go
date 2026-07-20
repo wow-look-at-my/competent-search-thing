@@ -3,10 +3,8 @@ package cli
 import (
 	"bytes"
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -165,62 +163,12 @@ func TestRootSecondInstanceStillStartingUp(t *testing.T) {
 	require.Equal(t, 0, gui.count())
 }
 
-func TestRootReportsUnresponsiveInstance(t *testing.T) {
-	path := testSocketEnv(t)
-	// A fake instance that accepts and closes without ever replying:
-	// the stale-socket probe still sees a live socket (so Listen says
-	// ErrAlreadyRunning) while the show exchange itself fails -- and
-	// does so immediately, no client-timeout wait.
-	ln, err := net.Listen("unix", path)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln.Close() })
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			_ = conn.Close()
-		}
-	}()
-	gui := &guiRecorder{}
-
-	code, stdout, stderr := run(t, gui)
-	require.Equal(t, 1, code)
-	require.Empty(t, stdout, "no 'showing it' claim when the show failed")
-	require.Contains(t, stderr, "competent-search-thing is already running but did not respond")
-	require.Equal(t, 1, strings.Count(stderr, "already running but did not respond"),
-		"the notice prints once, not doubled by cobra")
-	require.Equal(t, 0, gui.count())
-}
-
-func TestRootReportsUnexpectedReply(t *testing.T) {
-	path := testSocketEnv(t)
-	// A fake instance that answers garbage to the show request.
-	ln, err := net.Listen("unix", path)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln.Close() })
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			buf := make([]byte, 64)
-			_, _ = conn.Read(buf)
-			_, _ = conn.Write([]byte("wat\n"))
-			_ = conn.Close()
-		}
-	}()
-	gui := &guiRecorder{}
-
-	code, stdout, stderr := run(t, gui)
-	require.Equal(t, 1, code)
-	require.Empty(t, stdout)
-	require.Contains(t, stderr, "already running but did not respond")
-	require.Contains(t, stderr, `unexpected reply "wat"`)
-	require.Equal(t, 0, gui.count())
-}
+// The old TestRootReportsUnresponsiveInstance and
+// TestRootReportsUnexpectedReply pinned exit-1 dead ends against
+// unresponsive and pre-JSON holders; the self-heal work DELIBERATELY
+// inverted both (the launch now takes the socket over and becomes the
+// instance) -- see TestRootTakesOverUnresponsiveInstance and
+// TestRootReplacesPreJSONDaemon in takeover_test.go.
 
 func TestRootRunsGUIWithoutIPCWhenListenFails(t *testing.T) {
 	// A socket path in a directory that does not exist: Listen fails
@@ -360,31 +308,9 @@ func TestSummonNotReadyPrintsNotice(t *testing.T) {
 	}
 }
 
-func TestUnexpectedReplyIsAnError(t *testing.T) {
-	path := testSocketEnv(t)
-	// A fake server that answers garbage to whatever arrives.
-	ln, err := net.Listen("unix", path)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln.Close() })
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			buf := make([]byte, 64)
-			_, _ = conn.Read(buf)
-			_, _ = conn.Write([]byte("wat\n"))
-			_ = conn.Close()
-		}
-	}()
-	gui := &guiRecorder{}
-
-	code, _, stderr := run(t, gui, "toggle")
-	require.Equal(t, 1, code)
-	require.Contains(t, stderr, "unexpected reply")
-	require.Equal(t, 0, gui.count())
-}
+// The old TestUnexpectedReplyIsAnError (toggle against a raw-garbage
+// daemon = exit 1) is DELIBERATELY inverted by the self-heal work:
+// see TestToggleReplacesPreJSONDaemon in takeover_test.go.
 
 func TestVersionFlag(t *testing.T) {
 	testSocketEnv(t)

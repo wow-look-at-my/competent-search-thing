@@ -198,25 +198,23 @@ func TestHostCompactsMultilineJSON(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
 
-	// The host DROPS stdin frames until its socket connection is
-	// stored (by design: "app not connected"), and ln.Accept returning
-	// only proves the DIAL completed -- the relay's setConn runs
-	// moments later on its own goroutine. Writing the first frame on
-	// Accept alone therefore races the drop path (observed as a flaky
-	// 2s read timeout under load), so gate the first write on the
-	// host's own connected log line, which is emitted strictly after
-	// setConn.
-	connected := make(chan struct{})
-	var connOnce sync.Once
-	logf := func(format string, args ...any) {
-		if strings.Contains(fmt.Sprintf(format, args...), "connected to the app") {
-			connOnce.Do(func() { close(connected) })
-		}
-		t.Logf(format, args...)
-	}
-
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
+	// The host drops stdin frames until its socket connection is
+	// REGISTERED (forward's documented drop-while-down behavior), and
+	// Accept returning below only proves the kernel accepted -- not
+	// that the host's loop stored the conn yet. Gate the first frame
+	// on the host's own connected log line, or a busy test machine
+	// intermittently loses it to the drop path (i/o timeout at the
+	// read; flaked under parallel-test load).
+	connected := make(chan struct{})
+	var connectedOnce sync.Once
+	logf := func(format string, args ...any) {
+		t.Logf(format, args...)
+		if strings.Contains(fmt.Sprintf(format, args...), "connected to the app") {
+			connectedOnce.Do(func() { close(connected) })
+		}
+	}
 	done := make(chan error, 1)
 	go func() {
 		done <- RunHost(HostOptions{
@@ -236,7 +234,7 @@ func TestHostCompactsMultilineJSON(t *testing.T) {
 	select {
 	case <-connected:
 	case <-time.After(10 * time.Second):
-		t.Fatal("the host never reported its connection")
+		t.Fatal("the host never registered its app connection")
 	}
 
 	pretty := "{\n  \"type\": \"tabsChanged\",\n  \"tabs\": []\n}"

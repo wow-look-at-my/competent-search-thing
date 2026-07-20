@@ -171,7 +171,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   = empty non-nil maps, and resolution runs on the bound method's own
   goroutine so the query path never waits on icon IO), wires the
   single-instance IPC handlers when Options.IPC is set (Toggle =
-  toggle, Show = showIfHidden, Hide = Hide; Options.ShowOnStartup
+  toggle, Show = showIfHidden, Hide = Hide, Config = showConfig,
+  Quit = quitViaIPC -- the version-skew handshake's graceful half:
+  the same runtime-quit path as the !quit builtin, the
+  no-runtime-ctx guard logged instead of surfaced; Options.
+  ShowOnStartup
   latches a pending show) -- wired FIRST in Startup, before
   registerHotkey, which can block briefly on darwin's Cocoa main-loop
   race: the handlers are pre-init-safe (summons latch pendingShow
@@ -757,33 +761,51 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   migration notes wired from cfg.MigrationNotes in main.go). The app
   `Version` constant lives in plugins.go. Unit-tested.
 - `internal/cli` -- the cobra command line, the real process entry
-  point (main.go calls cli.Execute(app.Version, runGUI)). Bare
-  invocation = the GUI path: ipc.Listen on ipc.SocketPath(os.Getenv);
-  ErrAlreadyRunning = Send "show" to the running instance and report
+  point (main.go calls cli.Execute(app.Version, runGUI)). SELF-HEAL
+  CONTRACT (the death-race incident fix): every summon-shaped path
+  classifies refused / reset / EOF / timeout / non-JSON garbage
+  UNIFORMLY as "no healthy instance" and BECOMES the instance --
+  e.listen (env's seam; production = ipc.ListenWith with Logf:
+  log.Printf + Build: e.buildID(), the memoized ipc.OwnBuild) runs
+  the probe+takeover engine, so dead files, wedged or mid-death
+  holders, pre-JSON daemons and version-skewed daemons are all
+  replaced automatically; a parsed "not ready" reply is a RESPONSIVE
+  booting daemon and never triggers takeover. Bare
+  invocation = the GUI path: e.listen; ErrAlreadyRunning (now
+  guaranteed a healthy same-build instance) = Send "show" and report
   HONESTLY (showRunningInstance): Reply.OK -> "already running;
   showing it" + exit 0, Reply.NotReady() -> "already running (still
-  starting up)" + exit 0, no/garbage reply -> stderr "already running
-  but did not respond: ..." + exit 1 (cobra's own error line
-  suppressed, garbage quoted from Reply.Raw); any other listen error
+  starting up)" + exit 0; a show that gets NO parsed reply (the
+  instance died in the probe-to-show gap) = loud log + ONE bounded
+  re-listen whose probe takes the corpse over -> run the GUI (hidden,
+  like any cold start; a healthy winner appearing in the gap instead
+  gets one final Send show + honest report, no loop); a parsed-but-
+  weird reply stays the honest "already running but did not respond"
+  exit 1 (never kill a responsive daemon); any other listen error
   = log + run the GUI with a
   NIL server (degraded, no IPC -- the app must still work). toggle /
-  show send their command to the running instance; when none runs
-  they start the GUI in this process with ShowOnStartup=true (on an
-  ErrAlreadyRunning race they fall back to Send "show"); a NotReady()
-  reply counts as success but prints a one-line "still
-  starting up; it may take a moment to respond" notice (the instance
-  is booting and shows itself). hide never starts the app: not
+  show first classify via ONE version exchange (classifyInstance):
+  healthy same-build -> send the command exactly as before (NotReady
+  = success + the one-line "still starting up; it may take a moment
+  to respond" notice); version/build mismatch -> "new instance wins"
+  (log + becomeInstance: e.listen's probe quits/terminates the old
+  daemon) -> start the GUI with ShowOnStartup=true, so brew-upgrade-
+  then-summon converges to the new binary; absent/unhealthy ->
+  becomeInstance the same way (an ErrAlreadyRunning race-loss
+  delivers Send "show" to the winner once, mapped by summonReply --
+  no loop). hide is the one exception, contract unchanged: never
+  starts the app, never takes over, never signals anything; not
   running = plain notice on
-  stderr + exit 1 (cobra error/usage output suppressed). config
-  (config.go) opens the in-app config editor: Send CmdConfig to the
-  running instance (OK -> "opening the config editor in the running
-  instance" exit 0; NotReady() -> the still-starting notice exit 0;
-  Reply.UnknownCommand() -- a running JSON daemon predating the
-  config command -- -> "older version without the config command;
-  restart it" on stderr, exit 1, cobra error line suppressed); not
-  running -> start the GUI in-process with RunOptions{Server,
-  ShowOnStartup: true, OpenConfig: true} (ErrAlreadyRunning race ->
-  Send CmdConfig again). firefox-host (firefoxhost.go) is the
+  stderr + exit 1 (cobra error/usage output suppressed), transport
+  errors = honest exit 1. config
+  (config.go) opens the in-app config editor through the same
+  classify-then-act shape aimed at CmdConfig (OK -> "opening the
+  config editor in the running instance" exit 0; NotReady() -> the
+  still-starting notice exit 0; UnknownCommand() -- a JSON daemon
+  predating the config command, skew by definition -- -> log +
+  becomeInstance with RunOptions{ShowOnStartup: true, OpenConfig:
+  true}; the old "older version ... restart it" exit-1 dead end is
+  RETIRED, convergence is automatic). firefox-host (firefoxhost.go) is the
   native-messaging relay Firefox spawns through the generated
   wrapper: it never boots the GUI and never touches the
   single-instance socket -- it only runs ffext.RunHost over its
@@ -795,62 +817,127 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   stdio in tests, which drive a full relay round-trip against an
   in-process ffext.Server). The CLI
   branches ONLY on ipc.Reply fields (checkReply/summonReply/
-  configReply); ALL
-  wire parsing lives in ipc.Send -- a non-JSON reply (e.g. a
-  still-running pre-JSON daemon's raw line) arrives in-band via Raw
-  and lands in the "unexpected reply" error path. Convention:
+  configReply/classifyInstance over Parsed/OK/NotReady/
+  UnknownCommand/Version/Build); ALL
+  wire parsing lives in ipc.Send -- a non-JSON reply (a still-running
+  pre-JSON daemon's raw line) arrives in-band via Raw with Parsed
+  false and classifies as no-healthy-instance (only hide still
+  surfaces it as the "unexpected reply" error). Convention:
   ONE self-registering subcommand per file (init -> registerCommand);
   newRoot() consumes the builder registry so Execute -- and every
-  test -- gets a fresh command tree. RunOptions{Server,
+  test -- gets a fresh command tree (executeEnv is the test entry
+  over a caller-built env). RunOptions{Server,
   ShowOnStartup, OpenConfig} is the runGUI contract (main.go wires
   OpenConfig to app Options.OpenConfigOnStartup); the App takes
   ownership of
   the server (Shutdown closes it). Unit-tested headlessly: fake
   runGUI, real ipc servers on temp sockets, COMPETENT_SEARCH_SOCKET
-  (t.Setenv) isolation.
+  (t.Setenv) isolation; takeover_test.go drives the self-heal matrix
+  over scripted fake daemons with a RECORDED ipc.ListenOptions.Kill
+  (in-process fakes report the test's own pid -- a real kill would
+  signal the test) and a pinned env build stamp (the test binary's
+  own vcs stamp must never decide a skew scenario).
 - `internal/ipc` -- the single-instance unix-socket IPC layer, pure
   and headless-tested. SocketPath: $COMPETENT_SEARCH_SOCKET override,
   else $XDG_RUNTIME_DIR/competent-search-thing.sock, else a per-uid
   name under os.TempDir(). ONE request per conn (2s conn deadline,
   4 KiB line cap), one newline-terminated JSON object each way --
   JSON is the ONLY wire shape (the legacy v1 line protocol is
-  DELETED): request {"cmd":"toggle|show|hide|config|version|ping"}
+  DELETED): request
+  {"cmd":"toggle|show|hide|config|quit|version|ping"}
   with unknown JSON fields IGNORED on both sides (the documented
   tolerance contract), response {"ok":true} (ping) /
-  {"ok":true,"version":v} / {"ok":true,"accepted":cmd} /
+  {"ok":true,"version":v,"build":b} / {"ok":true,"accepted":cmd} /
   {"ok":false,"error":"not ready"|"unknown command"|
   "invalid request"}; a request line that does not parse as JSON --
   incl. the old protocol's bare command words and arbitrary garbage
   -- earns "invalid request" and runs nothing (pinned by
-  TestNonJSONRequestsAreRejected). Commands answer "not ready"
+  TestNonJSONRequestsAreRejected; the bare "quit" word included, a8
+  parity). The version reply's `build` is the vcs-revision stamp
+  (OwnBuild: 12-char prefix via ReadBuildInfo, empty on unstamped dev
+  builds, omitted then) -- the version-SKEW discriminator, because
+  app.Version is a constant that never bumps across releases; the
+  tolerance contract is what made adding the field safe both ways.
+  Commands answer "not ready"
   until SetHandlers wires the app (nil handler members stay not
   ready; version/ping always answer), and the ack is
-  written BEFORE the toggle/show/hide/config handler runs -- ack =
-  accepted,
+  written BEFORE the toggle/show/hide/config/quit handler runs --
+  ack = accepted,
   not completed, so an app whose main thread is briefly stalled
   (startup indexing) can never time the client out; the handler then
   runs on the same conn goroutine, so Close still waits for in-flight
-  handlers. The config command (config_cmd_test.go) rides handlerFor
+  handlers. Handlers.Quit is the new-instance-wins handshake's
+  graceful half (internal/app wires it to the same runtime-quit seam
+  as the !quit builtin). The config command (config_cmd_test.go)
+  rides handlerFor
   exactly like the others, so only its own JSON shapes are pinned.
   Send(path, cmd, timeout) speaks JSON and returns a parsed
-  Reply{OK, Accepted, Version, Err, Raw} + NotReady() +
-  UnknownCommand() (an older JSON daemon rejecting a newer command;
-  the CLI's version-skew message branches on it) -- ALL
+  Reply{OK, Accepted, Version, Build, Err, Raw, Parsed} + NotReady()
+  + UnknownCommand() (an older JSON daemon rejecting a newer
+  command) -- ALL
   reply parsing lives here, callers branch on fields, never wire
   strings. A reply line that does not parse as JSON -- incl. every
-  pre-JSON daemon reply line -- comes back in-band (Raw set, OK
-  false, empty Err) for callers to quote as "unexpected reply", the
-  restart-the-old-instance-once upgrade signal
+  pre-JSON daemon reply line -- comes back in-band (Raw set, Parsed
+  false, OK false, empty Err), which callers classify as "no healthy
+  instance"
   (TestSendReturnsOldDaemonReplyInBand pins one conn, no retry);
   only transport failures are errors, dial
   failures wrapped in ErrNotRunning (test with IsNotRunning); timeout
-  is ONE absolute deadline across dial + exchange. Listen
-  recovers stale sockets:
-  EADDRINUSE -> 500ms probe dial; an answer = ErrAlreadyRunning, a
-  dead socket = os.Remove + retry ONCE; after listening the file is
+  is ONE absolute deadline across dial + exchange. SELF-HEALING
+  LISTEN (takeover.go; the death-race incident fix -- a client racing
+  a crashing daemon's death read "connection reset by peer" and hit a
+  dead-end exit 1): Listen = ListenWith(path, version, zero
+  ListenOptions); on EADDRINUSE -- and ONLY there; the no-file cold
+  start stays one syscall, zero probes -- it takes a flock on
+  <socket>.lock (serializes concurrent deciders, ~3s cap, kernel-
+  released on death so never stale; timeout concedes
+  ErrAlreadyRunning; windows: no-op stub) and probes the holder with
+  up to 3 VERSION round-trips (500ms per attempt, 250ms apart; one
+  round-trip carries health AND the skew data), because a bare unix
+  connect(2) succeeds as soon as the kernel queues the backlog entry
+  -- connect success is NOT liveness (the old connect-only probe
+  called a seconds-wide dying daemon "already running"). Verdicts: a
+  parsed JSON reply = healthy -> same version+build =
+  ErrAlreadyRunning (byte-identical caller contract; "not ready"
+  daemons answer version, so booting is healthy), different =
+  version skew -> new instance wins; connect refused/ENOENT = dead
+  -> remove + retry once (today's stale-file recovery, now explicit);
+  a raw non-JSON reply = pre-JSON legacy daemon -> new instance wins
+  (no quit exists there); all attempts reset/EOF/timeout =
+  unresponsive -> takeover. The REPLACE ladder: skewed holders first
+  get {"cmd":"quit"} (ack-first means the reply precedes their
+  shutdown; unknown-command/not-ready = older daemon -> fall
+  through), then SIGTERM to the EXACT pid read off the probe
+  connection's peer credentials (SO_PEERCRED linux /
+  LOCAL_PEERPID+LOCAL_PEERCRED darwin / none elsewhere --
+  peercred_*.go; credentials are the LISTENER's captured at connect
+  time, so a backlog-queued conn to a frozen daemon still yields
+  them) gated on same-uid + kill(pid,0) liveness + (linux) a
+  /proc exe/comm identity check (procIdentAt; " (deleted)" tolerated,
+  comm compared 15-byte-truncated; POSITIVE mismatch or foreign uid =
+  loud refusal + ErrAlreadyRunning, absent metadata fails open --
+  darwin has no /proc and same-uid+liveness is its floor). NEVER any
+  pattern kill. Then a bounded release wait (2s, poll 100ms: file
+  gone / pid ESRCH / connect refused -- wait BEFORE bind, because a
+  gracefully quitting old daemon unlinks the path itself), then
+  unlink+bind REGARDLESS, logging a survivor pid loudly; a bind
+  losing to a concurrent cold-start binder concedes
+  ErrAlreadyRunning. Everything logs, unconditionally ("ipc: ..."
+  inline-metric lines; ListenOptions.Logf, nil = log.Printf, the cli
+  wires log.Printf). ListenOptions also carries Build (empty =
+  OwnBuild), Kill (tests MUST record -- in-process fake daemons
+  report the test's own pid) and the ProbeTimeout/ProbeGap/
+  ReleaseWait knobs (test speed), plus unexported dial/sleep/
+  peerCred/procIdent/getuid/ownBase seams; at most ONE integration
+  test signals a real process, an owned re-exec'd child
+  (integration_test.go). After listening the file is
   chmodded 0600 (filesystem perms are the only auth). Close is
-  idempotent + nil-safe: stops the accept loop, unlinks the socket,
-  waits for in-flight conns. Handlers run on conn
+  idempotent + nil-safe: stops the accept loop, unlinks the socket
+  VERIFIED (lstat identity captured at bind -- fstat of the fd sees
+  only the anonymous sockfs inode -- so a force-replaced zombie that
+  un-wedges into its own Close never unlinks a successor's live
+  socket; windows keeps plain unlink-on-close), waits for in-flight
+  conns. Handlers run on conn
   goroutines and must be goroutine-safe. Deliberately NO schema in
   schemas/ (an internal two-party protocol, like history.json).
 - `internal/ffext` -- the Firefox companion-extension bridge, pure

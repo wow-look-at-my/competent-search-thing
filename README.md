@@ -2742,10 +2742,12 @@ single instance around one unix socket (in `$XDG_RUNTIME_DIR`):
 - `competent-search-thing` -- starts the app; a second plain launch
   asks the running instance to show its bar and reports what actually
   happened: `already running; showing it` on a confirmed
-  acknowledgement (exit 0), `already running (still starting up)`
-  while the instance is still booting (exit 0), and `already running
-  but did not respond` on stderr with exit 1 when the instance never
-  answered.
+  acknowledgement (exit 0), or `already running (still starting up)`
+  while the instance is still booting (exit 0). An instance that
+  cannot answer at all -- crashed mid-launch, wedged, or killed with
+  its socket file left behind -- is detected and replaced
+  automatically (see "Self-healing single instance" below); the old
+  `already running but did not respond` dead end is gone.
 - `competent-search-thing toggle` -- what the global hotkey does:
   hide when visible, summon when hidden. Starts the app when it is
   not running (the bar shows once the frontend is ready). Sent to an
@@ -2765,8 +2767,9 @@ single instance around one unix socket (in `$XDG_RUNTIME_DIR`):
 - `competent-search-thing config` -- opens the running instance's
   in-app config editor (see "Config editor"); starts the app when it
   is not running, opening the editor once the frontend is ready. A
-  running instance too old to know the command earns a clear
-  "older version without the config command" notice and exit 1.
+  running instance too old to know the command is replaced
+  automatically (new instance wins) and the editor opens in the new
+  one.
 - `competent-search-thing --version` -- prints the app version.
 
 The running instance acknowledges each `toggle`/`show`/`hide`/
@@ -2779,16 +2782,45 @@ Any keybinding mechanism that can run a command can therefore summon
 the bar. That is the whole Wayland story in one line: bind a key to
 `competent-search-thing toggle`.
 
+### Self-healing single instance
+
+The single-instance socket recovers from every unhealthy state on its
+own -- you never need to hunt down a wedged process or delete the
+socket file by hand:
+
+- A **crashed instance's leftover socket file** is detected (connects
+  are refused) and removed automatically at the next launch.
+- An instance that is **wedged or dying** -- it accepts connections
+  but never answers, or resets them mid-exchange (the "connection
+  reset by peer" symptom of launching while a crashing instance is
+  going down) -- fails a bounded liveness probe and is replaced: the
+  new launch asks it to quit, sends SIGTERM to the exact process
+  holding the socket (verified by its socket credentials; never a
+  name-pattern kill), waits briefly for the socket to clear, and
+  takes over regardless, logging every step.
+- After an **upgrade**, a summon or launch that finds an older build
+  still running replaces it too ("new instance wins" -- the version
+  reply carries a per-build stamp): `brew upgrade` then relaunch just
+  works, pre-JSON builds included.
+
+Everything the recovery does is logged with an `ipc:` prefix, so the
+paper trail of any takeover is in the app output.
+
 ### The IPC protocol (for scripts)
 
 The socket speaks newline-delimited JSON, one request per
 connection: write one object like `{"cmd":"toggle"}` (commands
-`toggle`, `show`, `hide`, `config`, `version`, `ping`) and read one
+`toggle`, `show`, `hide`, `config`, `quit`, `version`, `ping`) and
+read one
 object back -- `{"ok":true,"accepted":"toggle"}` for an accepted command
 (written before the action runs: "ok" means accepted, not
-completed), `{"ok":true,"version":"..."}` for `version`,
+completed), `{"ok":true,"version":"...","build":"..."}` for `version`
+(`build` is the binary's VCS revision stamp, the version-skew
+discriminator; omitted on unstamped dev builds),
 `{"ok":true}` for `ping`, and `{"ok":false,"error":"not ready"}` /
-`{"ok":false,"error":"unknown command"}` otherwise. Unknown JSON
+`{"ok":false,"error":"unknown command"}` otherwise. `quit` asks the
+instance to exit gracefully (how a newer launch replaces an older
+one). Unknown JSON
 fields are ignored in requests, and scripts should extend the same
 tolerance to responses. For example:
 
@@ -2797,9 +2829,9 @@ tolerance to responses. For example:
 JSON is the only wire format: a request line that does not parse as
 JSON -- including the bare command words of the old pre-JSON line
 protocol -- is answered with `{"ok":false,"error":"invalid request"}`
-and nothing runs. If a pre-JSON build is still running, restart it
-once after upgrading -- the new CLI no longer speaks the old
-protocol.
+and nothing runs. A still-running pre-JSON build is replaced
+automatically the next time anything summons the bar (see
+"Self-healing single instance").
 
 ### GNOME (Wayland)
 

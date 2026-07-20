@@ -10,12 +10,14 @@
 //
 // One request per connection, one newline-terminated line each way,
 // both lines JSON objects. The request is {"cmd":"toggle"} -- cmds
-// toggle, show, hide, config, version, ping -- and the response is
-// one JSON object:
+// toggle, show, hide, config, quit, version, ping -- and the response
+// is one JSON object:
 //
 //	{"ok":true}                             ping
-//	{"ok":true,"version":"1.2.3"}           version
-//	{"ok":true,"accepted":"toggle"}         toggle/show/hide accepted
+//	{"ok":true,"version":"1.2.3","build":"abcdef123456"}  version (build = the
+//	                                        vcs-revision stamp; omitted on
+//	                                        unstamped dev builds)
+//	{"ok":true,"accepted":"toggle"}         toggle/show/hide/config/quit accepted
 //	{"ok":false,"error":"not ready"}        no handler wired yet (booting)
 //	{"ok":false,"error":"unknown command"}  unrecognized cmd value
 //	{"ok":false,"error":"invalid request"}  the line does not parse as JSON
@@ -51,6 +53,7 @@ const (
 	CmdShow    = "show"
 	CmdHide    = "hide"
 	CmdConfig  = "config"
+	CmdQuit    = "quit"
 	CmdVersion = "version"
 	CmdPing    = "ping"
 )
@@ -72,12 +75,19 @@ type Request struct {
 // Response is the JSON wire response: one object per line, in exactly
 // one of the shapes listed in the package comment. Readers must
 // ignore unknown fields, the same tolerance the server applies to
-// requests.
+// requests -- that tolerance is what made adding the build field safe
+// in both directions.
 type Response struct {
 	OK       bool   `json:"ok"`
 	Accepted string `json:"accepted,omitempty"` // the acked command; ack = accepted, not completed
 	Version  string `json:"version,omitempty"`  // the version answer
-	Error    string `json:"error,omitempty"`    // set when OK is false
+	// Build rides the version answer: the binary's vcs-revision stamp
+	// (see OwnBuild). The app version constant never changes across
+	// releases, so this is the version-skew discriminator behind the
+	// new-instance-wins takeover. Empty (omitted) on unstamped dev
+	// builds and on daemons predating the field.
+	Build string `json:"build,omitempty"`
+	Error string `json:"error,omitempty"` // set when OK is false
 }
 
 // SocketPath returns the unix socket path the app listens on and
