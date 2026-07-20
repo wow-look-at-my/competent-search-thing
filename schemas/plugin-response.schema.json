@@ -140,7 +140,7 @@
   "action": {
    "title": "Activation action",
    "type": "object",
-   "description": "What Enter/click on the result does (omit for an inert row). External plugins may use open_path, open_url, copy_text and run_command; the types set_query, run_builtin and activate_window are INTERNAL-ONLY (produced by builtin providers) and are always stripped from plugin responses. 'value' carries the payload for all types except run_command, which uses 'argv'. Note: the byte caps below are enforced by the app in BYTES; maxLength here counts characters, which is equivalent for ASCII payloads.",
+   "description": "What Enter/click on the result does (omit for an inert row). External plugins may use open_path, open_url, copy_text and run_command; the types set_query, run_builtin, activate_window and activate_tab are INTERNAL-ONLY (produced by builtin providers) and are always stripped from plugin responses. 'value' carries the payload for all types except run_command, which uses 'argv'. Note: the byte caps below are enforced by the app in BYTES; maxLength here counts characters, which is equivalent for ASCII payloads.",
    "required": [
     "type"
    ],
@@ -171,6 +171,10 @@
      "type": "string",
      "description": "Window id carried by the INTERNAL-ONLY activate_window action (produced by the builtin Open Windows provider). External plugins cannot use it: activate_window actions are always stripped from plugin responses, and any 'window' value on the external types is cleared -- so this schema rejects every action carrying 'window'."
     },
+    "tab": {
+     "type": "string",
+     "description": "Live-tab routing token carried by the INTERNAL-ONLY activate_tab action (produced by the builtin Open Tabs provider when the companion Firefox extension is connected; \"c<conn>:<tab>:<window>\"). External plugins cannot use it: activate_tab actions are always stripped from plugin responses, and any 'tab' value on the external types is cleared -- so this schema rejects every action carrying 'tab'."
+    },
     "desktop_id": {
      "type": "string",
      "description": "Desktop-entry id carried by INTERNAL-ONLY run_command actions from the builtin app launchers (the .desktop entry behind the launch, e.g. \"code.desktop\"; the app resolves it for D-Bus activation and startup-notification capabilities so launching an already-running app focuses its window). External plugins cannot use it: the app clears 'desktop_id' on every external action, so this schema rejects every action carrying it."
@@ -182,6 +186,11 @@
      {
       "required": [
        "window"
+      ]
+     },
+     {
+      "required": [
+       "tab"
       ]
      },
      {

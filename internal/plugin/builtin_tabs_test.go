@@ -117,6 +117,32 @@ func TestTabsProviderResultShape(t *testing.T) {
 	require.Empty(t, results[0].Badge)
 }
 
+func TestTabsProviderTokenSwitchesAction(t *testing.T) {
+	// A row carrying a live-bridge token gets the internal-only
+	// activate_tab action -- the token routes the switch, the Value
+	// keeps the URL for the app's open-the-URL fallback -- while a
+	// token-less (sessionstore) row keeps today's open_url action
+	// byte-identically. Everything else (icon, badge, subtitle,
+	// ranking texts) is independent of the token.
+	tabs := []TabInfo{
+		{URL: "https://live.example/a", Title: "Live tab", Host: "live.example", Token: "c1:42:3", Pinned: true},
+		{URL: "https://snap.example/b", Title: "Snapshot tab", Host: "snap.example"},
+	}
+	p := newTabsProvider(tabsFn(tabs), 0)
+
+	results := tabsQuery(t, p, "live tab")
+	require.NotEmpty(t, results)
+	require.Equal(t, &Action{Type: ActionActivateTab, Tab: "c1:42:3", Value: "https://live.example/a"},
+		results[0].Action)
+	require.Equal(t, "link", results[0].Icon)
+	require.Equal(t, tabPinnedBadge, results[0].Badge)
+	require.Equal(t, "https://live.example/a", results[0].Subtitle)
+
+	results = tabsQuery(t, p, "snapshot")
+	require.NotEmpty(t, results)
+	require.Equal(t, &Action{Type: ActionOpenURL, Value: "https://snap.example/b"}, results[0].Action)
+}
+
 func TestTabsProviderCapAndDefaults(t *testing.T) {
 	var many []TabInfo
 	for i := 0; i < 20; i++ {

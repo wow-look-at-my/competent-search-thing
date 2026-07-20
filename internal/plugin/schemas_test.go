@@ -193,8 +193,12 @@ func TestResponseSchemaRejectsWhatTheSanitizerClamps(t *testing.T) {
 		"internal run_builtin": `{"v":1,"results":[{"title":"a","action":{"type":"run_builtin","value":"quit"}}]}`,
 		"internal activate_window": `{"v":1,"results":[{"title":"a",` +
 			`"action":{"type":"activate_window","window":"42"}}]}`,
+		"internal activate_tab": `{"v":1,"results":[{"title":"a",` +
+			`"action":{"type":"activate_tab","tab":"c1:2:3","value":"https://example.com/"}}]}`,
 		"window on an external action": `{"v":1,"results":[{"title":"a",` +
 			`"action":{"type":"copy_text","value":"x","window":"42"}}]}`,
+		"tab on an external action": `{"v":1,"results":[{"title":"a",` +
+			`"action":{"type":"open_url","value":"https://example.com/","tab":"c1:2:3"}}]}`,
 		"desktop_id on an external action": `{"v":1,"results":[{"title":"a",` +
 			`"action":{"type":"run_command","argv":["code"],"desktop_id":"code.desktop"}}]}`,
 		"iconKey on an external result": `{"v":1,"results":[{"title":"a",` +
