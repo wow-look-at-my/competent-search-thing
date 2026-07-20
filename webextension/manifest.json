@@ -1,0 +1,17 @@
+{
+  "manifest_version": 2,
+  "name": "competent-search-thing tab switch",
+  "version": "0.1.0",
+  "description": "Lets competent-search-thing switch to your open Firefox tabs instead of opening duplicates.",
+  "background": {
+    "page": "background.html",
+    "persistent": true
+  },
+  "permissions": ["nativeMessaging", "tabs"],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "tab-activation@competent-search-thing.pazer.build",
+      "strict_min_version": "78.0"
+    }
+  }
+}
