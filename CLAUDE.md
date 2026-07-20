@@ -27,7 +27,20 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Never} for the per-pixel-alpha window; the GPU policy MUST stay
   pinned to Never -- wails' nil-Linux default (#2977 workaround)
   lives only in the nil branch, so an unpinned non-nil Linux block
-  silently flips it to OnDemand -- and with the flag off both fields
+  silently flips it to OnDemand -- plus wailsOpts.Mac =
+  app.MacWindowOptions() (internal/app macwindow.go: fresh
+  config.Load, nil on flag-off/any error; flag-on =
+  {WindowIsTranslucent (the NSVisualEffectView BehindWindow frosted
+  glass -- wails v2.13.0 has NO raw setOpaque:NO passthrough, and
+  Spotlight is vibrancy anyway), WebviewIsTransparent
+  (drawsBackground=NO), Appearance tracking the theme: the light
+  builtin -> NSAppearanceNameVibrantLight, everything else -> the
+  "NSAppearanceNameVibrantDark" literal (wails ships no VibrantDark
+  constant; AppearanceType is a plain string passed verbatim to
+  [NSAppearance appearanceNamed:])}; the pure decision half
+  macWindowOptionsFor is headless-tested, and options.Mac is read
+  ONLY by the darwin frontend so linux behavior cannot change) --
+  and with the flag off all three fields
   stay nil, byte-identical to the pre-flag call (CI screenshots run
   flag-off). runGUI also wires RunOptions.OpenConfig ->
   app Options.OpenConfigOnStartup (the CLI config subcommand's
@@ -38,7 +51,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/app` -- the Wails-bound App object and its methods
   (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/DomReady/
   Shutdown/QueryPlugins/RunPluginAction/CheatSheet/GetHistory/
-  AddHistory/GetStats/ResolveIcons/RecordPick). Bound methods
+  AddHistory/GetStats/ResolveIcons/RecordPick/FPSEnabled/
+  RecordFPSSample). Bound methods
   appear in JS as `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
   saves the runtime ctx, brings up the global hotkey once through a
   session-dependent backend plan (hotkey.go: empty spec = skip, parse
@@ -122,7 +136,33 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   log.Printf -- and a non-nil sampler is Start()ed under a dedicated
   ctx cancelled in Shutdown; the sampler idles until the bar first
   shows, so startup cost is zero and newTestApp-stubbed apps spawn
-  nothing), builds the icon resolver once (icons.go in this package:
+  nothing), runs the dev-only fps hooks once (fps.go:
+  COMPETENT_SEARCH_FPS=1 through the plat.getenv seam -- the bound
+  FPSEnabled gates the whole frontend meter loop (false = the
+  frontend registers NOTHING), RecordFPSSample re-validates every
+  echoed summary (the RecordPick defense-in-depth stance: finite
+  0..1000 rates, 0..100 pct, 100..60000ms window, bounded frames/Hz;
+  meter off = silent no-op) and logs ONE inline-metrics line
+  ("fps: 59.8 avg, 118.9 max, 2% frames >20ms over 5.0s (rAF
+  ~120Hz)"), and startFPSInfo logs the display/power context line
+  ("fps: meter on; display 120Hz max, lowPowerMode=off,
+  thermalState=nominal") over the plat.powerInfo seam (production
+  native.DisplayPowerInfo, darwin only, nil elsewhere -- honest
+  "unavailable" wording then) plus arms plat.watchPowerChanges
+  (native.WatchPowerChanges) so every Low-Power-Mode/thermal flip
+  logs a "fps: power state changed:" line) -- and, independent of
+  the meter, applies the WebKit near-60 uncap (fps.go
+  applyNear60Uncap over the plat.uncapNear60 seam, production
+  native.WebViewUncapNear60, darwin only: flips
+  PreferPageRenderingUpdatesNear60FPSEnabled OFF through guarded
+  WKPreferences SPI so ProMotion panels render at their real refresh
+  rate -- and LPM's halving lands on 60, not 30, there; attempted at
+  Startup (pre-first-render when possible), retried at DomReady
+  where the FINAL outcome logs once (transient no-window/no-webview
+  misses stay quiet on the early attempt); uncapDone (mu) latches
+  across attempts; COMPETENT_SEARCH_KEEP_NEAR60=1 is the escape
+  hatch, default ON per the never-below-60 ruling),
+  builds the icon resolver once (icons.go in this package:
   the `newIcons` builder seam, production buildIcons =
   icons.NewService over its defaults -- zero IO at build, the first
   Resolve pays initialization -- behind the bound
@@ -241,9 +281,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   show handler: visible = plain re-WindowShow (no capture, no
   reposition), hidden = the same capture+position+show path toggle
   uses. GetTheme re-loads config.json
-  (ONLY the theme field is consumed live) and returns theme.Resolve's
+  (the theme field is consumed live, plus window.translucent for the
+  darwin tuning below) and returns theme.Resolve's
   token map -- errors are logged once per distinct message and fall
-  back to dark; GetCustomCSS returns <configDir>/themes/custom.css
+  back to dark -- then tuneDarwinTranslucent (theme.go) substitutes
+  bg-opacity "0.65" ONLY when goos==darwin AND translucent AND the
+  resolved value still equals a BUILTIN default
+  (builtinDefaultBgOpacity: dark's 0.97 OR light's 0.98 -- light
+  overrides the token, so comparing dark alone misses it; both read
+  opaque over the NSVisualEffectView and defeat the frosted look):
+  any user-customized bg-opacity passes through
+  untouched (a user value equal to a builtin default is
+  indistinguishable and tunes too), and every other platform/flag
+  combination is
+  byte-identical (linux has no compositor blur -- lower alpha there
+  would put text over desktop noise; dark.json itself is untouched,
+  the style.css :root block being sync_test-locked to it);
+  GetCustomCSS returns <configDir>/themes/custom.css
   verbatim when <= 64KB (the unvalidated escape hatch), else "". The
   hotkey callback `toggle` (rate-limited 250ms against key
   autorepeat) hides the bar when visible; a toggle finding the bar
@@ -1349,12 +1403,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (Options.darwin, else newDarwinReaders -- binding only, zero IO at
   probe time) + its own accurate source line ("cpu=host_statistics
   mem=vm_statistics64+hw.memsize swap=vm.swapusage net=sysctl(iflist2)
-  gpu=none"), while a readers value with nothing bound (the !darwin
+  gpu=ioaccelerator" -- gpu=none when the gpu reader member is nil),
+  while a readers value with nothing bound (the !darwin
   stub) degrades to the placeholders path. DARWIN LAYOUT (the
   fixture tests must keep running on BOTH CI jobs, so the split is
   VALUE-driven, build tags confined to the thin readers): darwin.go
   is UNTAGGED pure logic -- the darwinReaders struct (cpuTicks/
-  memTotal/vmStat/swapRaw/ifRIB/ifNames; nil member = that metric
+  memTotal/vmStat/swapRaw/ifRIB/ifNames/gpuStats; nil member = that
+  metric
   degrades alone), cpuCountersFromTicks (busy=user+system+nice,
   total=busy+idle; uint32 tick wraps take the linux skip-one-update
   path), memFromVMStat = Activity Monitor's "Memory Used"
@@ -1362,27 +1418,41 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   pageSize -- NOT total-free, which macOS's tiny free_count makes
   meaningless), decodeXswUsage (vm.swapusage xsw_usage: LE uint64s
   at 0/8/16, min len 24; total 0 = the valid empty-dynamic-swap
-  dash), decodeIfList2 (bounds-checked NET_RT_IFLIST2 walker, the
+  zero, rendered 0M), decodeIfList2 (bounds-checked NET_RT_IFLIST2 walker, the
   fanotify_parse pattern: 4-byte prologue, advance by ifm_msglen,
   RTM_IFINFO2=0x12 records read ifm_index@12 + if_data64 64-bit
   ibytes/obytes@96/104; malformed lengths error, zero usable records
   error -- never a silent zero), the SEPARATE darwin iface filter
   (skip lo/gif/stf/awdl/llw/utun/ap/bridge/anpi/pktap/feth/vmnet;
-  keep en* -- Wi-Fi IS en0 on Macs -- and bond*), and the
-  sampleCPUDarwin/sampleMemDarwin/sampleNetDarwin bodies;
+  keep en* -- Wi-Fi IS en0 on Macs -- and bond*), the IOAccelerator
+  utilization selection (gpuUtilKeys "Device Utilization %" preferred
+  then "Renderer Utilization %" per accelerator -- the two
+  widely-attested PerformanceStatistics keys -- and gpuPctFromStats =
+  busiest accelerator, clamped 0..100, ok=false when nothing
+  published), and the sampleCPUDarwin/sampleMemDarwin/
+  sampleNetDarwin/sampleGPUDarwin bodies;
   readers_darwin.go (the package's ONE cgo file, darwin-only) binds
   host_statistics/host_statistics64+host_page_size (mach ports
   deallocated per call) + unix.SysctlUint64("hw.memsize") +
   unix.SysctlRaw("vm.swapusage") + syscall.RouteRIB(NET_RT_IFLIST2)
   (deprecated-but-kept: x/net/route exposes NO darwin byte counters
-  -- verified) + net.Interfaces; readers_other.go (!darwin) binds
-  nothing. sampleCPU/sampleMem/sampleNet dispatch on s.dwn != nil
+  -- verified) + net.Interfaces + the IOAccelerator
+  PerformanceStatistics reader (cs_gpu_perf: IOKit port 0 = the
+  default port on every macOS version, the matching dict consumed by
+  IOServiceGetMatchingServices so it is never CFReleased, every
+  created object released, re-matched per read -- no cached service
+  handles; `-framework IOKit -framework CoreFoundation` LDFLAGS, the
+  package's only framework link); readers_other.go (!darwin) binds
+  nothing. sampleCPU/sampleMem/sampleNet/sampleGPU dispatch on
+  s.dwn != nil
   and share the extracted updateCPURate/updateNetRate with linux
-  (byte-identical linux behavior); sampleGPU is untouched -- darwin
-  GPU is the DELIBERATE dash (GPUOK false, gpu=none in the probe
-  log; the IOKit IOAccelerator "PerformanceStatistics" route is the
-  documented future source, the "intel: deliberately absent"
-  precedent). THE invariant: nothing outside the
+  (byte-identical linux behavior); sampleGPUDarwin rides the fast
+  loop like the linux amdgpu sysfs read (an in-process registry
+  call, no subprocess -- the nvidia slow-goroutine pattern is
+  deliberately not used), and a nil gpu reader is the silent dash
+  while a failed read or a registry publishing no utilization key
+  (VM paravirtual GPUs) = GPUOK false + one log line = the honest
+  dash. THE invariant: nothing outside the
   sampler goroutines ever does IO -- Snapshot() is a mutex-guarded
   copy, SetVisible(v) is a flag flip (+ non-blocking 1-buffered kick
   send on true), and while hidden the loops sample NOTHING, so the
@@ -1395,7 +1465,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   store value+timestamp; the fast loop folds it in and expires it to
   GPUOK=false past 3*GPUInterval; no summon kick here by design, an
   exec has no business on the summon path). A kick = immediate
-  baseline sample (point-in-time mem/swap/amdgpu published; previous
+  baseline sample (point-in-time mem/swap/amdgpu/ioaccelerator
+  published; previous
   RATE values kept, never blanked) then a one-shot follow-up at
   Interval/5 (~300ms) so cpu/net rates turn fresh right away. Rates
   (cpu pct, net Bps) come from counter deltas ONLY when the stored
@@ -1405,7 +1476,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   aggregate fields (guest/guest_nice excluded, already inside
   user/nice), pct clamped 0..100; mem used = MemTotal - MemAvailable
   (missing MemAvailable = MemOK false; kB * 1024 = bytes); swap =
-  SwapTotal/SwapFree, total 0 valid (SwapOK true, dash); net = sum of
+  SwapTotal/SwapFree, total 0 valid (SwapOK true, rendered 0M); net =
+  sum of
   rx/tx bytes over real interfaces -- "lo" exact plus the virtual
   prefixes veth/docker/br-/virbr/vnet/tap/tun/wg/zt/dummy/ifb/kube/
   cni/flannel/cali skipped, eth/en/wl/ww/bond kept. Per-metric
@@ -1424,8 +1496,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the nil-seam stub expectation is runtime.GOOS-gated);
   readers_darwin_test.go (darwin-only) real-calls every production
   reader on the mac runner (tick monotonicity, memsize/vm_stat
-  sanity, real-RIB decode against the documented offsets, and a
-  two-real-samples end-to-end with live cpu/net + the GPU dash).
+  sanity, real-RIB decode against the documented offsets, the swap
+  pipeline gate -- decode + sampleMem SwapOK=true whatever the total,
+  the SWP field-report regression pin -- the GPU reader's clean
+  semantics -- the registry match never errors, 0..100 when a
+  utilization key is published, graceful ok=false on VM runners
+  whose paravirtual GPU publishes nothing -- and a two-real-samples
+  end-to-end with live cpu/net + the GPU either live in 0..100 or
+  the logged honest dash).
   Consumed by internal/app's stats.go.
 - `internal/theme` -- design-token resolution. WARNING: the 22
   `TokenNames` (bg, bg-elevated, fg, fg-dim, accent, accent-fg,
@@ -1547,17 +1625,42 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   is live -- emit runs on provider goroutines and MUST be
   goroutine-safe. SOURCE PRIORITY (placement metadata, NEVER a
   score): `prioritized` (engine.go, the watch backendInfo
-  optional-extension pattern) is `priority() int`; Emission gains
-  Priority (json priority,omitempty) stamped in dispatchOne and
-  CheatSheet via providerPriority (type assertion, absent = 0).
-  Only apps-search implements it (sourcePriorityApps = 1, the
-  above-file-results placement); the targeted apps provider stays 0
+  optional-extension pattern) is `priority(best match.Tier) int` --
+  decided PER EMISSION from the strongest tier the engine minted
+  (sourceResults returns it beside the rows; TierNone for external/
+  empty answers); Emission gains Priority (json priority,omitempty)
+  stamped in dispatchOne and CheatSheet via providerPriority (type
+  assertion, absent = 0 whatever the tier). Only apps-search
+  implements it (sourcePriorityApps = 1 when best <= strongTier =
+  TierWordStart -- a STRONG match (triggered/exact/prefix/word-start)
+  earns the above-file-results placement, a weak best (substring/
+  fuzzy) emits at 0 and renders below the files: the macOS "test"
+  field report, where scattered-subsequence app hits outranked a
+  directory literally named "test"), and a PROMOTED emission is cut
+  to its strong rows inside sourceResults (weak rows must never ride
+  the promoted zone; they render below the files whenever no strong
+  match exists, the whole section then being priority 0); the
+  targeted apps provider stays 0
   (bang queries have no files to outrank), and external plugins can
   NEVER set it -- the wire Response has no priority field and
   *externalProvider does not implement the extension (pinned by
   TestSourcePriorityMetadata + TestExternalEmissionPriorityAlwaysZero
   + TestPriorityNeverChangesMintedScores: the mint is byte-identical,
-  bands untouched). Routing: resolved bang (exact/alias/unique-prefix)
+  bands untouched; TestAppsSearchWeakMatchesStayBelowFiles +
+  TestAppsSearchPromotedSectionStrongRowsOnly pin the tier gate).
+  APP USAGE TIE-BREAK: Options.AppUsage (the app layer's frecency
+  store behind a live accessor; nil = cold) feeds appCandidates'
+  Candidate.TieBreak (decayed launch count x1000, usageTieBreak), so
+  equal-tier equal-score app rows order by real usage before the
+  name -- within a match class only, the tier stays the primary sort
+  key (in the fuzzy band the alignment score still ranks first;
+  usage breaks exact score ties). Keys: AppUsageKey(desktopID, argv)
+  = "app:"+desktopID when a *.desktop id is stamped, else "app:"+
+  argv joined with spaces (the darwin `open -a <bundle>` shape) --
+  derivable identically from the snapshot (lookup) and the echoed
+  action (record); AppPickKey(pluginID, action) gates recording to
+  run_command launches from the two builtin app sources.
+  Routing: resolved bang (exact/alias/unique-prefix)
   + space => ONLY that provider, all trigger gating bypassed;
   bare/partial/ambiguous or resolved-without-space sigil => ONLY the
   builtin suggestions provider; bang-shaped text with zero candidates
@@ -1575,21 +1678,28 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   !rescan/!reload/!config/!version/!quit, one run_builtin result each
   (version subtitle from Options.Version); builtin_apps.go
   "apps"/Launch -- !app/!launch over the Options.InstalledApps
-  snapshot (empty query = first 15 alphabetical, prefix 100 /
-  substring 80, cap 15, run_command argv via `parseDesktopExec`:
+  snapshot (empty query = all 15 listed, usage first then
+  alphabetical, cap 15, run_command argv via `parseDesktopExec`:
   quotes, backslash escapes, %-field codes stripped; the shared
   candidate builder is `appCandidates`, whose
-  actions also carry DesktopID = the InstalledApp.ID so the app can
-  launch with activation credentials, and whose Results carry the
+  actions carry DesktopID = the InstalledApp.ID ONLY when it is a
+  bare *.desktop name (launch.ValidDesktopID -- the darwin scan's
+  ".app" bundle ids used to fail the app layer's run_command
+  re-validation and error every macOS launch) so linux launches keep
+  activation credentials, whose TieBreak carries the AppUsage decayed
+  launch count (see the registry bullet), and whose Results carry the
   internal-only IconKey "app:<Icon ref>" when the installed app has
-  one -- the frontend's real-icon hook);
+  one -- the frontend's real-icon hook;
+  AppUsageKey/AppPickKey/usageTieBreak live here too);
   builtin_apps_search.go "apps-search"/Apps -- installed apps in
   NORMAL results: no bangs, a real all_queries Trigger (match
   override on builtinBase, effective min 2 runes), the shared
   engine's canonical bands over the app name (words = letter/digit
   runs, so spaces, hyphens, dots split), cap 6, same run_command
-  launch, and THE one prioritized source (priority() = 1 -> its
-  Emission renders above the file results); bang routing keeps it
+  launch, and THE one prioritized source (priority(best) = 1 only at
+  word-start tier or better -> its Emission renders above the file
+  results with only its strong rows; weak bests emit at 0, below the
+  files); bang routing keeps it
   exclusive with the targeted !app
   path, and a nil/empty snapshot emits nothing;
   builtin_openwindows.go "windows"/Open Windows -- also in the normal
@@ -2346,7 +2456,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   "wayland"/"x11" wins, else WAYLAND_DISPLAY, else DISPLAY, else
   unknown; Desktop = raw XDG_CURRENT_DESKTOP;
   `Session.IsGNOME` = any colon-separated segment equals "gnome"
-  case-insensitively).
+  case-insensitively); and the fps meter's data shapes (power.go:
+  `PowerInfo` {MaxFPS, LowPowerMode, ThermalState} -- the darwin
+  display/power probe result -- `ThermalStateString`, and
+  `UncapStatus` + String(), the WebKit near-60 uncap outcomes kept
+  in lockstep with platform_darwin.h's CS_UNCAP_* codes).
 - `internal/platform/native` -- the thin OS glue, DELIBERATELY NO test
   files (go-toolchain skips coverage for packages without tests; the
   code needs a live display server). Keep it minimal and defensive;
@@ -2388,6 +2502,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   channel pattern (buffered(1), non-blocking send, one app-lifetime
   drain goroutine) into the first caller's onChange -- the app's
   dismiss-on-Space-change (window.go spaceChanged).
+  DisplayPowerInfo/WatchPowerChanges (powerinfo_darwin.go + the
+  !darwin stubs; the fps meter's probe): csPowerInfo reads NSScreen
+  maximumFramesPerSecond + NSProcessInfo lowPowerModeEnabled behind
+  @available(macOS 12) guards (older systems answer 0Hz/off) plus
+  thermalState, and csObservePowerChanges arms power+thermal change
+  observers on the csSpaceChanged channel pattern (csPowerChanged
+  export, buffered(1), forever-drain). WebViewUncapNear60
+  (webkit_darwin.go + stub -- the package's ONE -framework WebKit
+  link): csWebViewUncapNear60 walks windows[0].contentView.subviews
+  for the WKWebView (wails v2.13.0 adds it there) and flips
+  PreferPageRenderingUpdatesNear60FPSEnabled OFF through
+  respondsToSelector-guarded WKPreferences feature SPI (the unified
+  +_features list (macOS 13.3+) with -_setEnabled:forFeature:, then
+  the experimental/internalDebug splits; the SPI setters are
+  declared as a category so the (BOOL, id) calls compile), returning
+  the honest CS_UNCAP_* status -- a WebKit that drops the SPI
+  degrades to a status code, never a crash.
   display_darwin.go also carries `#cgo LDFLAGS: -framework
   UniformTypeIdentifiers` on Wails' behalf: the v2 darwin frontend
   references UTType without linking that framework, and newer Xcode
@@ -2501,8 +2632,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   before render.ts's module-load template grabs, so the DOM-order
   tests fail if the zones/templates change shape; src/priority.test.ts
   pins priority-above-files rendering, the flat traversal order, and
-  the reconcileSelection rules -- run in the CI linux job's frontend
-  step). `index.html`
+  the reconcileSelection rules, src/stats.test.ts pins the stats
+  formatters + renderStats' dash-vs-value rules + the stats-row WIDTH
+  CONTRACT (formatter-maxima sweeps and the style.css ch-reservation
+  structure -- jsdom computes no layout, so those two sides ARE the
+  mechanical gate), and src/hover.test.ts drives the REAL main.ts
+  over faked Wails bindings to pin the hover-vs-selection model
+  (hover changes nothing, Enter runs the keyboard-selected row, click
+  runs the clicked row) -- run in the CI linux job's frontend step).
+  `index.html`
   (query row with inline SVG magnifier + hidden bang chip; #results
   split into #priority-results (plugin sections with priority > 0,
   ABOVE the files) / #file-results / static #empty ("No matches") /
@@ -2511,7 +2649,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   BELOW the status bar -- the bottom-most chrome, five STATIC
   label/value span pairs (CPU GPU RAM SWP NET, value ids
   stat-cpu/-gpu/-ram/-swap/-net), starts hidden, JS only ever writes
-  the value text; #preview-pane
+  INSIDE the value spans (plain text, except the NET value's two
+  tinted arrow spans stats.ts builds -- see the stats.ts bullet);
+  #preview-pane
   (spinner + #preview-body + command strip with the web/AI buttons
   and the pane flash) as one more #bar child, display:none unless
   body.with-preview; #config-pane (header with #config-title +
@@ -2569,12 +2709,22 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the file rows -- the apps section -- everything else below;
   compareSections = priority desc, max score desc, plugin id);
   selection is one flat list in DOM order -- priority rows, then file
-  rows, then below-zone plugin rows: ArrowUp/Down wrap, Home/End,
-  hover; row handlers resolve their index at EVENT time
+  rows, then below-zone plugin rows: ArrowUp/Down wrap, Home/End.
+  TWO DISTINCT POINTER STATES (the hover-steals-selection field
+  report): the ACTIVE selection (state.selected) moves ONLY through
+  keyboard navigation and the auto-select/reconcile paths and is the
+  single source of truth for Enter, the pick report, AND the preview
+  pane, while mouse HOVER is a purely decorative CSS :hover wash
+  (style.css .result:not(.selected):hover -- render.ts registers NO
+  hover listener at all, RowHandlers has no onHover), so sweeping the
+  cursor can never change what Enter runs, mark the generation
+  navigated, or retarget the preview; a CLICK is the explicit mouse
+  choice and activates the clicked row (src/hover.test.ts pins all
+  three). Row handlers resolve their index at EVENT time
   (rows.indexOf(row) -- render-time captured indices went stale when
   a late priority emission PREPENDED rows above the files), and every
   re-render reconciles the selection through selection.ts
-  reconcileSelection: userNavigated (set by arrows/Home/End/hover,
+  reconcileSelection: userNavigated (set by arrows/Home/End,
   cleared per generation in runSearch) preserves the selected item BY
   IDENTITY at its shifted index, while an un-navigated bar re-runs
   auto-select on row 0 so a late apps section takes the selection
@@ -2582,13 +2732,21 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   unselected, and its section is always priority 0/below);
   selection scrollIntoView fires ONLY for keyboard/auto-
   select navigation (applySelection/select carry a scroll flag;
-  hover and the plugin-area re-render select without scrolling, so
-  they never move the viewport), and wheel input on #results is
-  handled manually: a non-passive listener preventDefault()s and
+  the plugin-area re-render selects without scrolling, so
+  it never moves the viewport), and wheel input on #results is
+  handled manually OFF-MAC ONLY (wheel.ts shouldInterceptWheel,
+  vitest-pinned: navigator.platform "Mac*" = NO listener at all --
+  a non-passive always-preventDefault wheel listener forces WebKit's
+  synchronous main-thread scroll path there, pinning scroll motion
+  to the Low-Power-Mode-halvable rendering-update clock, while
+  native async overflow scrolling runs compositor-side at display
+  rate with momentum; linux/windows register the listener exactly
+  as before): a non-passive listener preventDefault()s and
   applies deltaMode-normalized deltas (40px/line, clientHeight/page;
   WebKitGTK sends pixels) straight to scrollTop -- WebKitGTK's
   default-on smooth-scroll animator otherwise eats fast detents and
-  Wails exposes no setting for it; ctrl+wheel stays native; file
+  Wails exposes no setting for it; ctrl+wheel stays native on both
+  paths; file
   rows Enter=Open / Ctrl/Cmd+Enter=Reveal; plugin rows run
   their action on Enter/click (Ctrl+Enter identical): set_query stays
   frontend-local (replace input, caret to end, re-run the pipeline),
@@ -2637,10 +2795,39 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   BOTH values in the unit the TOTAL picks, GiB else MiB below 1 GiB,
   shared decimal rule one-decimal-below-10-else-none; formatRate
   humanizes bytes/sec B/K/M/G (binary) with the same rule, net
-  renders as "<down>rx <up>tx" arrow pairs; any *Ok=false -> em-dash
-  placeholder, and swapOk=true with swapTotal 0 (no swap configured)
-  is a dash too; glyphs (em dash, arrows) are \uXXXX escapes --
-  ASCII-only source)
+  renders as "<down>rx <up>tx" arrow pairs whose arrows renderNet
+  builds as .net-down/.net-up SPANS (element+text-node building, the
+  render.ts convention -- style.css tints the two directions; the
+  rates stay plain text); any *Ok=false -> em-dash
+  placeholder, while swapOk=true with swapTotal 0 (no swap configured
+  / empty dynamic macOS swap) renders the live "0M" -- a real zero is
+  a value, only a dead source dashes (the macOS SWP field report);
+  the WIDTH CONTRACT constants (PCT_MAX_CHARS 4 "100%",
+  BYTES_PAIR_MAX_CHARS 10 "1024/1024M", RATE_MAX_CHARS 5,
+  NET_MAX_CHARS 13 = 2 rates + arrows + space) are the formatters'
+  maximum emit widths over documented input domains (pcts 0..100,
+  byte pairs used <= total <= 9999 GiB, rates < 9999 GiB/s);
+  style.css reserves each value slot at MAX + 1ch and stats.test.ts
+  pins BOTH sides -- bump a constant and the CSS reservation
+  together;
+  glyphs (em dash, arrows) are \uXXXX escapes -- ASCII-only source;
+  src/stats.test.ts pins the formatters + the swap dash-vs-0M rules)
+  + `src/fpsmeter.ts` (the dev-only fps meter; wire() ends with
+  initFPSMeter(app), which asks the bound FPSEnabled ONCE and
+  registers NOTHING when it answers false -- zero cost off. On: a
+  rAF loop collects frame deltas (deltas > 250ms = gaps -- hidden
+  window, summon resume, debugger -- excluded; visibilitychange to
+  hidden resets the baseline so no hidden-state work happens),
+  summarizes every ~5s of ACCUMULATED visible time (first report at
+  ~2.5s for CI) through the PURE exported summarize (avg/max fps,
+  >20ms long-frame pct, inferredHz = inverted 10th-percentile delta
+  snapped within 10% to the common panel rates -- JS cannot read the
+  refresh rate; the Go context line supplies the hardware truth),
+  and fire-and-forgets RecordFPSSample (console.warn on error, the
+  reportPick pattern); src/fpsmeter.test.ts pins summarize incl. the
+  30fps-throttle and gap-discard shapes) + `src/wheel.ts`
+  (shouldInterceptWheel(platform), the pure mac gate for main.ts's
+  manual wheel interception -- see the wheel passage above)
   + `src/render.ts` (pure text-node DOM builders, no innerHTML
   anywhere: appendHighlighted renders the Go-minted matchRanges
   (half-open RUNE pairs; the walk counts code points because JS
@@ -2673,12 +2860,25 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   before the name; thin scrollbar; ALL colors/sizes/effects flow
   through var(--sb-*) -- the :root block holds the dark fallbacks and
   MUST stay identical to internal/theme/builtin/dark.json, enforced
-  by internal/theme/sync_test.go; the #stats row block (flex 0 0
-  auto single nowrap line so it can never squeeze the results area,
-  ~0.85x small font, fg-dim on a --sb-border top border, tokens only
-  -- and an explicit #stats[hidden]{display:none} because the
-  author-level display:flex would defeat the UA sheet's [hidden]
-  rule); appended namespaced plugin block
+  by internal/theme/sync_test.go; the decorative hover wash
+  .result:not(.selected):hover (a 40% color-mix of --sb-selection-bg,
+  clearly weaker than the full .selected style -- the :not() guard
+  keeps the selected row's look authoritative under the pointer); the
+  #stats row block (a single nowrap flex-0-0-auto line so it can
+  never squeeze the results area: a five-track grid
+  (repeat(5, auto) + space-between) whose value spans carry RESERVED
+  min-widths -- 5ch pct / 11ch byte-pair / 14ch net = the stats.ts
+  *_MAX_CHARS + 1ch slack, stats.test.ts-pinned -- plus tabular-nums,
+  so a value changing rendered width never shifts its neighbors;
+  ~0.85x small font, fg-dim on a --sb-border top border; the subtle
+  metric hues are color-mix derivations of EXISTING tokens --
+  labels = accent 45% into fg-dim under the 0.7 opacity, .net-down =
+  accent 60%, .net-up = warning 60% -- deliberately NO new theme
+  token, so the sync_test.go :root contract is untouched and both
+  builtin themes stay legible -- and an explicit
+  #stats[hidden]{display:none} because the author-level display:grid
+  would defeat the UA sheet's [hidden] rule); appended namespaced
+  plugin block
   (.plugin-*, .bang-chip, .status-flash) where every accent rule
   consumes var(--plugin-accent, var(--accent, #89b4fa)) and a :root
   bridge defines --accent: var(--sb-accent, #89b4fa), so the theming
@@ -3023,7 +3223,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (a9-config-ipc: {"cmd":"config"} must earn
   {"ok":true,"accepted":"config"}, sent hidden after a7 and clear of
   the toggle pair, then an explicit hide restores the hidden state
-  -- an IPC-ack check, not a UI check) + a real on-screen window via a compiled
+  -- an IPC-ack check, not a UI check) + the fps meter gate
+  (a4-fps-meter: every scenario boots with COMPETENT_SEARCH_FPS=1;
+  after a3 shows the bar, a parseable "fps: N avg, ..." summary AND
+  the "fps: meter on; display NHz max, ..." context line -- the
+  darwin power-probe cgo's first-run proof -- must land in the app
+  log within 12s; the MECHANISM is the gate, absolute rates are
+  informational on the AC-powered VM) + a real on-screen window via a compiled
   CGWindowList Swift probe, including while a big index build is
   PROVABLY in flight (the hard B-midindex-window check: progress
   line present, completion line absent, before b1 runs); scenario B
@@ -3039,7 +3245,21 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   screenshots are best-effort "evidence:" captures (never a SMOKE
   id), copied to smoke-shots/ and uploaded via actions/
   upload-artifact@v4 as `darwin-smoke-<sha>` (`if-no-files-found:
-  ignore` -- the linux screenshots pattern), and the full app-log
+  ignore` -- the linux screenshots pattern), and EVERY capture is
+  ordered AFTER the focus/visibility-sensitive hard gates: the job's
+  FIRST screencapture can pop the macOS 26 TCC screen-recording
+  consent dialog, a key-stealing system modal whose focus loss
+  blur-auto-hides the bar (correct product behavior) -- it starved
+  a4's rAF accumulation and inverted a5's toggle into a re-show on
+  run 29728632030, so scenario A's one shot (01-summoned-macos.png,
+  the a6-reshown bar = the summoned state) lands after a6, where the
+  remaining gates (a7, a9, all of B) are proven dialog-tolerant --
+  including the
+  translucentEvidence run between scenarios A and B: one extra boot
+  with window.translucent=true (startApp's extraCfg param) captured
+  as 03-translucent-macos.png, EVERY failure swallowed as an
+  "evidence: ... unavailable" line, no SMOKE ids -- and the full
+  app-log
   dumps print only on failure (green runs get the
   hotkey:/index:/watch:/panic summary lines); hands off the
   darwin/arm64 app binary the same way) and `publish` (needs: [linux,

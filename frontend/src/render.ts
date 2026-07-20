@@ -12,8 +12,10 @@
 // rows keep working when a zone rendered later shifts their flat
 // position -- a late priority emission PREPENDS rows above the file
 // rows, which would silently stale any index captured at render time.
+// Deliberately NO hover handler: mouse hover is a decorative CSS
+// :hover wash only and never touches the active selection (clicking
+// is the explicit mouse choice) -- see the selection model in main.ts.
 export interface RowHandlers {
-  onHover(row: HTMLDivElement): void;
   onActivate(row: HTMLDivElement, reveal: boolean): void;
 }
 
@@ -130,9 +132,6 @@ export function renderResults(
     dir.title = item.path;
     row.append(dir);
 
-    row.addEventListener("mouseenter", () => {
-      handlers.onHover(row);
-    });
     row.addEventListener("click", (ev: MouseEvent) => {
       handlers.onActivate(row, ev.ctrlKey || ev.metaKey);
     });
@@ -146,9 +145,9 @@ export function renderResults(
 
 // applySelection toggles the .selected class and, when scroll is
 // true, keeps the selected row scrolled into view. Only intentional
-// navigation (keyboard, auto-select-first) scrolls: hover-selection
-// and plugin-area re-renders pass false, so they can never move the
-// viewport under the user's wheel scrolling.
+// navigation (keyboard, auto-select-first) scrolls: plugin-area
+// re-renders pass false, so they can never move the viewport under
+// the user's wheel scrolling.
 export function applySelection(
   rows: HTMLDivElement[],
   selected: number,
@@ -451,9 +450,6 @@ function buildPluginRow(
     row.style.setProperty("--plugin-accent", result.accent_color);
   }
 
-  row.addEventListener("mouseenter", () => {
-    handlers.onHover(row);
-  });
   row.addEventListener("click", (ev: MouseEvent) => {
     handlers.onActivate(row, ev.ctrlKey || ev.metaKey);
   });

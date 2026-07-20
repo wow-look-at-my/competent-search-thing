@@ -2,14 +2,15 @@ package sysstats
 
 // The darwin (macOS) stats sources. This file is deliberately
 // UNTAGGED: everything in it is pure logic over the darwinReaders
-// seam -- byte decoders, derivations, the interface filter, and the
-// darwin sample paths -- so it compiles and is unit-tested on every
-// platform (the linux CI job included, over synthetic buffers and
-// scripted readers). The thin production readers, which need mach
-// calls (cgo) and darwin-only syscalls, live in readers_darwin.go;
-// the !darwin twin readers_other.go binds no readers at all, so a
-// non-darwin build asked for GOOS "darwin" without an injected seam
-// degrades to the placeholders row.
+// seam -- byte decoders, derivations, the interface filter, the
+// IOAccelerator utilization selection, and the darwin sample paths --
+// so it compiles and is unit-tested on every platform (the linux CI
+// job included, over synthetic buffers and scripted readers). The
+// thin production readers, which need mach/IOKit calls (cgo) and
+// darwin-only syscalls, live in readers_darwin.go; the !darwin twin
+// readers_other.go binds no readers at all, so a non-darwin build
+// asked for GOOS "darwin" without an injected seam degrades to the
+// placeholders row.
 
 import (
 	"encoding/binary"
@@ -42,13 +43,19 @@ type darwinReaders struct {
 	ifRIB func() ([]byte, error)
 	// ifNames maps interface indexes to names (net.Interfaces).
 	ifNames func() (map[int]string, error)
+	// gpuStats reads the utilization-relevant IOAccelerator
+	// "PerformanceStatistics" numbers from the IORegistry: one map per
+	// accelerator service, gpuUtilKeys entries only, absent keys
+	// omitted (selection/aggregation stays pure in gpuPctFromStats).
+	// nil = no GPU source, the honest dash.
+	gpuStats func() ([]map[string]int64, error)
 }
 
 // ok reports whether any darwin source is bound at all -- false for
 // the !darwin stub readers, which sends New to the placeholders path.
 func (d *darwinReaders) ok() bool {
 	return d != nil && (d.cpuTicks != nil || d.memTotal != nil || d.vmStat != nil ||
-		d.swapRaw != nil || d.ifRIB != nil || d.ifNames != nil)
+		d.swapRaw != nil || d.ifRIB != nil || d.ifNames != nil || d.gpuStats != nil)
 }
 
 // cpuTicksDarwin is one host_statistics HOST_CPU_LOAD_INFO reading:
@@ -110,7 +117,8 @@ func memFromVMStat(v vmStat64) uint64 {
 // XswUsage type, so the offsets are fixed here: 0 total, 8 avail,
 // 16 used, minimum length 24. A zero total is the valid "no swap in
 // use" answer (macOS swap is dynamic), which the frontend renders as
-// a dash per the SwapOK contract.
+// the live "0M" value per the SwapOK contract -- only SwapOK=false
+// (a dead source) earns the dash.
 func decodeXswUsage(raw []byte) (total, used uint64, err error) {
 	if len(raw) < 24 {
 		return 0, 0, fmt.Errorf("xsw_usage payload is %d bytes, need at least 24", len(raw))
@@ -246,8 +254,8 @@ func (s *Sampler) sampleCPUDarwin(snap *Snapshot, now time.Time) {
 // hw.memsize + the vm_statistics64 derivation (memFromVMStat, the
 // Activity Monitor "Memory Used" definition) for memory, the
 // vm.swapusage sysctl for swap. Each side degrades alone, and a swap
-// total of zero is the valid no-swap answer (dash), which is exactly
-// what macOS's dynamic swap reports while empty.
+// total of zero is the valid no-swap answer (rendered as "0M"), which
+// is exactly what macOS's dynamic swap reports while empty.
 func (s *Sampler) sampleMemDarwin(snap *Snapshot) {
 	switch {
 	case s.dwn.memTotal == nil || s.dwn.vmStat == nil:
@@ -286,6 +294,73 @@ func (s *Sampler) sampleMemDarwin(snap *Snapshot) {
 		return
 	}
 	snap.SwapTotal, snap.SwapUsed, snap.SwapOK = total, used, true
+}
+
+// gpuUtilKeys are the IOAccelerator "PerformanceStatistics" entries
+// that carry an overall GPU utilization percentage, in preference
+// order: "Device Utilization %" is the canonical key (Apple Silicon's
+// AGXAccelerator and the Intel-era AMD/Intel drivers all publish it),
+// and "Renderer Utilization %" is the widely-attested sibling some
+// driver versions publish when the device figure is absent -- the
+// same pair the open-source macOS menu-bar stats tools read. The
+// production reader extracts exactly these keys per accelerator and
+// hands them over as plain maps, so selection stays pure here.
+var gpuUtilKeys = []string{"Device Utilization %", "Renderer Utilization %"}
+
+// gpuPctFromStats derives one GPU busy percentage from the
+// per-accelerator PerformanceStatistics readings: within an
+// accelerator the first present gpuUtilKeys entry wins, across
+// accelerators the busiest one is reported (the interesting number on
+// a multi-GPU machine), and values clamp into 0..100. ok=false means
+// no accelerator published a utilization key at all -- the honest
+// dash (no accelerator services, or a VM's paravirtual GPU that
+// exposes no PerformanceStatistics).
+func gpuPctFromStats(stats []map[string]int64) (pct float64, ok bool) {
+	best := 0.0
+	found := false
+	for _, m := range stats {
+		for _, k := range gpuUtilKeys {
+			v, present := m[k]
+			if !present {
+				continue
+			}
+			if p := clampPct(float64(v)); !found || p > best {
+				best = p
+			}
+			found = true
+			break
+		}
+	}
+	return best, found
+}
+
+// sampleGPUDarwin fills the GPU percentage from the IOAccelerator
+// "PerformanceStatistics" registry read -- an in-process IOKit call
+// cheap enough to ride the fast loop exactly like the linux amdgpu
+// sysfs path (no subprocess, so the nvidia slow-goroutine pattern is
+// unnecessary). A nil reader is the silent dash (source absent); a
+// failed read, or a registry that publishes no utilization key at
+// all, degrades the metric with one log per distinct message, so
+// hardware that genuinely exposes nothing renders the honest dash
+// instead of a fake zero.
+func (s *Sampler) sampleGPUDarwin(snap *Snapshot) {
+	if s.dwn.gpuStats == nil {
+		snap.GPUOK = false
+		return
+	}
+	stats, err := s.dwn.gpuStats()
+	if err != nil {
+		s.logOnce(fmt.Sprintf("stats: gpu: ioaccelerator: %v", err))
+		snap.GPUOK = false
+		return
+	}
+	pct, ok := gpuPctFromStats(stats)
+	if !ok {
+		s.logOnce("stats: gpu: ioaccelerator: no utilization statistics published; showing a dash")
+		snap.GPUOK = false
+		return
+	}
+	snap.GPUPct, snap.GPUOK = pct, true
 }
 
 // sampleNetDarwin sums the real-interface RIB byte counters and

@@ -218,6 +218,19 @@ interface TelemetryPickReport {
   picked: TelemetryPickedRef;
 }
 
+// One fps meter report (internal/app FPSSample; field names lockstep
+// with its json tags). Built by fpsmeter.ts summarize from one window
+// of visible rAF frame deltas; sent through RecordFPSSample, a
+// Go-side no-op unless COMPETENT_SEARCH_FPS=1.
+interface FPSSample {
+  avgFps: number;
+  maxFps: number;
+  longFramePct: number;
+  windowMs: number;
+  frames: number;
+  inferredHz: number;
+}
+
 // GetPreviewConfig answer (internal/app PreviewConfigInfo): whether
 // the pane is on, whether the web/AI providers have credentials
 // (config key or environment variable), and the pixel width the left
@@ -301,6 +314,12 @@ interface WailsAppBindings {
   // ranking signals from its own query ring, and appends locally; a
   // silent no-op while search.telemetry is off or the query is blank.
   RecordPick(report: TelemetryPickReport): Promise<void>;
+  // Dev-only fps meter (fpsmeter.ts; COMPETENT_SEARCH_FPS=1 Go-side).
+  // FPSEnabled gates the whole frontend loop -- false registers
+  // nothing; RecordFPSSample logs one validated summary line and is a
+  // silent no-op while the meter is off.
+  FPSEnabled(): Promise<boolean>;
+  RecordFPSSample(sample: FPSSample): Promise<void>;
   // Resolved theme tokens: every internal/theme.TokenNames key mapped
   // to a validated CSS value (theme.ts sets each as --sb-<key>).
   GetTheme(): Promise<Record<string, string>>;

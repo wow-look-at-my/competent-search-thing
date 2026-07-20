@@ -164,3 +164,63 @@ func TestStartThemeWatchWithoutConfigDirDegrades(t *testing.T) {
 	require.Nil(t, a.themeW)
 	a.watchMu.Unlock()
 }
+
+// The darwin translucent bg-opacity substitution (tuneDarwinTranslucent
+// in theme.go): the builtin 0.97 reads opaque over the
+// NSVisualEffectView, so darwin+translucent gets a visibly frosted
+// default -- while customized values and every other platform/flag
+// combination stay byte-identical.
+
+func TestGetThemeDarwinTranslucentTunesDefaultOpacity(t *testing.T) {
+	a, _ := newTestApp(t, nil, Options{})
+	a.plat.goos = "darwin"
+	dir := themeTestDir(t)
+	writeConfigJSON(t, dir, `{"window": {"translucent": true}}`)
+	got := a.GetTheme()
+	require.Equal(t, darwinTranslucentBgOpacity, got["bg-opacity"])
+	// Only bg-opacity is touched; everything else stays the builtin.
+	require.Equal(t, theme.Dark()["bg"], got["bg"])
+	require.Equal(t, theme.Dark()["blur"], got["blur"])
+}
+
+func TestGetThemeDarwinTranslucentAppliesToLightDefault(t *testing.T) {
+	// light OVERRIDES bg-opacity (0.98, vs dark's 0.97) -- still a
+	// builtin default authored for opaque windows, so the darwin
+	// tuning applies to it too (builtinDefaultBgOpacity checks both).
+	a, _ := newTestApp(t, nil, Options{})
+	a.plat.goos = "darwin"
+	dir := themeTestDir(t)
+	writeConfigJSON(t, dir, `{"theme": "light", "window": {"translucent": true}}`)
+	got := a.GetTheme()
+	require.Equal(t, darwinTranslucentBgOpacity, got["bg-opacity"])
+	require.Equal(t, "#f7f7f9", got["bg"], "still the light palette")
+}
+
+func TestGetThemeDarwinTranslucentKeepsCustomOpacity(t *testing.T) {
+	a, _ := newTestApp(t, nil, Options{})
+	a.plat.goos = "darwin"
+	dir := themeTestDir(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "themes"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "themes", "mine.json"),
+		[]byte(`{"extends": "dark", "tokens": {"bg-opacity": "0.5"}}`), 0o644))
+	writeConfigJSON(t, dir, `{"theme": "mine", "window": {"translucent": true}}`)
+	require.Equal(t, "0.5", a.GetTheme()["bg-opacity"],
+		"a user-customized bg-opacity always wins")
+}
+
+func TestGetThemeOpacityUntouchedOffDarwinOrFlagOff(t *testing.T) {
+	// linux + translucent: unchanged (no compositor blur there; the
+	// linux translucent look stays exactly as measured in the README).
+	a, _ := newTestApp(t, nil, Options{}) // goos pinned "linux"
+	dir := themeTestDir(t)
+	writeConfigJSON(t, dir, `{"window": {"translucent": true}}`)
+	require.Equal(t, theme.Dark()["bg-opacity"], a.GetTheme()["bg-opacity"])
+
+	// darwin + flag off: unchanged.
+	b, _ := newTestApp(t, nil, Options{})
+	b.plat.goos = "darwin"
+	dir2 := themeTestDir(t)
+	writeConfigJSON(t, dir2, `{}`)
+	require.Equal(t, theme.Dark()["bg-opacity"], b.GetTheme()["bg-opacity"])
+	require.Equal(t, theme.Dark(), b.GetTheme(), "flag off = the untouched builtin map")
+}

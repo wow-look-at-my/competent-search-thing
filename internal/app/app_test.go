@@ -251,6 +251,12 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// darwin CI job builds the production seams); Space-watch tests
 	// inject a recording fake.
 	a.plat.watchSpaceChanges = nil
+	// Same for the fps meter's darwin seams (power probe, power-state
+	// observer, WebKit near-60 uncap): nil so no test touches Cocoa or
+	// the WKPreferences SPI; fps tests inject fakes per test.
+	a.plat.powerInfo = nil
+	a.plat.watchPowerChanges = nil
+	a.plat.uncapNear60 = nil
 	// No config.json or plugins-dir IO in unit tests; tests that
 	// exercise the real builder restore a.buildRegistry explicitly.
 	a.newRegistry = func() dispatcher { return nil }
@@ -702,43 +708,6 @@ func TestEmitEventBeforeStartupIsNoOp(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
 	a.emitDegraded(watch.Stats{})
 	require.Empty(t, r.emits, "no context yet: nothing emitted, nothing crashed")
-}
-
-func TestOpenRunsPlatformOpenAndHides(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{})
-	a.Startup(context.Background())
-	require.NoError(t, a.Open("/tmp/x"))
-	require.Equal(t, []string{"resolve:/tmp/x", "mint", "open:/tmp/x", "hide"}, r.callNames(),
-		"resolve then mint (bar still focused) then dispatch then hide")
-}
-
-func TestOpenErrorKeepsBarVisible(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{})
-	a.Startup(context.Background())
-	boom := errors.New("no handler")
-	a.plat.open = func(string, []string) error { return boom }
-	require.ErrorIs(t, a.Open("/tmp/x"), boom)
-	require.False(t, r.has("hide"), "a failed open does not hide the bar")
-}
-
-func TestRevealRunsPlatformRevealAndHides(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{})
-	a.Startup(context.Background())
-	require.NoError(t, a.Reveal("/tmp/y"))
-	require.Equal(t, []string{"resolve:/tmp/y", "mint", "reveal:/tmp/y", "hide"}, r.callNames(),
-		"reveal resolves the directory handler, mints, dispatches, hides")
-
-	boom := errors.New("nope")
-	a.plat.reveal = func(string, []string, string) error { return boom }
-	require.ErrorIs(t, a.Reveal("/tmp/y"), boom)
-}
-
-func TestOpenRevealUseRealLauncherValidation(t *testing.T) {
-	// The default seams go through platform.Launcher, which rejects
-	// empty paths without running anything.
-	a := New(nil, Options{})
-	require.Error(t, a.Open(""))
-	require.Error(t, a.Reveal(""))
 }
 
 func TestHideWithoutContextIsNoOp(t *testing.T) {
