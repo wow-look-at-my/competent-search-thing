@@ -1,12 +1,10 @@
 // Package icons resolves result-row icons to data URIs: app icons
-// named by .desktop Icon= values (looked up through the freedesktop
-// icon-theme machinery -- detected GTK theme + its Inherits chain +
-// Adwaita/hicolor, then unthemed and pixmap fallbacks -- or, on
-// macOS, by .app bundle paths resolved through Info.plist + .icns
-// extraction, see bundle.go) and per-file-type icons for the "dir"
-// and "file:<basename>" keys served from the embedded Material Icon
-// Theme pack (fileicons.go; material/README.md holds provenance and
-// license), identical on every OS and light/dark theme aware.
+// named by .desktop Icon= values (or, on macOS, by .app bundle paths
+// resolved through Info.plist + .icns extraction -- see bundle.go)
+// and file-type icons derived from file names via the shared-mime-info
+// database, the themed shapes looked up through the freedesktop
+// icon-theme machinery (detected GTK theme + its Inherits chain +
+// Adwaita/hicolor, then unthemed and pixmap fallbacks).
 //
 // The package is pure stdlib, headless-testable (every input dir and
 // external command sits behind Options seams; the bundle branch is
@@ -17,9 +15,9 @@
 // story until native .ico extraction exists.
 //
 // Nothing touches the disk or execs anything at NewService; the
-// first Resolve pays the one-time initialization (icon-theme
-// detection, the embedded pack parse) so callers can construct the
-// service on the startup path for free.
+// first Resolve pays the one-time initialization (mime database
+// load, icon-theme detection) so callers can construct the service
+// on the startup path for free.
 package icons
 
 import (
@@ -38,11 +36,8 @@ import (
 
 // Resolve key protocol (the wire contract with the frontend):
 //
-//	"dir"             -> the Material pack's folder icon
-//	"file:<basename>" -> the Material file-type icon for that name
-//	                     (special filenames, then longest dotted
-//	                     suffix; unknown names get the pack's default
-//	                     file icon, so only "file:" itself misses)
+//	"dir"             -> the directory icon (folder, inode-directory)
+//	"file:<basename>" -> the file-type icon for that file name
 //	"app:<ref>"       -> ref is a .desktop Icon= value: an absolute
 //	                     .png/.svg path served directly, or a themed
 //	                     icon name (trailing .png/.svg/.xpm stripped)
@@ -91,11 +86,6 @@ type Options struct {
 	// CacheEntries bounds the (name,size) -> data URI LRU (default
 	// 512). The negative cache is bounded to the same count.
 	CacheEntries int
-	// Theme returns the active theme name, consulted once per Resolve
-	// batch (nil -> always ""). Exactly the builtin "light" selects
-	// the Material pack's _light icon variants for the file/dir keys;
-	// every other value keeps the defaults.
-	Theme func() string
 }
 
 // Service resolves icon keys to data URIs. Safe for concurrent use:
@@ -104,18 +94,18 @@ type Service struct {
 	getenv       func(string) string
 	runGsettings func(ctx context.Context) (string, error)
 	logf         func(format string, args ...any)
-	themeName    func() string
 	dataDirs     []string
 	iconBases    []string
 	pixmapDirs   []string
 	maxFileBytes int64
 
-	once sync.Once // initialize: theme detection + material announce
+	once sync.Once // initialize: mime db load + theme detection
 
 	mu       sync.Mutex // guards everything below
+	mime     *mimeDB
 	chain    []string
 	themes   map[string]*themeIndex
-	cache    *lru // (name|size, path|size or mat:file) -> data URI
+	cache    *lru // (name|size or path|size) -> data URI
 	negative *lru // same keys known to miss (value unused)
 }
 
@@ -138,10 +128,6 @@ func NewService(o Options) *Service {
 	}
 	if s.logf == nil {
 		s.logf = log.Printf
-	}
-	s.themeName = o.Theme
-	if s.themeName == nil {
-		s.themeName = func() string { return "" }
 	}
 	if s.dataDirs == nil {
 		s.dataDirs = xdgDataDirs(s.getenv)
@@ -185,9 +171,6 @@ func (s *Service) Resolve(keys []string, size int) map[string]string {
 		size = maxIconSize
 	}
 	s.once.Do(s.initialize)
-	// One theme read per batch, outside the mutex: the production
-	// getter re-reads config.json (the GetTheme pattern).
-	light := s.themeName() == "light"
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make(map[string]string, len(keys))
@@ -195,31 +178,37 @@ func (s *Service) Resolve(keys []string, size int) map[string]string {
 		if _, done := out[key]; done {
 			continue
 		}
-		if uri, ok := s.resolveKey(key, size, light); ok {
+		if uri, ok := s.resolveKey(key, size); ok {
 			out[key] = uri
 		}
 	}
 	return out
 }
 
-// initialize detects the active icon theme (the app: half) and
-// announces a broken material embed once -- the once-per-process IO
-// the constructor deferred.
+// initialize loads the mime database and detects the active icon
+// theme -- the once-per-process IO the constructor deferred.
 func (s *Service) initialize() {
-	if _, err := loadMaterial(); err != nil {
-		s.logf("icons: material icon pack unavailable: %v", err)
-	}
+	s.mime = loadMimeDB(s.dataDirs)
 	s.chain = s.buildChain(s.detectTheme())
 	s.logf("icons: theme chain %v", s.chain)
 }
 
 // resolveKey dispatches one key. Callers hold s.mu.
-func (s *Service) resolveKey(key string, size int, light bool) (string, bool) {
+func (s *Service) resolveKey(key string, size int) (string, bool) {
 	switch {
 	case key == keyDir:
-		return s.materialDirIcon(light)
+		for _, name := range [...]string{"folder", "inode-directory"} {
+			if uri, ok := s.iconForName(name, size); ok {
+				return uri, true
+			}
+		}
 	case strings.HasPrefix(key, keyFilePrefix):
-		return s.materialFileIcon(key[len(keyFilePrefix):], light)
+		mime := s.mime.MimeForName(key[len(keyFilePrefix):])
+		for _, name := range s.mime.IconNames(mime) {
+			if uri, ok := s.iconForName(name, size); ok {
+				return uri, true
+			}
+		}
 	case strings.HasPrefix(key, keyAppPrefix):
 		return s.appIcon(key[len(keyAppPrefix):], size)
 	}

@@ -35,8 +35,11 @@ func (r *logRecorder) joined() string {
 
 func TestResolveKeyProtocol(t *testing.T) {
 	f := newFixture(t)
+	writeMimeFile(t, f.data, "globs2", "50:application/pdf:*.pdf\n")
 	f.writeTheme(t, "TestTheme", fixed16Index)
-	app := []byte("appicon")
+	pdf, folder, app := []byte("pdficon"), []byte("foldericon"), []byte("appicon")
+	f.writeIcon(t, "TestTheme/16x16/apps/application-pdf.png", pdf)
+	f.writeIcon(t, "TestTheme/16x16/apps/folder.png", folder)
 	f.writeIcon(t, "TestTheme/16x16/apps/gimp.png", app)
 	svc := NewService(f.options(t))
 
@@ -45,8 +48,8 @@ func TestResolveKeyProtocol(t *testing.T) {
 		"bogus", "nope:x", "file:", "app:", "", "dir", // junk + a duplicate
 	}, 16)
 	require.Equal(t, map[string]string{
-		"dir":             matURI(t, "folder.svg"),
-		"file:report.pdf": matURI(t, "pdf.svg"),
+		"dir":             pngURI(folder),
+		"file:report.pdf": pngURI(pdf),
 		"app:gimp":        pngURI(app),
 	}, got, "the three key forms resolve; unknown/malformed keys are absent; duplicates collapse")
 }
@@ -57,6 +60,34 @@ func TestResolveEmptyKeys(t *testing.T) {
 	got := svc.Resolve(nil, 16)
 	require.NotNil(t, got)
 	require.Empty(t, got)
+}
+
+func TestResolveDirFallsToInodeDirectory(t *testing.T) {
+	f := newFixture(t)
+	f.writeTheme(t, "TestTheme", fixed16Index)
+	inode := []byte("inode")
+	f.writeIcon(t, "TestTheme/16x16/apps/inode-directory.png", inode)
+	svc := NewService(f.options(t))
+	require.Equal(t, pngURI(inode), svc.Resolve([]string{"dir"}, 16)["dir"],
+		"no folder icon: inode-directory is the second candidate")
+}
+
+func TestResolveFileIconChain(t *testing.T) {
+	f := newFixture(t)
+	writeMimeFile(t, f.data, "globs2", "50:application/pdf:*.pdf\n50:text/x-go:*.go\n")
+	writeMimeFile(t, f.data, "generic-icons", "application/pdf:x-office-document\n")
+	f.writeTheme(t, "TestTheme", fixed16Index)
+	office, textgen := []byte("office"), []byte("textgen")
+	f.writeIcon(t, "TestTheme/16x16/apps/x-office-document.png", office)
+	f.writeIcon(t, "TestTheme/16x16/apps/text-x-generic.png", textgen)
+	svc := NewService(f.options(t))
+
+	got := svc.Resolve([]string{"file:report.pdf", "file:main.go", "file:mystery.zzz"}, 16)
+	require.Equal(t, pngURI(office), got["file:report.pdf"],
+		"no application-pdf icon: the generic-icons entry is next in the chain")
+	require.Equal(t, pngURI(textgen), got["file:main.go"],
+		"no text-x-go icon: the media-class generic is the last link")
+	require.NotContains(t, got, "file:mystery.zzz", "unknown mimetype = honest miss")
 }
 
 func TestResolveSizeClamping(t *testing.T) {
@@ -229,10 +260,13 @@ func TestGsettingsRunsOnceWithDeadline(t *testing.T) {
 
 func TestResolveConcurrent(t *testing.T) {
 	f := newFixture(t)
+	writeMimeFile(t, f.data, "globs2", "50:application/pdf:*.pdf\n")
 	f.writeTheme(t, "TestTheme", fixed16Index)
+	pdf, folder := []byte("pdf"), []byte("folder")
+	f.writeIcon(t, "TestTheme/16x16/apps/application-pdf.png", pdf)
+	f.writeIcon(t, "TestTheme/16x16/apps/folder.png", folder)
 	svc := NewService(f.options(t))
 
-	folder, pdf := matURI(t, "folder.svg"), matURI(t, "pdf.svg")
 	var wg sync.WaitGroup
 	for g := 0; g < 8; g++ {
 		wg.Add(1)
@@ -240,8 +274,8 @@ func TestResolveConcurrent(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 50; i++ {
 				got := svc.Resolve([]string{"dir", "file:a.pdf", "app:missing", "bogus"}, 16)
-				assert.Equal(t, folder, got["dir"])
-				assert.Equal(t, pdf, got["file:a.pdf"])
+				assert.Equal(t, pngURI(folder), got["dir"])
+				assert.Equal(t, pngURI(pdf), got["file:a.pdf"])
 				assert.NotContains(t, got, "app:missing")
 				assert.NotContains(t, got, "bogus")
 			}
@@ -252,16 +286,13 @@ func TestResolveConcurrent(t *testing.T) {
 
 // TestNewServiceDefaults exercises every default seam (real env, real
 // gsettings exec bounded to 3s, real data dirs): whatever the host
-// looks like, unknown keys stay absent, file keys serve the embedded
-// pack (unknown extensions land on the default icon), and nothing
-// crashes.
+// looks like, unknown keys stay absent and nothing crashes.
 func TestNewServiceDefaults(t *testing.T) {
 	svc := NewService(Options{})
 	got := svc.Resolve([]string{"nonsense-key", "file:x.zzznotreal"}, 16)
 	require.NotNil(t, got)
 	require.NotContains(t, got, "nonsense-key")
-	require.Equal(t, matURI(t, "file.svg"), got["file:x.zzznotreal"],
-		"unknown extension = the pack's default file icon")
+	require.NotContains(t, got, "file:x.zzznotreal")
 }
 
 func TestLRU(t *testing.T) {

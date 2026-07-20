@@ -19,16 +19,6 @@ against the deterministic fixture tree CI uses (see `.github/scripts/`).
 CI re-captures three screenshots like this on every push and uploads
 them as run artifacts for visual comparison.
 
-## File-type icons
-
-- File rows show recognizable per-extension icons (folders, Go, TS,
-  JSON, PDF, images, ...), embedded in the binary and identical on
-  every OS; unknown types get a neutral default, and the light theme
-  swaps in the pack's light variants where it provides them.
-- Icons are from the
-  [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme)
-  (MIT), vendored at a pinned commit under `internal/icons/material/`.
-
 ## Install
 
 Every fully green CI run publishes one release carrying the binaries

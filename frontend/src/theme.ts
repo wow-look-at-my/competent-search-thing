@@ -8,7 +8,7 @@
 // themes/ directory changes, and everything is re-fetched and
 // re-applied -- theme edits show up live.
 
-import { clearIconCache } from "./render";
+import { isLightBackground } from "./fileicons/fileicons";
 
 const TOKEN_PREFIX = "--sb-";
 const CUSTOM_STYLE_ID = "sb-custom-css";
@@ -31,6 +31,15 @@ function applyTokens(tokens: Record<string, string>): void {
     }
   }
   appliedTokens = next;
+  // Select the file-icon colour variant from the background this
+  // theme carries (the file-icons pack's own light/dark motif rule);
+  // fileicons.css keys every glyph colour on this class, so a live
+  // theme switch recolors already-rendered rows with zero re-renders.
+  // Re-runs on every "theme:changed" refetch via fetchAndApply.
+  document.documentElement.classList.toggle(
+    "icons-light",
+    isLightBackground(tokens["bg"] ?? ""),
+  );
 }
 
 function applyCustomCSS(css: string): void {
@@ -55,19 +64,13 @@ async function fetchAndApply(app: WailsAppBindings): Promise<void> {
 
 // initTheme applies the configured theme immediately and re-applies it
 // on every "theme:changed" runtime event. Failures are logged and
-// leave the current (or the CSS-fallback dark) look in place. A theme
-// change also drops the frontend's resolved-icon cache: the Material
-// file-type icons vary per theme (light variants), so the next render
-// must re-ask Go instead of reusing the old theme's answers.
+// leave the current (or the CSS-fallback dark) look in place.
 export function initTheme(app: WailsAppBindings, rt: WailsRuntime): void {
   const refresh = (): void => {
     fetchAndApply(app).catch((err: unknown) => {
       console.error("theme: applying failed:", err);
     });
   };
-  rt.EventsOn("theme:changed", () => {
-    clearIconCache();
-    refresh();
-  });
+  rt.EventsOn("theme:changed", refresh);
   refresh();
 }

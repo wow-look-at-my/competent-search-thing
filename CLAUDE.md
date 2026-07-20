@@ -164,15 +164,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   hatch, default ON per the never-below-60 ruling),
   builds the icon resolver once (icons.go in this package:
   the `newIcons` builder seam, production buildIcons =
-  icons.NewService over its defaults plus Options.Theme = iconTheme
-  (fresh config.Load per resolve batch, the translucent.go
-  standalone-read pattern; any error = "" = the dark icon set) so a
-  live theme switch serves the Material pack's light variants --
-  zero IO at build, the first
+  icons.NewService over its defaults -- zero IO at build, the first
   Resolve pays initialization -- behind the bound
   `ResolveIcons(keys, size) map[string]string`, which the frontend
-  calls with batched per-render icon keys (file rows and plugin rows
-  alike); nil resolver (newTestApp)
+  calls with batched per-render icon keys; nil resolver (newTestApp)
   = empty non-nil maps, and resolution runs on the bound method's own
   goroutine so the query path never waits on icon IO), wires the
   single-instance IPC handlers when Options.IPC is set (Toggle =
@@ -2222,38 +2217,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   dir and external command sits behind Options seams). Key protocol
   (the frontend wire contract): "dir", "file:<basename>",
   "app:<ref>". NewService does NO IO; the first Resolve pays
-  initialization (gsettings/settings.ini theme detection + the
-  embedded pack parse), and everything is served through a positive +
-  negative (name|size)->URI LRU (512 entries each) under one mutex.
-  FILE-TYPE half (fileicons.go + material/): the "dir" and
-  "file:<basename>" keys serve the vendored Material Icon Theme
-  subset (MIT, pinned upstream commit + regen recipe in
-  material/README.md; go:embed of material/svg/*.svg +
-  material/mapping.json ONLY -- never tools/ or the docs; the mapping
-  is machine-derived from upstream fileIcons.ts by the committed
-  material/tools/convert.mjs, an internal single-party format with
-  deliberately NO schema in schemas/, the history.json stance).
-  Resolution: lowercase basename -> fileNames table (Dockerfile,
-  go.mod, package.json...) -> dotted suffixes longest-first
-  ("test.tsx" beats "tsx") -> the pack default file icon, so only the
-  empty "file:" misses; "dir" = the pack folder icon; SVG data URIs,
-  size-independent. Options.Theme (nil -> "") is consulted ONCE per
-  Resolve batch OUTSIDE the mutex: exactly the builtin "light"
-  selects the mapping-flagged <name>_light.svg variants (cache keys
-  carry the variant FILE name, "mat:<file>", so both variants
-  coexist and a live flip re-resolves). loadMaterial parses the
-  embed once per process; fileicons_test.go holds the integrity
-  gates (every mapping value has its embedded SVG, light entries
-  their _light twin, no unreachable embedded file, pure ASCII,
-  per-file 22 KiB + total 512 KiB balloon tripwires -- re-measure
-  and bump deliberately on a pack refresh, never blindly).
-  Linux/freedesktop half (#37), now serving the "app:" keys only:
-  theme.go/lookup.go -- the detected GTK theme + Inherits chain +
-  Adwaita/hicolor, exact size match then closest, then
-  unthemed/pixmap fallbacks; absolute .png/.svg refs served directly;
-  1 MiB MaxFileBytes cap. (mimedb.go, the shared-mime-info reader the
-  old freedesktop file: path consumed, stays in place exercised by
-  its own tests only.) Darwin half
+  initialization (mime-db load + gsettings/settings.ini theme
+  detection), and everything is served through a positive + negative
+  (name|size)->URI LRU (512 entries each) under one mutex.
+  Linux/freedesktop half (#37): theme.go/lookup.go/mimedb.go -- the
+  detected GTK theme + Inherits chain + Adwaita/hicolor, exact size
+  match then closest, then unthemed/pixmap fallbacks; absolute
+  .png/.svg refs served directly; 1 MiB MaxFileBytes cap. Darwin half
   (bundle.go + plist.go + icns.go): an "app:" ref that is an ABSOLUTE
   path ending ".app" (case-insensitive -- the ref SHAPE selects the
   branch, so fixture bundles test it on any OS) resolves
@@ -3195,34 +3165,26 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   re-matching (the old indexOf highlight is gone; renderResults no
   longer takes the query) -- file rows with the highlighted match + dim parent dir (a
   non-empty result hint replaces the parent-dir text -- the
-  outside-indexed-roots note) and a .file-icon span wrapping the
-  cloned template glyph as the INSTANT placeholder, requestIcon'd
-  with fileIconKey(name, isDir) ("dir" / "file:"+name -- the pure
-  exported builder, render-icons.test.ts) so the Material per-type
-  icon swaps in via the same batched path plugin rows use; plugin
+  outside-indexed-roots note); plugin
   sections -- unselectable header, rows with icon/title/dim
   subtitle/badge/"label: value" fields; the builtin icon-name -> glyph
   map (calculator globe clock star info warning link terminal text
   hash bolt app puzzle; unknown/absent -> puzzle, non-name values
-  render as literal glyphs); REAL resolved icons (file rows' pack
-  icons AND app icons): a plugin row whose result
+  render as literal glyphs); REAL app icons: a row whose result
   carries the internal-only iconKey renders its glyph, requestIcon
   batches the pending keys per render tick (queueMicrotask) through
   the bound ResolveIcons(keys, 64), and setIconImage swaps the glyph
   span's content for an <img class="plugin-icon-img"> whose src is
   the Go-minted data URI -- a DOM-node build with a property-assigned
   src, NOT a second innerHTML sink; answers (misses included) land in
-  a module-level cache (cleared past 512 keys; the exported
-  clearIconCache drops it -- theme.ts calls it on "theme:changed"
-  because the Go answers are theme-variant aware), stale rows are
+  a module-level cache (cleared past 512 keys), stale rows are
   skipped via isConnected, and a missing binding/miss leaves the
   glyph standing; accent_color is ONLY ever applied by
   setting the `--plugin-accent` custom property on the row -- never
   inline color styles) + `src/theme.ts` (initTheme called first in
   wire(): fetches GetTheme and sets each token as `--sb-<k>` on
   <html>, injects GetCustomCSS as the text of the single managed
-  `<style id="sb-custom-css">`, refetches on "theme:changed" --
-  clearing render.ts's icon cache first) +
+  `<style id="sb-custom-css">`, refetches on "theme:changed") +
   `src/style.css` (Spotlight-ish bar, dark by default; dir ellipsizes
   before the name; thin scrollbar; ALL colors/sizes/effects flow
   through var(--sb-*) -- the :root block holds the dark fallbacks and

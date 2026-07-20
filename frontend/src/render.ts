@@ -1,11 +1,14 @@
 // DOM construction for the results list: one row per file hit with a
-// folder/file glyph (cloned from the <template> elements in
-// index.html), the entry name with the matched substring highlighted,
-// and the dimmed parent directory -- plus the plugin sections that
-// render in the two plugin zones (priority > 0 above the file rows,
-// everything else below; header + rows cloned from templates, icon
-// glyph map, whitelisted --plugin-accent styling hook). Pure
-// text-node builders throughout: nothing here can inject markup.
+// per-file-type icon glyph (resolved synchronously by
+// fileicons/fileicons.ts from the vendored file-icons pack), the
+// entry name with the matched substring highlighted, and the dimmed
+// parent directory -- plus the plugin sections that render in the two
+// plugin zones (priority > 0 above the file rows, everything else
+// below; header + rows cloned from templates, icon glyph map,
+// whitelisted --plugin-accent styling hook). Pure text-node builders
+// throughout: nothing here can inject markup.
+
+import { fileIcon } from "./fileicons/fileicons";
 
 // RowHandlers receive the ROW ELEMENT, not a captured index: handler
 // indices are resolved at EVENT time (main.ts does rows.indexOf), so
@@ -19,10 +22,29 @@ export interface RowHandlers {
   onActivate(row: HTMLDivElement, reveal: boolean): void;
 }
 
-const folderTpl = document.getElementById(
-  "tpl-icon-folder",
-) as HTMLTemplateElement;
-const fileTpl = document.getElementById("tpl-icon-file") as HTMLTemplateElement;
+// The tpl-icon-folder/file <template>s stay in index.html for the
+// preview pane's dir listing; file ROWS render fileicons glyphs
+// instead (buildFileGlyph below), so render.ts no longer clones them.
+
+// buildFileGlyph builds one row's icon span: the resolved glyph
+// character in its icon-font class, coloured EXCLUSIVELY through the
+// --fi-dark/--fi-light custom properties (the --plugin-accent
+// precedent -- never inline color styles; fileicons.css consumes them
+// per the html.icons-light motif class). Synchronous: no ResolveIcons
+// round-trip for file rows.
+export function buildFileGlyph(name: string, isDir: boolean): HTMLSpanElement {
+  const icon = fileIcon(name, isDir);
+  const el = document.createElement("span");
+  el.className = "icon file-glyph " + icon.font;
+  el.textContent = icon.glyph;
+  if (icon.colorDark !== undefined) {
+    el.style.setProperty("--fi-dark", icon.colorDark);
+  }
+  if (icon.colorLight !== undefined) {
+    el.style.setProperty("--fi-light", icon.colorLight);
+  }
+  return el;
+}
 
 // parentDir strips the trailing name component from a path, tolerating
 // both separator styles so Windows paths render sensibly too.
@@ -103,21 +125,11 @@ export function highlightedName(
   return span;
 }
 
-// fileIconKey builds the ResolveIcons key for a file row (the
-// internal/icons wire protocol): directories share the one "dir"
-// folder icon, files resolve per basename.
-export function fileIconKey(name: string, isDir: boolean): string {
-  return isDir ? "dir" : "file:" + name;
-}
-
 // renderResults replaces container's children with one row per item
 // and returns the row elements for the selection model to drive. The
 // "No matches" empty state is owned by main.ts (the static #empty
 // element): it depends on the plugin sections too, which arrive after
-// the file response. Each row's template glyph doubles as the instant
-// placeholder for the real per-file-type icon: the glyph is wrapped
-// in a .file-icon span and the batched ResolveIcons answer swaps in
-// the Material pack image exactly like plugin-row app icons.
+// the file response.
 export function renderResults(
   container: HTMLElement,
   items: WailsSearchResult[],
@@ -130,12 +142,7 @@ export function renderResults(
     row.className = "result";
     row.setAttribute("role", "option");
 
-    const tpl = item.isDir ? folderTpl : fileTpl;
-    const iconWrap = document.createElement("span");
-    iconWrap.className = "file-icon";
-    iconWrap.append(tpl.content.cloneNode(true));
-    row.append(iconWrap);
-    requestIcon(iconWrap, fileIconKey(item.name, item.isDir));
+    row.append(buildFileGlyph(item.name, item.isDir));
     row.append(highlightedName(item.name, item.matchRanges));
 
     const dir = document.createElement("span");
@@ -292,15 +299,6 @@ const ICON_SIZE = 64;
 const iconUriCache = new Map<string, string>(); // key -> data URI ("" = known miss)
 let pendingIconEls = new Map<string, HTMLSpanElement[]>();
 let iconFlushQueued = false;
-
-// clearIconCache drops every cached ResolveIcons answer. theme.ts
-// calls it on "theme:changed": the Material file-type icons are
-// theme-variant aware Go-side, so a live theme switch must re-resolve
-// instead of serving the other theme's cached variants. Already
-// rendered rows keep their images until the next render.
-export function clearIconCache(): void {
-  iconUriCache.clear();
-}
 
 // setIconImage swaps a glyph span's content for the resolved image.
 function setIconImage(el: HTMLSpanElement, uri: string): void {
