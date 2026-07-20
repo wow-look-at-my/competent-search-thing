@@ -29,7 +29,7 @@ func fileRecord(query, path string) Record {
 		Shown: []ShownRow{
 			{Rank: 0, Kind: KindFile, Path: path, Class: 1, EffClass: 0, Align: 0,
 				Boost: 2.31, Recency: 0.42, Penalty: 0.1, Depth: 4, Ext: ".md"},
-			{Rank: 1, Kind: KindPlugin, Plugin: "apps-search", Score: 90},
+			{Rank: 1, Kind: KindPlugin, Plugin: "apps-search", Score: 90, Title: "Reports App"},
 		},
 		Picked: PickedRow{Rank: 0, Kind: KindFile, Path: path, Action: ActionOpen},
 	}
@@ -93,7 +93,8 @@ func TestShownRowMarshalIsKindShaped(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, map[string]any{
 		"rank": float64(1), "kind": "plugin", "plugin": "apps-search", "score": float64(90),
-	}, plug, "plugin rows carry exactly rank/kind/plugin/score")
+		"title": "Reports App",
+	}, plug, "plugin rows carry exactly rank/kind/plugin/score/title -- the title is logged in full")
 }
 
 func TestAppendPreservesExplicitVersionAndTS(t *testing.T) {
@@ -184,7 +185,7 @@ func TestValidatePickReport(t *testing.T) {
 		Query: "rep",
 		Shown: []ShownRef{
 			{Kind: KindFile, Path: "/home/u/a.txt"},
-			{Kind: KindPlugin, Plugin: "calc", Score: 90},
+			{Kind: KindPlugin, Plugin: "calc", Score: 90, Title: "2 + 2 = 4"},
 		},
 		Picked: PickedRef{Rank: 0, Action: ActionOpen},
 	}
@@ -213,6 +214,8 @@ func TestValidatePickReport(t *testing.T) {
 		"long file path":     mutate(func(r *PickReport) { r.Shown[0].Path = "/" + strings.Repeat("p", maxPathBytes) }),
 		"file with plugin":   mutate(func(r *PickReport) { r.Shown[0].Plugin = "calc" }),
 		"file with score":    mutate(func(r *PickReport) { r.Shown[0].Score = 10 }),
+		"file with title":    mutate(func(r *PickReport) { r.Shown[0].Title = "sneaky" }),
+		"oversized title":    mutate(func(r *PickReport) { r.Shown[1].Title = strings.Repeat("t", maxTitleBytes+1) }),
 		"bad plugin id":      mutate(func(r *PickReport) { r.Shown[1].Plugin = "no spaces" }),
 		"plugin with path":   mutate(func(r *PickReport) { r.Shown[1].Path = "/x" }),
 		"score too high":     mutate(func(r *PickReport) { r.Shown[1].Score = 101 }),

@@ -88,7 +88,10 @@ func tabsEmission() plugin.Emission {
 
 func TestStartArbiterDisabledIsInert(t *testing.T) {
 	m, _, _ := priorsFixture(t)
-	a, _ := newTestApp(t, m, Options{Frecency: config.DefaultFrecency()})
+	a, _ := newTestApp(t, m, Options{
+		Frecency: config.DefaultFrecency(),
+		Arbiter:  config.ArbiterConfig{Disabled: true},
+	})
 	a.Startup(context.Background())
 	require.False(t, a.arbiterConfigured())
 	b := m.Blend()
@@ -106,10 +109,7 @@ func TestStartArbiterDisabledIsInert(t *testing.T) {
 
 func TestArbiterGateKeepsThinLogInert(t *testing.T) {
 	m, one, two := priorsFixture(t)
-	a, _ := newTestApp(t, m, Options{
-		Frecency: config.DefaultFrecency(),
-		Arbiter:  config.ArbiterConfig{Enabled: true},
-	})
+	a, _ := newTestApp(t, m, Options{Frecency: config.DefaultFrecency()})
 	seedArbLog(t, repeatLines(10, func() string { return arbTabPickLine(nowTS(), one) }), false)
 	a.Startup(context.Background())
 	require.True(t, a.arbiterConfigured())
@@ -130,10 +130,7 @@ func TestArbiterGateKeepsThinLogInert(t *testing.T) {
 
 func TestArbiterActivatesAndArbitratesAcrossSources(t *testing.T) {
 	m, one, _ := priorsFixture(t)
-	a, _ := newTestApp(t, m, Options{
-		Frecency: config.DefaultFrecency(),
-		Arbiter:  config.ArbiterConfig{Enabled: true},
-	})
+	a, _ := newTestApp(t, m, Options{Frecency: config.DefaultFrecency()})
 	seedArbLog(t, repeatLines(260, func() string { return arbTabPickLine(nowTS(), one) }), false)
 	a.Startup(context.Background())
 	l := a.arbLayer()
@@ -186,10 +183,7 @@ func TestArbiterFileSeamPrefersLearnedExtension(t *testing.T) {
 	require.NoError(t, m.Add(root, "report_a.txt", false))
 	require.NoError(t, m.Add(root, "report_bb.md", false))
 
-	a, _ := newTestApp(t, m, Options{
-		Frecency: config.DefaultFrecency(),
-		Arbiter:  config.ArbiterConfig{Enabled: true},
-	})
+	a, _ := newTestApp(t, m, Options{Frecency: config.DefaultFrecency()})
 	seedArbLog(t, repeatLines(260, func() string { return arbExtPickLine(nowTS(), txt, md) }), false)
 	require.Equal(t, []string{txt, md}, searchPaths(a, "rep"), "pre-arbiter engine order")
 	a.Startup(context.Background())
@@ -204,21 +198,24 @@ func TestArbiterFileSeamPrefersLearnedExtension(t *testing.T) {
 
 func TestApplyArbiterLiveToggle(t *testing.T) {
 	m, one, _ := priorsFixture(t)
-	a, _ := newTestApp(t, m, Options{Frecency: config.DefaultFrecency()})
+	a, _ := newTestApp(t, m, Options{
+		Frecency: config.DefaultFrecency(),
+		Arbiter:  config.ArbiterConfig{Disabled: true},
+	})
 	seedArbLog(t, repeatLines(10, func() string { return arbTabPickLine(nowTS(), one) }), false)
 	a.Startup(context.Background())
 	require.False(t, a.arbiterConfigured())
-	seedBaseline(a, config.Default())
+	off := config.Default()
+	off.Search.Arbiter.Disabled = true
+	seedBaseline(a, off)
 
 	next := config.Default()
-	next.Search.Arbiter.Enabled = true
 	res := a.applyConfig(&next, "test")
 	require.Contains(t, res.Applied, "search.arbiter")
 	require.Empty(t, res.Errors)
-	require.True(t, a.arbiterConfigured(), "enable brings the layer up live")
+	require.True(t, a.arbiterConfigured(), "clearing the escape hatch brings the layer up live")
 	require.NotNil(t, m.Blend().Model)
 
-	off := config.Default()
 	res = a.applyConfig(&off, "test")
 	require.Contains(t, res.Applied, "search.arbiter")
 	require.False(t, a.arbiterConfigured(), "disable swaps the layer out live")
@@ -231,7 +228,7 @@ func TestApplyArbiterLiveToggle(t *testing.T) {
 
 func TestNoteArbiterPickKicksRetrain(t *testing.T) {
 	m, one, _ := priorsFixture(t)
-	a, _ := newTestApp(t, m, Options{Arbiter: config.ArbiterConfig{Enabled: true}})
+	a, _ := newTestApp(t, m, Options{})
 	seedArbLog(t, repeatLines(10, func() string { return arbTabPickLine(nowTS(), one) }), false)
 	a.Startup(context.Background())
 	l := a.arbLayer()
@@ -251,7 +248,7 @@ func TestNoteArbiterPickKicksRetrain(t *testing.T) {
 func TestArbiterReadErrorDegrades(t *testing.T) {
 	// telemetry.jsonl as a DIRECTORY is the real-IO-error shape: the
 	// refresh logs once and trains on nothing (inert, 0 picks).
-	a, _ := newTestApp(t, nil, Options{Arbiter: config.ArbiterConfig{Enabled: true}})
+	a, _ := newTestApp(t, nil, Options{})
 	dir, err := config.Dir()
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, arbiterLogName), 0o755))
