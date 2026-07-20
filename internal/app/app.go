@@ -102,6 +102,10 @@ type Options struct {
 	// search.frecency here; see frecency.go). Weights arrive
 	// Normalize-repaired; Disabled leaves the whole layer unwired.
 	Frecency config.FrecencyConfig
+	// Telemetry configures the opt-in local ranking telemetry log
+	// (wire config's search.telemetry here; see telemetry.go in this
+	// package). The zero value keeps the whole feature off.
+	Telemetry config.TelemetryConfig
 	// Preview is the preview pane configuration (wire config's
 	// preview section here); the zero value keeps the pane off and
 	// every preview method degrades to a no-op. See preview.go.
@@ -274,6 +278,18 @@ type App struct {
 	frecBlend   index.Blend
 	frecWG      sync.WaitGroup
 
+	// Ranking telemetry (see telemetry.go in this package): the
+	// opt-in local impression/pick log. tel stays nil unless config
+	// search.telemetry.enabled turned the feature on -- RecordPick
+	// and the Search-side signals trace are then no-ops, today's
+	// exact query path. telWG tracks the async appends so Shutdown
+	// drains them (the frecWG pattern).
+	telOnce    sync.Once
+	telErrOnce sync.Once
+	telMu      sync.Mutex // guards tel
+	tel        *telemetryLayer
+	telWG      sync.WaitGroup
+
 	// rt and plat are seams over the Wails runtime and the platform
 	// layer. Production fills them in New; unit tests MUST replace
 	// every rt member before driving code that reaches it (the real
@@ -349,6 +365,7 @@ func (a *App) Startup(ctx context.Context) {
 	a.previewOnce.Do(a.startPreview)
 	a.histOnce.Do(a.startHistory)
 	a.frecOnce.Do(a.startFrecency)
+	a.telOnce.Do(a.startTelemetry)
 	a.themeOnce.Do(a.startThemeWatch)
 	// The progress printer exists before the build kick: the walk's
 	// first tick can arrive immediately.
@@ -573,6 +590,11 @@ func (a *App) Shutdown(_ context.Context) {
 	// here and none of them can block indefinitely.
 	a.frecWG.Wait()
 
+	// Same for the telemetry appends (telemetry.go): each is one
+	// bounded file append; a pick recorded moments before quit still
+	// lands in the log.
+	a.telWG.Wait()
+
 	// Restore the standard logger LAST: in TTY mode installProgressLog
 	// pointed it at the printer, and keeping that interception through
 	// the teardown above let every log line up to here interleave
@@ -601,7 +623,10 @@ func (a *App) Search(query string) []Result {
 	if q == "" || a.manager == nil {
 		return []Result{}
 	}
-	res := a.manager.Query(q, 0)
+	// Exactly Manager.Query while ranking telemetry is off (the
+	// default); enabled, the query also captures its ranking signals
+	// for a later RecordPick join (see telemetry.go).
+	res := a.queryWithTelemetry(q)
 	if len(res) == 0 {
 		if r, ok := a.outsideRootsHint(q); ok {
 			return []Result{r}

@@ -16,7 +16,8 @@ import (
 // preview.openai.model; a negative watcher.sweepMinutes becomes 0 =
 // the built-in cadence; the search.frecency numbers repair only
 // exact zeros -- negatives are the documented per-signal off switch
-// there), the window size gets its defaults when unset and is clamped
+// there; a non-positive search.telemetry.maxSizeKB gets its
+// default), the window size gets its defaults when unset and is clamped
 // up to the minimum floors when set too small, an empty theme name
 // gets the default theme, watcher.backend is lowercased and repaired
 // to "auto" when empty or unknown, nil plugin entries and bang
@@ -112,6 +113,9 @@ func (c *Config) Normalize() {
 	}
 	if fr.TierJumpCount == 0 {
 		fr.TierJumpCount = DefaultFrecencyTierJump
+	}
+	if c.Search.Telemetry.MaxSizeKB <= 0 {
+		c.Search.Telemetry.MaxSizeKB = DefaultTelemetryMaxSizeKB
 	}
 	w := &c.Window
 	switch {
