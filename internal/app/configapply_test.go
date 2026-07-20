@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/config"
@@ -148,15 +149,15 @@ func TestApplyTableCoversEveryConfigSection(t *testing.T) {
 		if rows[tag] {
 			continue // covered whole (one row diffs the section)
 		}
-		if !subRows[tag] {
-			t.Errorf("config section %q has no sectionAppliers row (live-apply is total; add an applier or an excluded ruling)", tag)
+		if !assert.True(t, subRows[tag],
+			"config section %q has no sectionAppliers row (live-apply is total; add an applier or an excluded ruling)", tag) {
 			continue
 		}
 		// Applied at per-knob grain: EVERY subfield needs its own row,
 		// or a new knob inside the section escapes the diff silently
 		// (the search.telemetry gap).
-		if f.Type.Kind() != reflect.Struct {
-			t.Errorf("config section %q has sub-grain rows but is not a struct", tag)
+		if !assert.Equal(t, reflect.Struct, f.Type.Kind(),
+			"config section %q has sub-grain rows but is not a struct", tag) {
 			continue
 		}
 		for j := 0; j < f.Type.NumField(); j++ {
@@ -164,9 +165,8 @@ func TestApplyTableCoversEveryConfigSection(t *testing.T) {
 			if stag == "" || stag == "-" {
 				continue
 			}
-			if !rows[tag+"."+stag] {
-				t.Errorf("config knob %q has no sectionAppliers row while %q applies per-knob (the search.telemetry gap, PR #46)", tag+"."+stag, tag)
-			}
+			assert.True(t, rows[tag+"."+stag],
+				"config knob %q has no sectionAppliers row while %q applies per-knob (the search.telemetry gap, PR #46)", tag+"."+stag, tag)
 		}
 	}
 }
