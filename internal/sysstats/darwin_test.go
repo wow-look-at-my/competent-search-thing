@@ -544,7 +544,7 @@ func TestDarwinSwapZeroTotalIsValid(t *testing.T) {
 	s := newDarwinSampler(fake, lr, &fakeClock{t: time.Unix(1000, 0)})
 	s.sample()
 	snap := s.Snapshot()
-	require.True(t, snap.SwapOK, "empty dynamic swap is a valid answer (dash)")
+	require.True(t, snap.SwapOK, "empty dynamic swap is a valid answer (the frontend renders 0M, never a dash)")
 	require.Zero(t, snap.SwapTotal)
 	require.Zero(t, snap.SwapUsed)
 }

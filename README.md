@@ -2158,7 +2158,8 @@ Per metric honesty, on Linux:
 
 - **CPU, memory, swap, network** are read from `/proc/stat`,
   `/proc/meminfo`, and `/proc/net/dev`. A swap total of zero (no swap
-  configured) renders as a dash.
+  configured) renders as `0M` -- a live zero is a value; only a
+  failed source shows a dash.
 - **GPU** is best-effort per hardware: AMD exposes a cheap sysfs busy
   file (`gpu_busy_percent`), read on the fast path; NVIDIA has no
   sysfs equivalent, so `nvidia-smi` is polled on a separate slow loop
@@ -2179,7 +2180,7 @@ On macOS the row is live too, from spawn-free system calls:
   will diff the row against -- "total - free" would overstate wildly,
   because macOS keeps `free_count` tiny by design (file cache).
 - **Swap** is the `vm.swapusage` sysctl. macOS swap is dynamic: while
-  it is empty the total reports 0 and the row shows a dash, exactly
+  it is empty the total reports 0 and the row shows `0M`, exactly
   like a swapless Linux box.
 - **Network** sums the 64-bit per-interface byte counters from the
   `NET_RT_IFLIST2` routing sysctl. Loopback and Apple's

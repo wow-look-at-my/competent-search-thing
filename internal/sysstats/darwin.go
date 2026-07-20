@@ -110,7 +110,8 @@ func memFromVMStat(v vmStat64) uint64 {
 // XswUsage type, so the offsets are fixed here: 0 total, 8 avail,
 // 16 used, minimum length 24. A zero total is the valid "no swap in
 // use" answer (macOS swap is dynamic), which the frontend renders as
-// a dash per the SwapOK contract.
+// the live "0M" value per the SwapOK contract -- only SwapOK=false
+// (a dead source) earns the dash.
 func decodeXswUsage(raw []byte) (total, used uint64, err error) {
 	if len(raw) < 24 {
 		return 0, 0, fmt.Errorf("xsw_usage payload is %d bytes, need at least 24", len(raw))
@@ -246,8 +247,8 @@ func (s *Sampler) sampleCPUDarwin(snap *Snapshot, now time.Time) {
 // hw.memsize + the vm_statistics64 derivation (memFromVMStat, the
 // Activity Monitor "Memory Used" definition) for memory, the
 // vm.swapusage sysctl for swap. Each side degrades alone, and a swap
-// total of zero is the valid no-swap answer (dash), which is exactly
-// what macOS's dynamic swap reports while empty.
+// total of zero is the valid no-swap answer (rendered as "0M"), which
+// is exactly what macOS's dynamic swap reports while empty.
 func (s *Sampler) sampleMemDarwin(snap *Snapshot) {
 	switch {
 	case s.dwn.memTotal == nil || s.dwn.vmStat == nil:

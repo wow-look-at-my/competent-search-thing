@@ -1292,7 +1292,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   pageSize -- NOT total-free, which macOS's tiny free_count makes
   meaningless), decodeXswUsage (vm.swapusage xsw_usage: LE uint64s
   at 0/8/16, min len 24; total 0 = the valid empty-dynamic-swap
-  dash), decodeIfList2 (bounds-checked NET_RT_IFLIST2 walker, the
+  zero, rendered 0M), decodeIfList2 (bounds-checked NET_RT_IFLIST2 walker, the
   fanotify_parse pattern: 4-byte prologue, advance by ifm_msglen,
   RTM_IFINFO2=0x12 records read ifm_index@12 + if_data64 64-bit
   ibytes/obytes@96/104; malformed lengths error, zero usable records
@@ -1335,7 +1335,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   aggregate fields (guest/guest_nice excluded, already inside
   user/nice), pct clamped 0..100; mem used = MemTotal - MemAvailable
   (missing MemAvailable = MemOK false; kB * 1024 = bytes); swap =
-  SwapTotal/SwapFree, total 0 valid (SwapOK true, dash); net = sum of
+  SwapTotal/SwapFree, total 0 valid (SwapOK true, rendered 0M); net =
+  sum of
   rx/tx bytes over real interfaces -- "lo" exact plus the virtual
   prefixes veth/docker/br-/virbr/vnet/tap/tun/wg/zt/dummy/ifb/kube/
   cni/flannel/cali skipped, eth/en/wl/ww/bond kept. Per-metric
@@ -2453,8 +2454,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   before render.ts's module-load template grabs, so the DOM-order
   tests fail if the zones/templates change shape; src/priority.test.ts
   pins priority-above-files rendering, the flat traversal order, and
-  the reconcileSelection rules -- run in the CI linux job's frontend
-  step). `index.html`
+  the reconcileSelection rules, and src/stats.test.ts pins the stats
+  formatters + renderStats' dash-vs-value rules -- run in the CI
+  linux job's frontend step). `index.html`
   (query row with inline SVG magnifier + hidden bang chip; #results
   split into #priority-results (plugin sections with priority > 0,
   ABOVE the files) / #file-results / static #empty ("No matches") /
@@ -2579,9 +2581,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   shared decimal rule one-decimal-below-10-else-none; formatRate
   humanizes bytes/sec B/K/M/G (binary) with the same rule, net
   renders as "<down>rx <up>tx" arrow pairs; any *Ok=false -> em-dash
-  placeholder, and swapOk=true with swapTotal 0 (no swap configured)
-  is a dash too; glyphs (em dash, arrows) are \uXXXX escapes --
-  ASCII-only source)
+  placeholder, while swapOk=true with swapTotal 0 (no swap configured
+  / empty dynamic macOS swap) renders the live "0M" -- a real zero is
+  a value, only a dead source dashes (the macOS SWP field report);
+  glyphs (em dash, arrows) are \uXXXX escapes -- ASCII-only source;
+  src/stats.test.ts pins the formatters + the swap dash-vs-0M rules)
   + `src/render.ts` (pure text-node DOM builders, no innerHTML
   anywhere: appendHighlighted renders the Go-minted matchRanges
   (half-open RUNE pairs; the walk counts code points because JS

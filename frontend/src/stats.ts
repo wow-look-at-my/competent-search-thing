@@ -59,18 +59,24 @@ export function formatRate(bps: number): string {
 
 // renderStats writes one snapshot into the five value nodes. Any
 // metric whose Ok flag is false renders the dash placeholder (missing
-// source, failed read, rate not accumulated yet); swap with a live
-// reading of total 0 (no swap configured) is a dash too.
+// source, failed read, rate not accumulated yet). Swap with a live
+// reading of total 0 -- no swap configured on Linux, or macOS's
+// dynamic swap while empty -- renders "0M": a live zero is a value
+// (in the unit a sub-GiB total picks, integer like formatRate's
+// bottom band), and only a dead source earns the dash. The old rule
+// dashed exactly the healthy-vm.swapusage-total-0 state every idle
+// Mac sits in (the SWP field report).
 export function renderStats(snap: StatsSnapshot, nodes: StatsNodes): void {
   nodes.cpu.textContent = snap.cpuOk ? formatPct(snap.cpuPct) : DASH;
   nodes.gpu.textContent = snap.gpuOk ? formatPct(snap.gpuPct) : DASH;
   nodes.ram.textContent = snap.memOk
     ? formatBytesPair(snap.memUsed, snap.memTotal)
     : DASH;
-  nodes.swap.textContent =
-    snap.swapOk && snap.swapTotal > 0
+  nodes.swap.textContent = !snap.swapOk
+    ? DASH
+    : snap.swapTotal > 0
       ? formatBytesPair(snap.swapUsed, snap.swapTotal)
-      : DASH;
+      : "0M";
   nodes.net.textContent = snap.netOk
     ? DOWN + formatRate(snap.netRxBps) + " " + UP + formatRate(snap.netTxBps)
     : DASH;

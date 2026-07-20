@@ -499,8 +499,9 @@ func (s *Sampler) updateCPURate(snap *Snapshot, cur cpuCounters, now time.Time) 
 // sampleMem fills the point-in-time memory and swap figures:
 // /proc/meminfo on linux, the mach/sysctl readers on darwin. A swap
 // total of zero is a valid answer (no swap configured; SwapOK stays
-// true and the frontend renders a dash for it), while a missing
-// MemAvailable line means the used figure cannot be computed.
+// true and the frontend renders it as the live "0M" value -- only
+// SwapOK=false earns the dash), while a missing MemAvailable line
+// means the used figure cannot be computed.
 func (s *Sampler) sampleMem(snap *Snapshot) {
 	if s.dwn != nil {
 		s.sampleMemDarwin(snap)

@@ -48,9 +48,24 @@ func TestReadSwapReal(t *testing.T) {
 	require.NoError(t, err)
 	total, used, err := decodeXswUsage(raw)
 	require.NoError(t, err)
-	// macOS swap is dynamic: total 0 is legal (the dash contract);
-	// used can never exceed it either way.
+	// macOS swap is dynamic: total 0 is legal AND the common state on
+	// an idle machine (the CI runners included) -- exactly the field
+	// report's shape, where the startup log showed swap=vm.swapusage
+	// wired yet SWP rendered a dash. Used can never exceed the total
+	// either way.
 	require.LessOrEqual(t, used, total)
+
+	// The full sampler pipeline must report that reading as LIVE
+	// (SwapOK true; the frontend then renders 0M for a zero total,
+	// never a dash) -- the mechanical gate for the report: only a
+	// failed read may degrade the metric.
+	lr := &logRecorder{}
+	s := New(Options{GOOS: "darwin", Logf: lr.logf})
+	var snap Snapshot
+	s.sampleMem(&snap)
+	require.True(t, snap.SwapOK, "a healthy vm.swapusage read is a live value whatever the total")
+	require.LessOrEqual(t, snap.SwapUsed, snap.SwapTotal)
+	require.Zero(t, lr.count("stats: swap:"))
 }
 
 func TestReadIfRIBReal(t *testing.T) {
