@@ -672,7 +672,7 @@ func TestSchemaRefStampedFirst(t *testing.T) {
 	require.True(t, json.Valid(data))
 	require.Contains(t, string(data), `"$schema": "`+SchemaRef+`"`)
 	// First key: the document starts {\n  "$schema": ...
-	require.Equal(t, "{\n  \"$schema\":", string(data[:13]),
+	require.Equal(t, "{\n  \"$schema\":", string(data[:14]),
 		"$schema is the document's first key (first struct field)")
 }
 

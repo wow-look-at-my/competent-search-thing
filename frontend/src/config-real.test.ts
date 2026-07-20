@@ -90,6 +90,15 @@ describe("config editor ToC over the shipped schema", () => {
   it("keeps the annotated app-managed keys out of the editor", () => {
     expect(document.getElementById("cfg-rootsVersion")).toBeNull();
     expect(document.getElementById("cfg-$schema")).toBeNull();
+    // The drag-managed window sizes: no editor rows (the drag IS the
+    // setting), while the sections themselves stay (translucent /
+    // the other preview knobs still render).
+    expect(document.getElementById("cfg-window-width")).toBeNull();
+    expect(document.getElementById("cfg-window-height")).toBeNull();
+    expect(document.getElementById("cfg-window-translucent")).not.toBeNull();
+    expect(document.getElementById("cfg-preview-windowWidth")).toBeNull();
+    expect(document.getElementById("cfg-preview-windowHeight")).toBeNull();
+    expect(document.getElementById("cfg-preview-enabled")).not.toBeNull();
     // The leading leaves live in the General group.
     const general = document.getElementById("config-sec-general");
     expect(general).not.toBeNull();
