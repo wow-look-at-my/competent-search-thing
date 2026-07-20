@@ -196,8 +196,7 @@ type Config struct {
 // "plugins enabled, nothing overridden".
 type PluginsConfig struct {
 	// Enabled false turns the whole plugin system off. Absent (nil)
-	// means enabled -- the default (the tray.enabled convention);
-	// Normalize repairs nil to explicit true.
+	// = enabled, the default (Normalize repairs nil to true).
 	Enabled *bool `json:"enabled"`
 	// Entries holds per-plugin overrides keyed by plugin id (builtin
 	// provider ids work here too).
@@ -206,8 +205,7 @@ type PluginsConfig struct {
 
 // PluginEntry is one plugin's configuration.
 type PluginEntry struct {
-	// Enabled false turns this one plugin off. Absent (nil) means
-	// enabled; Normalize repairs nil to explicit true.
+	// Enabled false turns this one plugin off; nil = on (repaired).
 	Enabled *bool `json:"enabled"`
 	// Settings is an opaque JSON object forwarded verbatim to the
 	// plugin in every request.
@@ -232,11 +230,8 @@ type RewriteRule struct {
 	Title string `json:"title,omitempty"`
 	// Icon optionally overrides the "link" icon.
 	Icon string `json:"icon,omitempty"`
-	// Enabled false turns the rule off without deleting it. Absent
-	// (nil) means enabled -- rules are on unless switched off, and
-	// Normalize deliberately leaves the pointer alone so user-authored
-	// rule objects are never rewritten with an extra key (the field
-	// keeps the old disabled key's omitempty behavior).
+	// Enabled false turns the rule off without deleting it; nil =
+	// on, deliberately NOT repaired (user rules never grow keys).
 	Enabled *bool `json:"enabled,omitempty"`
 }
 
@@ -245,11 +240,9 @@ type RewriteRule struct {
 // always-on ranking log at its default bound, both learned layers on.
 type SearchConfig struct {
 	// FuzzyEnabled false turns the fuzzy (subsequence) name-match
-	// tier off, leaving exact/prefix/substring matching only. Absent
-	// (nil) means enabled -- the default (the tray.enabled
-	// convention); Normalize repairs nil to explicit true. Exact,
-	// prefix, and substring matches always rank above fuzzy ones
-	// either way.
+	// tier off, leaving exact/prefix/substring matching only; absent
+	// (nil) = enabled, the default (Normalize repairs nil to true).
+	// Exact/prefix/substring always rank above fuzzy either way.
 	FuzzyEnabled *bool `json:"fuzzyEnabled"`
 	// Frecency configures the frecency/recency/noise ranking blend.
 	Frecency FrecencyConfig `json:"frecency"`
@@ -274,10 +267,9 @@ type SearchConfig struct {
 // defaults; the switch is a debug escape hatch, not a privacy option.
 type PriorsConfig struct {
 	// Enabled false turns the priors layer off -- a debug escape
-	// hatch for diagnosing ranking with a deterministic baseline, or
-	// a kill switch if the learned layer misbehaves. Absent (nil)
-	// means enabled -- the default; Normalize repairs nil to explicit
-	// true.
+	// hatch for a deterministic ranking baseline, or a kill switch if
+	// the learned layer misbehaves. Absent (nil) = enabled, the
+	// default (Normalize repairs nil to true).
 	Enabled *bool `json:"enabled"`
 }
 
@@ -312,8 +304,7 @@ type TelemetryConfig struct {
 type FrecencyConfig struct {
 	// Enabled false turns the whole blend off: no open counts are
 	// recorded or loaded, no recency stats run, and result ordering
-	// is exactly the pre-blend engine's. Absent (nil) means enabled
-	// -- the default; Normalize repairs nil to explicit true.
+	// is exactly the pre-blend engine's; nil = on (repaired).
 	Enabled *bool `json:"enabled"`
 	// HalfLifeDays is how long a recorded open takes to count half as
 	// much (default 14).
@@ -355,12 +346,10 @@ type WatcherConfig struct {
 	// 0 (the default) selects the built-in 20-minute cadence;
 	// negative values are repaired to 0 by Normalize.
 	SweepMinutes int `json:"sweepMinutes"`
-	// SweepEnabled false turns the sweep tier off entirely. Absent
-	// (nil) means enabled -- the default (the tray.enabled
-	// convention); Normalize repairs nil to explicit true. With
-	// sweeps off, directories without a live watch converge only at
-	// full rescans (!rescan or rescanIntervalMinutes); the app logs a
-	// loud warning saying so.
+	// SweepEnabled false turns the sweep tier off entirely; absent
+	// (nil) = enabled, the default (Normalize repairs nil to true).
+	// With sweeps off, directories without a live watch converge only
+	// at full rescans; the app logs a loud warning saying so.
 	SweepEnabled *bool `json:"sweepEnabled"`
 	// WatchExcludes are exclude patterns (the excludes syntax, see
 	// internal/index.Excluder) applied ONLY to live watching: matching
@@ -402,8 +391,7 @@ type BangsConfig struct {
 // is "the tray.enabled convention" the other default-on switches
 // reference.)
 type TrayConfig struct {
-	// Enabled false turns the tray icon off. Absent (nil) means
-	// enabled; Normalize repairs nil to explicit true.
+	// Enabled false turns the tray icon off; nil = on (repaired).
 	Enabled *bool `json:"enabled"`
 }
 
@@ -434,8 +422,7 @@ type WindowConfig struct {
 // dislike the row need the switch.
 type StatsConfig struct {
 	// Enabled false turns the system-stats sampler (and with it the
-	// frontend's stats row data) off. Absent (nil) means enabled;
-	// Normalize repairs nil to explicit true.
+	// frontend's stats row data) off; nil = on (repaired).
 	Enabled *bool `json:"enabled"`
 }
 
@@ -443,9 +430,7 @@ type StatsConfig struct {
 type HistoryConfig struct {
 	// PersistEnabled false keeps the history in memory only: nothing
 	// is read from or written to <configDir>/history.json, while
-	// in-session Up/Down recall keeps working. Absent (nil) means
-	// enabled -- persistence on, the default (the tray.enabled
-	// convention); Normalize repairs nil to explicit true.
+	// in-session Up/Down recall keeps working; nil = on (repaired).
 	PersistEnabled *bool `json:"persistEnabled"`
 }
 
@@ -557,115 +542,6 @@ type PreviewOpenAIConfig struct {
 	Model string `json:"model"`
 	// MaxOutputTokens caps one answer (default 1024).
 	MaxOutputTokens int `json:"maxOutputTokens"`
-}
-
-// DefaultPreview returns the default preview pane config: disabled,
-// with every knob at its documented default so enabling is a one-key
-// edit.
-func DefaultPreview() PreviewConfig {
-	return PreviewConfig{
-		WindowWidth:   DefaultPreviewWindowWidth,
-		WindowHeight:  DefaultPreviewWindowHeight,
-		TextMaxKB:     DefaultPreviewTextMaxKB,
-		ImageMaxEdge:  DefaultPreviewImageMaxEdge,
-		DirMaxEntries: DefaultPreviewDirMax,
-		Kagi:          PreviewKagiConfig{MaxResults: DefaultPreviewKagiMax},
-		OpenAI: PreviewOpenAIConfig{
-			Model:           DefaultPreviewOpenAIModel,
-			MaxOutputTokens: DefaultPreviewOpenAITokens,
-		},
-	}
-}
-
-// DefaultFirefox returns the default Firefox integration config.
-func DefaultFirefox() FirefoxConfig {
-	return FirefoxConfig{
-		FrequentSites: FrequentSitesConfig{
-			MinVisitsMonth: DefaultFirefoxMinVisitsMonth,
-			MinVisitsWeek:  DefaultFirefoxMinVisitsWeek,
-			RefreshMinutes: DefaultFirefoxRefreshMinutes,
-			MaxResults:     DefaultFirefoxMaxResults,
-		},
-		OpenTabs: OpenTabsConfig{
-			MaxResults: DefaultFirefoxTabsMaxResults,
-		},
-	}
-}
-
-// DefaultTelemetry returns the default ranking log config: the size
-// cap at its documented default (the log itself is always on).
-func DefaultTelemetry() TelemetryConfig {
-	return TelemetryConfig{
-		MaxSizeKB: DefaultTelemetryMaxSizeKB,
-	}
-}
-
-// DefaultBangSigils returns the default bang sigil set. It returns a
-// fresh slice on every call so callers may modify it safely.
-func DefaultBangSigils() []string { return []string{"!", "/", "@"} }
-
-// Bool returns a pointer to v -- the constructor for the affirmative
-// *bool switches (tray.enabled and friends), whose pointer shape
-// exists so an absent key stays distinguishable from an explicit
-// false. A fresh pointer per call; callers may write through it.
-func Bool(v bool) *bool { return &v }
-
-// Enabled reports the effective value of an affirmative *bool config
-// switch: nil -- the key absent from config.json -- means the
-// default, which is ON for every pointer-shaped switch in this
-// package (the tray.enabled convention; preview.enabled, the one
-// default-OFF switch, stays a plain bool where absent = false = the
-// default already). Normalize repairs the always-written switches'
-// nil pointers to explicit true, so loaded configs carry explicit
-// values; this helper keeps directly built configs (tests, zero
-// values) and the never-repaired rewrites[].enabled on the same
-// absent-means-on semantics.
-func Enabled(p *bool) bool { return p == nil || *p }
-
-// Default returns the default configuration: index the whole
-// filesystem, Everything-style ("/" on Linux/macOS, the system drive
-// on Windows), skip the virtual/volatile system trees plus the usual
-// noise (see migrate.go), no periodic rescan.
-// DefaultFrecency returns the default frecency ranking config.
-func DefaultFrecency() FrecencyConfig {
-	return FrecencyConfig{
-		Enabled:        Bool(true),
-		HalfLifeDays:   DefaultFrecencyHalfLifeDays,
-		WeightFrecency: DefaultFrecencyWeight,
-		WeightRecency:  DefaultFrecencyWeight,
-		WeightCwd:      DefaultFrecencyWeight,
-		WeightNoise:    DefaultFrecencyWeight,
-		TierJumpCount:  DefaultFrecencyTierJump,
-	}
-}
-
-func Default() Config {
-	return Config{
-		Schema:                SchemaRef,
-		Roots:                 defaultRoots(),
-		RootsVersion:          currentRootsVersion,
-		Excludes:              defaultExcludes(),
-		Hotkey:                DefaultHotkey,
-		RescanIntervalMinutes: 0,
-		MaxResults:            DefaultMaxResults,
-		Search: SearchConfig{
-			FuzzyEnabled: Bool(true),
-			Frecency:     DefaultFrecency(),
-			Priors:       PriorsConfig{Enabled: Bool(true)},
-			Telemetry:    DefaultTelemetry(),
-			Arbiter:      ArbiterConfig{Enabled: Bool(true)},
-		},
-		Watcher: WatcherConfig{SweepEnabled: Bool(true)},
-		Theme:   DefaultTheme,
-		Plugins: PluginsConfig{Enabled: Bool(true), Entries: map[string]PluginEntry{}},
-		Bangs:   BangsConfig{Sigils: DefaultBangSigils(), Aliases: map[string]string{}},
-		Tray:    TrayConfig{Enabled: Bool(true)},
-		History: HistoryConfig{PersistEnabled: Bool(true)},
-		Stats:   StatsConfig{Enabled: Bool(true)},
-		Window:  WindowConfig{Width: DefaultWindowWidth, Height: DefaultWindowHeight},
-		Firefox: DefaultFirefox(),
-		Preview: DefaultPreview(),
-	}
 }
 
 // Dir returns the directory holding the configuration (config.json,
