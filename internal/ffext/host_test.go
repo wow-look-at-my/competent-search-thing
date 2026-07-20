@@ -3,8 +3,10 @@ package ffext
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -198,10 +200,25 @@ func TestHostCompactsMultilineJSON(t *testing.T) {
 
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
+	// The host drops stdin frames until its socket connection is
+	// REGISTERED (forward's documented drop-while-down behavior), and
+	// Accept returning below only proves the kernel accepted -- not
+	// that the host's loop stored the conn yet. Gate the first frame
+	// on the host's own connected log line, or a busy test machine
+	// intermittently loses it to the drop path (i/o timeout at the
+	// read; flaked under parallel-test load).
+	connected := make(chan struct{})
+	var connectedOnce sync.Once
+	logf := func(format string, args ...any) {
+		t.Logf(format, args...)
+		if strings.Contains(fmt.Sprintf(format, args...), "connected to the app") {
+			connectedOnce.Do(func() { close(connected) })
+		}
+	}
 	done := make(chan error, 1)
 	go func() {
 		done <- RunHost(HostOptions{
-			In: inR, Out: outW, SocketPath: path, Logf: t.Logf,
+			In: inR, Out: outW, SocketPath: path, Logf: logf,
 			reconnectMin: 5 * time.Millisecond, reconnectMax: 20 * time.Millisecond,
 		})
 	}()
@@ -214,6 +231,11 @@ func TestHostCompactsMultilineJSON(t *testing.T) {
 	conn, err := ln.Accept()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
+	select {
+	case <-connected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the host never registered its app connection")
+	}
 
 	pretty := "{\n  \"type\": \"tabsChanged\",\n  \"tabs\": []\n}"
 	require.NoError(t, WriteFrame(inW, []byte(pretty), MaxOutFrame))

@@ -349,6 +349,58 @@ func TestHideNeverTakesOver(t *testing.T) {
 	require.Zero(t, kr.sigterms(), "and never kills anything")
 }
 
+// --- the probe-to-command death gap ------------------------------------------
+// classifyInstance found a healthy same-build daemon, but the daemon
+// died before the actual command exchange: the mid-command failure
+// classifies as no-healthy-instance too and the launcher becomes the
+// instance (the logNoAnswer path).
+
+func TestToggleMidCommandDeathTakesOver(t *testing.T) {
+	path := testSocketEnv(t)
+	kr := &cliKill{}
+	var f *cliFake
+	f = scriptedFake(t, path, func(line string) string {
+		if strings.Contains(line, `"version"`) {
+			return `{"ok":true,"version":"` + testVersion + `","build":"` + testBuild + `"}`
+		}
+		// The daemon dies with the toggle in flight: close the whole
+		// fake (listener unlinks; close is once-guarded), so the
+		// follow-up listen sees a dead socket and recovers plainly.
+		f.close()
+		return ""
+	})
+	gui := &guiRecorder{}
+	defer gui.closeServers()
+
+	code, _, _ := runEnv(t, takeoverEnv(gui, kr), "toggle")
+	require.Equal(t, 0, code)
+	require.Equal(t, 1, gui.count(), "the mid-command death still self-heals into a takeover")
+	require.True(t, gui.last(t).ShowOnStartup)
+	require.Zero(t, kr.sigterms(), "the corpse cleared on its own; nothing to signal")
+}
+
+// --- a parsed-but-weird reply stays honest -----------------------------------
+// A RESPONSIVE same-version instance that answers the show with a
+// parsed JSON refusal is reported honestly (reportNoResponse), never
+// killed and never shadowed by a second GUI.
+
+func TestRootParsedWeirdReplyStaysHonest(t *testing.T) {
+	path := testSocketEnv(t)
+	_ = scriptedFake(t, path, func(string) string {
+		return `{"ok":false,"error":"unknown command"}`
+	})
+	gui := &guiRecorder{}
+	e := &env{version: testVersion, build: testBuild, runGUI: gui.run}
+	e.listenFn = func(string) (*ipc.Server, error) { return nil, ipc.ErrAlreadyRunning }
+
+	code, stdout, stderr := runEnv(t, e)
+	require.Equal(t, 1, code)
+	require.Empty(t, stdout)
+	require.Contains(t, stderr, "already running but did not respond")
+	require.Contains(t, stderr, "unexpected reply")
+	require.Equal(t, 0, gui.count())
+}
+
 // --- startup races -----------------------------------------------------------
 
 func TestSummonRaceLoserDeliversToWinner(t *testing.T) {
