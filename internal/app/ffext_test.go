@@ -66,10 +66,11 @@ func (f *fakeBridge) kickCount() int {
 	return f.kicks
 }
 
-// installBridge plants a fake bridge on a newTestApp-built App.
-func installBridge(a *App, f *fakeBridge) {
+// installBridge plants a bridge (usually a fake) on a
+// newTestApp-built App.
+func installBridge(a *App, b ffextBridge) {
 	a.ffextMu.Lock()
-	a.ffextB = f
+	a.ffextB = b
 	a.ffextMu.Unlock()
 }
 

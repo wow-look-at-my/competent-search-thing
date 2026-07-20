@@ -50,7 +50,7 @@ func runFirefoxHost(t *testing.T, e *env, args []string) chan error {
 }
 
 func TestFirefoxHostExitsOnStdinEOF(t *testing.T) {
-	testSocketEnv(t)     // isolation: never the real IPC socket
+	testSocketEnv(t)      // isolation: never the real IPC socket
 	testFfextSocketEnv(t) // no bridge listening: the relay must still run
 	gui := &guiRecorder{}
 	e := &env{version: testVersion, runGUI: gui.run,
