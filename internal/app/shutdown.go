@@ -109,6 +109,8 @@ func (a *App) Shutdown(_ context.Context) {
 	a.buildCancel = nil
 	w, r, sw, tw := a.watcher, a.rescanner, a.sweeper, a.themeW
 	a.watcher, a.rescanner, a.sweeper, a.themeW = nil, nil, nil, nil
+	ew := a.earlyWatcher
+	a.earlyWatcher = nil
 	a.watchMu.Unlock()
 	if buildCancel != nil {
 		buildCancel()
@@ -121,6 +123,12 @@ func (a *App) Shutdown(_ context.Context) {
 	}
 	if w != nil {
 		w.Stop()
+	}
+	if ew != nil {
+		// A pre-build watcher whose build is still walking (the cancel
+		// above aborts it); stopping here is idempotent with the
+		// build goroutine's own cleanup.
+		ew.Stop()
 	}
 	if tw != nil {
 		tw.stop()

@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/index"
 	"github.com/wow-look-at-my/competent-search-thing/internal/watch"
 )
@@ -235,6 +236,10 @@ func TestBuildIndexCancelledDiscardsPartialAndLogs(t *testing.T) {
 		"the startup summary never fires on the cancelled path")
 	require.Equal(t, 0, m.LiveCount(), "the partial store is discarded, never swapped in")
 	require.False(t, watchUp(a), "a cancelled build never starts the watch layer")
+	a.watchMu.Lock()
+	early := a.earlyWatcher
+	a.watchMu.Unlock()
+	require.Nil(t, early, "the cancelled path stops and detaches the pre-build watcher")
 }
 
 func TestShutdownCancelsInitialBuild(t *testing.T) {
@@ -325,10 +330,51 @@ func TestStartWatchEmitsBackendNoticeAndGrantHint(t *testing.T) {
 	// each with its matching hint.
 	require.Equal(t, watchBackendFor(watch.PerDirBackendName()),
 		r.emitted(eventWatchBackend)[0].payload[0])
+	// The seam path does not exist on disk, so symlink resolution fails
+	// and the hint falls back to the stable spelling -- the pre-fix
+	// behavior, pinned as the fallback contract.
 	require.Contains(t, buf.String(),
 		"watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /test/bin/competent-search-thing",
-		"the grant command names the stable executable path")
+		"an unresolvable executable path falls back to the stable spelling")
+	require.Contains(t, buf.String(),
+		"watch: file capabilities stick to that exact file -- re-run the setcap command after any upgrade that replaces the binary (e.g. brew upgrade)",
+		"the grant hint carries the persistence caveat")
 	a.Shutdown(context.Background())
+}
+
+func TestLogFanotifyGrantResolvesSymlinkedExecutable(t *testing.T) {
+	// The field failure this pins: the hint printed the Homebrew bin/
+	// SYMLINK and setcap refused it ("not a regular (non-symlink)
+	// file"). The printed path must be the resolved real file.
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	dir := t.TempDir()
+	real := filepath.Join(dir, "Cellar", "competent-search-thing", "0.1.0", "bin", "competent-search-thing")
+	require.NoError(t, os.MkdirAll(filepath.Dir(real), 0o755))
+	require.NoError(t, os.WriteFile(real, []byte("#!"), 0o755))
+	link := filepath.Join(dir, "bin", "competent-search-thing")
+	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o755))
+	require.NoError(t, os.Symlink(real, link))
+	// t.TempDir may itself sit behind a symlink (darwin /var ->
+	// /private/var), so canonicalize the expectation the same way.
+	wantReal, err := filepath.EvalSymlinks(real)
+	require.NoError(t, err)
+
+	a, _ := newTestApp(t, nil, Options{})
+	a.plat.goos = "linux"
+	a.plat.executable = func() (string, error) { return link, nil }
+	a.logFanotifyGrant()
+
+	out := buf.String()
+	require.Contains(t, out,
+		"watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep "+wantReal,
+		"the grant command names the resolved real file, not the symlink")
+	require.NotContains(t, out, "+ep "+link+"\n",
+		"the symlink spelling setcap refuses must not be printed")
+	require.Contains(t, out, "re-run the setcap command after any upgrade",
+		"the persistence caveat is logged with the command")
 }
 
 func TestStartWatchStrictFanotifyNeverFallsBackToInotify(t *testing.T) {
@@ -383,4 +429,88 @@ func TestEmitEventBeforeStartupIsNoOp(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
 	a.emitDegraded(watch.Stats{})
 	require.Empty(t, r.emits, "no context yet: nothing emitted, nothing crashed")
+}
+
+func TestBuildIndexArmsWatchBeforeWalkAndAdoptsIt(t *testing.T) {
+	// The startup-ordering contract: the live-watch backend is armed
+	// BEFORE the initial walk (the armed line precedes the build
+	// completion line), and the completion path ADOPTS that very
+	// watcher instance instead of building a second one.
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0o644))
+	m := index.NewManager([]string{dir}, nil, 0)
+	a, _ := newTestApp(t, m, Options{WatchBackend: "inotify"})
+	t.Cleanup(func() { a.Shutdown(context.Background()) })
+
+	// Arm exactly as buildIndex's first step does, and hold the
+	// pointer; buildIndex's own startEarlyWatch is then the no-op
+	// re-entry and the completion path must adopt THIS instance.
+	a.startEarlyWatch()
+	a.watchMu.Lock()
+	armed := a.earlyWatcher
+	a.watchMu.Unlock()
+	require.NotNil(t, armed, "the pre-build watcher is armed and stored")
+
+	a.buildIndex(context.Background())
+	require.True(t, watchUp(a), "the trio is up after the build")
+	a.watchMu.Lock()
+	adopted := a.watcher
+	leftover := a.earlyWatcher
+	a.watchMu.Unlock()
+	require.Same(t, armed, adopted, "startWatch adopts the pre-build watcher, never a second instance")
+	require.Nil(t, leftover, "adoption clears the early slot")
+
+	out := buf.String()
+	armedAt := strings.Index(out, "armed before the initial index build; changes during indexing are queued")
+	builtAt := strings.Index(out, "index: 1 entries in")
+	require.GreaterOrEqual(t, armedAt, 0, "the pre-build arming is announced")
+	require.GreaterOrEqual(t, builtAt, 0, "the build completion is logged")
+	require.Less(t, armedAt, builtAt, "registration is announced before the walk completes")
+	require.NotContains(t, out, "live updates unavailable",
+		"the adopted watcher is live; the failure wording never fires")
+
+	// The adopted watcher applies events live after the build.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "post-build.txt"), []byte("x"), 0o644))
+	require.Eventually(t, func() bool { return len(a.Search("post-build")) == 1 },
+		20*time.Second, 10*time.Millisecond, "live updates flow through the adopted watcher")
+}
+
+func TestRestartIndexLayerMidBuildStopsEarlyWatcher(t *testing.T) {
+	// A config apply while the initial build is walking: the pre-build
+	// watcher runs the PREVIOUS configuration, so the applier stops it
+	// and lets the completion path build a fresh one from the new
+	// values (plus the queued convergence rescan).
+	m := index.NewManager([]string{t.TempDir()}, nil, 0)
+	a, _ := newTestApp(t, m, Options{WatchBackend: "inotify"})
+	a.startEarlyWatch()
+	a.watchMu.Lock()
+	ew := a.earlyWatcher
+	_, cancel := context.WithCancel(context.Background())
+	a.buildCancel = cancel
+	a.buildFinished = false
+	a.watchMu.Unlock()
+	require.NotNil(t, ew)
+	t.Cleanup(cancel)
+
+	next := config.Default()
+	next.Roots = []string{t.TempDir()}
+	require.NoError(t, a.restartIndexLayer(&next))
+
+	a.watchMu.Lock()
+	cleared := a.earlyWatcher == nil
+	flagged := a.rescanOnWatchUp
+	a.watchMu.Unlock()
+	require.True(t, cleared, "the stale-config early watcher is detached")
+	require.True(t, flagged, "the convergence rescan stays armed")
+	select {
+	case <-ew.InitialRegistration():
+		// Stop unwound the held loop; the registration channel closing
+		// proves the teardown completed.
+	case <-time.After(20 * time.Second):
+		t.Fatal("the detached early watcher was not stopped")
+	}
 }

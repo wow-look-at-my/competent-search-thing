@@ -9,6 +9,15 @@ const (
 	defaultMaxPending = 4096
 )
 
+// defaultHoldCap bounds the dirty-path set a deferred-start watcher
+// collects while held (StartDeferred; the debouncer's maxPending
+// flush trigger is ignored during the hold, since flushing IS what is
+// held). 64k unique paths bound memory to a few MB over even a long
+// initial walk; paths dropped beyond the cap degrade the watcher and
+// request one reconcile sweep at release, so the loss converges like
+// any kernel-queue overflow.
+const defaultHoldCap = 65536
+
 // debouncer coalesces bursts of filesystem events into an
 // insertion-ordered set of dirty paths. An event carries no operation
 // by the time it gets here: it only marks its (already cleaned) path
@@ -32,6 +41,16 @@ type debouncer struct {
 	order   []string            // the same paths in first-arrival order
 	first   time.Time           // arrival time of order[0]
 	last    time.Time           // arrival time of the newest add call
+}
+
+// size returns the number of unique pending paths (the hold phase's
+// bound check; see Watcher.holdAdd).
+func (d *debouncer) size() int { return len(d.order) }
+
+// has reports whether path is already pending.
+func (d *debouncer) has(path string) bool {
+	_, ok := d.pending[path]
+	return ok
 }
 
 // add marks one cleaned path dirty and reports whether the batch must

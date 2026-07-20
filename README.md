@@ -304,9 +304,12 @@ Grant both on the installed binary:
 sudo setcap cap_sys_admin,cap_dac_read_search+ep /usr/local/bin/competent-search-thing
 ```
 
-The app logs this exact command, with the real installed path filled
-in, at every startup that runs without fanotify. Re-run it after any
-upgrade that replaces the file (file capabilities live on the inode).
+The app logs this exact command at every startup that runs without
+fanotify, with the RESOLVED real path filled in -- setcap refuses
+symlinks, so symlinked installs (Homebrew's `bin/` shim, Nix, stow)
+get the actual target printed. Re-run it after any upgrade that
+replaces the file (file capabilities live on the inode); the log says
+so right below the command.
 
 With the grant, a change anywhere under your roots reaches search
 results in about a second. Without it, the watcher falls back to the
@@ -348,6 +351,10 @@ The consistency model in practice:
   reaches search results about a second after it happens: events are
   debounced (~250ms quiet / 1s max) and applied by re-checking the
   disk, so duplicated, merged, or reordered events all converge.
+- Changes during the initial startup index build are covered too: the
+  backend is armed BEFORE the walk starts, events queue while it runs,
+  and they apply the moment the fresh index is live (a queue overflow
+  converges via an immediately requested sweep).
 - A change anywhere else -- a directory outside the hot-set budget, a
   watch the OS refused, events lost to a kernel queue overflow --
   appears within one sweep interval: each pass walks every indexed
@@ -359,15 +366,18 @@ The consistency model in practice:
   mtime check and converge at the next full rescan (`!rescan`, or the
   `rescanIntervalMinutes` timer if you set one).
 
-Startup announces the active tier and its numbers in the log -- the
-second form means a whole-filesystem backend is on (`fanotify` on
-Linux, `fsevents` on macOS); the first is always followed, on Linux,
-by the ready-to-paste grant command. An unlimited budget prints as
-`unlimited`, never as a raw MaxInt:
+Startup arms the backend before the index walk (the `armed` line),
+then announces the active tier and its numbers -- the fsevents form
+means a whole-filesystem backend is on (`fanotify` on Linux,
+`fsevents` on macOS); the per-directory form is always followed, on
+Linux, by the ready-to-paste grant command plus its re-run caveat. An
+unlimited budget prints as `unlimited`, never as a raw MaxInt:
 
 ```
+watch: backend inotify armed before the initial index build; changes during indexing are queued and applied when it completes
 watch: backend inotify: 41230/612009 dirs live-watched (budget 65536); sweep interval 20m0s; full rescan interval off
-watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /usr/local/bin/competent-search-thing
+watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /home/linuxbrew/.linuxbrew/Cellar/competent-search-thing/0.412.0/bin/competent-search-thing
+watch: file capabilities stick to that exact file -- re-run the setcap command after any upgrade that replaces the binary (e.g. brew upgrade)
 watch: backend fsevents: whole-filesystem coverage active; per-directory watches not needed
 watch: backend fsevents: 0/0 dirs live-watched (budget 3840); sweep interval 20m0s; full rescan interval off
 ```
