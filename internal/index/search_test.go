@@ -18,10 +18,51 @@ type refEntry struct {
 	isDir bool
 }
 
+// refPathLess is the naive references' final tie-break: the
+// numeric-aware lexicographic path order, re-implemented independently
+// of numorder.go on plain strings. Aligned digit runs compare
+// numerically DESCENDING (newest/highest first); numerically equal
+// runs continue the walk; any other first difference keeps plain byte
+// order; an all-equal walk falls back to plain string order.
+func refPathLess(a, b string) bool {
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		ca, cb := a[i], b[j]
+		if ca >= '0' && ca <= '9' && cb >= '0' && cb <= '9' {
+			ia, jb := i, j
+			for i < len(a) && a[i] >= '0' && a[i] <= '9' {
+				i++
+			}
+			for j < len(b) && b[j] >= '0' && b[j] <= '9' {
+				j++
+			}
+			ra := strings.TrimLeft(a[ia:i], "0")
+			rb := strings.TrimLeft(b[jb:j], "0")
+			if len(ra) != len(rb) {
+				return len(ra) > len(rb) // longer number = bigger = first
+			}
+			if ra != rb {
+				return ra > rb // equal length: bigger digits first
+			}
+			continue
+		}
+		if ca != cb {
+			return ca < cb
+		}
+		i++
+		j++
+	}
+	if i < len(a) || j < len(b) {
+		return j < len(b) // shorter first
+	}
+	return a < b // leading-zero twins: plain order keeps it total
+}
+
 // naiveQuery is an independent, obviously-correct implementation of the
 // documented ranking, used to cross-check Store.Query. It fully sorts
 // every match with the same total order (class, dir-first, path length,
-// lexicographic path). Folding goes through foldPattern + testFold so
+// numeric-aware lexicographic path -- see refPathLess). Folding goes
+// through foldPattern + testFold so
 // engine and reference share one fold definition (fold.go's foldTable
 // and foldRune) while the matching itself stays independent stdlib
 // strings operations over folded copies.
@@ -58,7 +99,7 @@ func naiveQuery(entries []refEntry, q string, limit int) []Result {
 		if len(a.path) != len(b.path) {
 			return len(a.path) < len(b.path)
 		}
-		return a.path < b.path
+		return refPathLess(a.path, b.path)
 	})
 	if len(matches) == 0 {
 		return nil // Store.Query returns nil for no matches
@@ -134,9 +175,11 @@ func TestQueryLimit(t *testing.T) {
 	}
 	res := s.Query("file", 7)
 	require.Len(t, res, 7)
-	// All same class/kind/length: pure lexicographic order decides.
+	// All same class/kind/length: the numeric-aware final tie-break
+	// decides, and a numbered family delivers highest-first
+	// (numorder.go).
 	for i, r := range res {
-		require.Equal(t, fmt.Sprintf("/lim/file%02d.txt", i), r.Path)
+		require.Equal(t, fmt.Sprintf("/lim/file%02d.txt", 24-i), r.Path)
 	}
 }
 

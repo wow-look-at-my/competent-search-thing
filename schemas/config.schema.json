@@ -111,8 +111,24 @@
         "frecency": {
           "$ref": "#/$defs/frecencyConfig"
         },
+        "priors": {
+          "$ref": "#/$defs/priorsConfig"
+        },
         "telemetry": {
           "$ref": "#/$defs/searchTelemetryConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "priorsConfig": {
+      "title": "Pick-memory ranking priors configuration",
+      "description": "Opt-in pick-memory priors: small local lookup tables (exact-query pick memory plus per-extension and per-directory-prefix pick rates) learned from the search.telemetry log and bootstrapped from frecency.json, folded into result ranking as one additive term. Everything stays on this machine; the feature only READS the local files. Off by default.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "true turns the pick-memory priors on. Requires nothing else, but learns from real picks only once search.telemetry is also enabled; until then the frecency-derived bootstrap is the only signal."
         }
       },
       "additionalProperties": false
