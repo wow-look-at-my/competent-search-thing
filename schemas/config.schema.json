@@ -152,7 +152,7 @@
         "retainQueries": {
           "type": "boolean",
           "default": true,
-          "description": "false logs every record's query text as \"\" while keeping result paths and ranking signals. Note an omitted key means false (the privacy-conservative direction); the default config writes true explicitly.
+          "description": "false logs every record's query text as \"\" while keeping result paths and ranking signals. Note an omitted key means false (the privacy-conservative direction); the default config writes true explicitly."
         }
       },
       "additionalProperties": false
