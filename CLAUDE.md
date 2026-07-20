@@ -38,7 +38,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/app` -- the Wails-bound App object and its methods
   (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/DomReady/
   Shutdown/QueryPlugins/RunPluginAction/CheatSheet/GetHistory/
-  AddHistory/GetStats/ResolveIcons/RecordPick). Bound methods
+  AddHistory/GetStats/ResolveIcons/RecordPick/FPSEnabled/
+  RecordFPSSample). Bound methods
   appear in JS as `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
   saves the runtime ctx, brings up the global hotkey once through a
   session-dependent backend plan (hotkey.go: empty spec = skip, parse
@@ -122,7 +123,33 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   log.Printf -- and a non-nil sampler is Start()ed under a dedicated
   ctx cancelled in Shutdown; the sampler idles until the bar first
   shows, so startup cost is zero and newTestApp-stubbed apps spawn
-  nothing), builds the icon resolver once (icons.go in this package:
+  nothing), runs the dev-only fps hooks once (fps.go:
+  COMPETENT_SEARCH_FPS=1 through the plat.getenv seam -- the bound
+  FPSEnabled gates the whole frontend meter loop (false = the
+  frontend registers NOTHING), RecordFPSSample re-validates every
+  echoed summary (the RecordPick defense-in-depth stance: finite
+  0..1000 rates, 0..100 pct, 100..60000ms window, bounded frames/Hz;
+  meter off = silent no-op) and logs ONE inline-metrics line
+  ("fps: 59.8 avg, 118.9 max, 2% frames >20ms over 5.0s (rAF
+  ~120Hz)"), and startFPSInfo logs the display/power context line
+  ("fps: meter on; display 120Hz max, lowPowerMode=off,
+  thermalState=nominal") over the plat.powerInfo seam (production
+  native.DisplayPowerInfo, darwin only, nil elsewhere -- honest
+  "unavailable" wording then) plus arms plat.watchPowerChanges
+  (native.WatchPowerChanges) so every Low-Power-Mode/thermal flip
+  logs a "fps: power state changed:" line) -- and, independent of
+  the meter, applies the WebKit near-60 uncap (fps.go
+  applyNear60Uncap over the plat.uncapNear60 seam, production
+  native.WebViewUncapNear60, darwin only: flips
+  PreferPageRenderingUpdatesNear60FPSEnabled OFF through guarded
+  WKPreferences SPI so ProMotion panels render at their real refresh
+  rate -- and LPM's halving lands on 60, not 30, there; attempted at
+  Startup (pre-first-render when possible), retried at DomReady
+  where the FINAL outcome logs once (transient no-window/no-webview
+  misses stay quiet on the early attempt); uncapDone (mu) latches
+  across attempts; COMPETENT_SEARCH_KEEP_NEAR60=1 is the escape
+  hatch, default ON per the never-below-60 ruling),
+  builds the icon resolver once (icons.go in this package:
   the `newIcons` builder seam, production buildIcons =
   icons.NewService over its defaults -- zero IO at build, the first
   Resolve pays initialization -- behind the bound
@@ -2347,7 +2374,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   "wayland"/"x11" wins, else WAYLAND_DISPLAY, else DISPLAY, else
   unknown; Desktop = raw XDG_CURRENT_DESKTOP;
   `Session.IsGNOME` = any colon-separated segment equals "gnome"
-  case-insensitively).
+  case-insensitively); and the fps meter's data shapes (power.go:
+  `PowerInfo` {MaxFPS, LowPowerMode, ThermalState} -- the darwin
+  display/power probe result -- `ThermalStateString`, and
+  `UncapStatus` + String(), the WebKit near-60 uncap outcomes kept
+  in lockstep with platform_darwin.h's CS_UNCAP_* codes).
 - `internal/platform/native` -- the thin OS glue, DELIBERATELY NO test
   files (go-toolchain skips coverage for packages without tests; the
   code needs a live display server). Keep it minimal and defensive;
@@ -2389,6 +2420,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   channel pattern (buffered(1), non-blocking send, one app-lifetime
   drain goroutine) into the first caller's onChange -- the app's
   dismiss-on-Space-change (window.go spaceChanged).
+  DisplayPowerInfo/WatchPowerChanges (powerinfo_darwin.go + the
+  !darwin stubs; the fps meter's probe): csPowerInfo reads NSScreen
+  maximumFramesPerSecond + NSProcessInfo lowPowerModeEnabled behind
+  @available(macOS 12) guards (older systems answer 0Hz/off) plus
+  thermalState, and csObservePowerChanges arms power+thermal change
+  observers on the csSpaceChanged channel pattern (csPowerChanged
+  export, buffered(1), forever-drain). WebViewUncapNear60
+  (webkit_darwin.go + stub -- the package's ONE -framework WebKit
+  link): csWebViewUncapNear60 walks windows[0].contentView.subviews
+  for the WKWebView (wails v2.13.0 adds it there) and flips
+  PreferPageRenderingUpdatesNear60FPSEnabled OFF through
+  respondsToSelector-guarded WKPreferences feature SPI (the unified
+  +_features list (macOS 13.3+) with -_setEnabled:forFeature:, then
+  the experimental/internalDebug splits; the SPI setters are
+  declared as a category so the (BOOL, id) calls compile), returning
+  the honest CS_UNCAP_* status -- a WebKit that drops the SPI
+  degrades to a status code, never a crash.
   display_darwin.go also carries `#cgo LDFLAGS: -framework
   UniformTypeIdentifiers` on Wails' behalf: the v2 darwin frontend
   references UTType without linking that framework, and newer Xcode
@@ -2576,11 +2624,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   select navigation (applySelection/select carry a scroll flag;
   hover and the plugin-area re-render select without scrolling, so
   they never move the viewport), and wheel input on #results is
-  handled manually: a non-passive listener preventDefault()s and
+  handled manually OFF-MAC ONLY (wheel.ts shouldInterceptWheel,
+  vitest-pinned: navigator.platform "Mac*" = NO listener at all --
+  a non-passive always-preventDefault wheel listener forces WebKit's
+  synchronous main-thread scroll path there, pinning scroll motion
+  to the Low-Power-Mode-halvable rendering-update clock, while
+  native async overflow scrolling runs compositor-side at display
+  rate with momentum; linux/windows register the listener exactly
+  as before): a non-passive listener preventDefault()s and
   applies deltaMode-normalized deltas (40px/line, clientHeight/page;
   WebKitGTK sends pixels) straight to scrollTop -- WebKitGTK's
   default-on smooth-scroll animator otherwise eats fast detents and
-  Wails exposes no setting for it; ctrl+wheel stays native; file
+  Wails exposes no setting for it; ctrl+wheel stays native on both
+  paths; file
   rows Enter=Open / Ctrl/Cmd+Enter=Reveal; plugin rows run
   their action on Enter/click (Ctrl+Enter identical): set_query stays
   frontend-local (replace input, caret to end, re-run the pipeline),
@@ -2629,6 +2685,22 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   a value, only a dead source dashes (the macOS SWP field report);
   glyphs (em dash, arrows) are \uXXXX escapes -- ASCII-only source;
   src/stats.test.ts pins the formatters + the swap dash-vs-0M rules)
+  + `src/fpsmeter.ts` (the dev-only fps meter; wire() ends with
+  initFPSMeter(app), which asks the bound FPSEnabled ONCE and
+  registers NOTHING when it answers false -- zero cost off. On: a
+  rAF loop collects frame deltas (deltas > 250ms = gaps -- hidden
+  window, summon resume, debugger -- excluded; visibilitychange to
+  hidden resets the baseline so no hidden-state work happens),
+  summarizes every ~5s of ACCUMULATED visible time (first report at
+  ~2.5s for CI) through the PURE exported summarize (avg/max fps,
+  >20ms long-frame pct, inferredHz = inverted 10th-percentile delta
+  snapped within 10% to the common panel rates -- JS cannot read the
+  refresh rate; the Go context line supplies the hardware truth),
+  and fire-and-forgets RecordFPSSample (console.warn on error, the
+  reportPick pattern); src/fpsmeter.test.ts pins summarize incl. the
+  30fps-throttle and gap-discard shapes) + `src/wheel.ts`
+  (shouldInterceptWheel(platform), the pure mac gate for main.ts's
+  manual wheel interception -- see the wheel passage above)
   + `src/render.ts` (pure text-node DOM builders, no innerHTML
   anywhere: appendHighlighted renders the Go-minted matchRanges
   (half-open RUNE pairs; the walk counts code points because JS
@@ -2936,7 +3008,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (a9-config-ipc: {"cmd":"config"} must earn
   {"ok":true,"accepted":"config"}, sent hidden after a7 and clear of
   the toggle pair, then an explicit hide restores the hidden state
-  -- an IPC-ack check, not a UI check) + a real on-screen window via a compiled
+  -- an IPC-ack check, not a UI check) + the fps meter gate
+  (a4-fps-meter: every scenario boots with COMPETENT_SEARCH_FPS=1;
+  after a3 shows the bar, a parseable "fps: N avg, ..." summary AND
+  the "fps: meter on; display NHz max, ..." context line -- the
+  darwin power-probe cgo's first-run proof -- must land in the app
+  log within 12s; the MECHANISM is the gate, absolute rates are
+  informational on the AC-powered VM) + a real on-screen window via a compiled
   CGWindowList Swift probe, including while a big index build is
   PROVABLY in flight (the hard B-midindex-window check: progress
   line present, completion line absent, before b1 runs); scenario B

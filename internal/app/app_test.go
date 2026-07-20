@@ -248,6 +248,12 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// darwin CI job builds the production seams); Space-watch tests
 	// inject a recording fake.
 	a.plat.watchSpaceChanges = nil
+	// Same for the fps meter's darwin seams (power probe, power-state
+	// observer, WebKit near-60 uncap): nil so no test touches Cocoa or
+	// the WKPreferences SPI; fps tests inject fakes per test.
+	a.plat.powerInfo = nil
+	a.plat.watchPowerChanges = nil
+	a.plat.uncapNear60 = nil
 	// No config.json or plugins-dir IO in unit tests; tests that
 	// exercise the real builder restore a.buildRegistry explicitly.
 	a.newRegistry = func() dispatcher { return nil }

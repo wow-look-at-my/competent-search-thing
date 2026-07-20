@@ -48,6 +48,7 @@ const IDLE_INDEX_DEADLINE_MS = 60000; // scenario A: the ~200-file index must co
 const RAW_RTT_MS = 2000; // raw socket round-trip budget (version/ping checks)
 const CLI_RTT_MS = 2500; // `<bin> toggle|show|hide` must exit within this
 const WINDOW_DEADLINE_MS = 8000; // idle-scenario window appear/disappear budget
+const FPS_METER_MS = 12000; // a4: first meter report ~2.5s after the bar shows, wide margin
 const WINDOW_DEADLINE_BUSY_MS = 10000; // scenario B window budget while indexing
 const MIDINDEX_WINDOW_MS = 20000; // scenario B: progress line must appear within this
 const B_INDEX_DONE_MS = 180000; // scenario B: the big index must then COMPLETE within this
@@ -254,6 +255,13 @@ function startApp(name: string, roots: string[]): App {
     ...process.env,
     COMPETENT_SEARCH_CONFIG_DIR: cfgDir,
     COMPETENT_SEARCH_SOCKET: sock,
+    // The dev-only fps meter (internal/app fps.go + fpsmeter.ts):
+    // a4-fps-meter hard-gates that the whole chain -- env knob, bound
+    // methods, rAF loop, report, Go log line -- works end to end on a
+    // real WindowServer session. ABSOLUTE rates are evidence only:
+    // this is an AC-powered VM with a virtual display and no Low
+    // Power Mode; battery behavior is not reproducible in CI.
+    COMPETENT_SEARCH_FPS: "1",
   };
   const fd = fs.openSync(logFile, "a");
   // Zero args = the GUI path (internal/cli bare invocation).
@@ -542,6 +550,28 @@ async function scenarioA(): Promise<void> {
   await check("a3-window-appears", () => expectWindow(app, true, WINDOW_DEADLINE_MS));
   await screenshotBestEffort("01-summoned-macos.png");
 
+  // a4-fps-meter: with COMPETENT_SEARCH_FPS=1 and the bar visible, a
+  // parseable fps summary line must land in the app log (the meter's
+  // first report fires after ~2.5s of visible rAF time), and the
+  // startup context line must be present too -- it proves the darwin
+  // display/power probe (NSScreen/NSProcessInfo cgo) compiled and ran.
+  // The gate is the MECHANISM, never the absolute number (AC VM).
+  await check("a4-fps-meter", () =>
+    pollFor("an fps summary line in the app log", FPS_METER_MS, POLL_MS, async () => {
+      if (app.proc.exitCode !== null) throw new Error(`app exited (code ${app.proc.exitCode})`);
+      const log0 = readLog(app);
+      const ctx = /fps: meter on; display \d+Hz max, lowPowerMode=(on|off), thermalState=\w+/.exec(log0);
+      if (ctx === null) {
+        if (/fps: meter on;/.test(log0)) {
+          throw new Error(`fps context line present but unparseable (darwin power probe broken): ${/fps: meter on;[^\n]*/.exec(log0)?.[0] ?? ""}`);
+        }
+        return undefined;
+      }
+      const m = /fps: (\d+(?:\.\d+)?) avg, (\d+(?:\.\d+)?) max, (\d+)% frames >20ms over [\d.]+s \(rAF ~(\d+)Hz\)/.exec(log0);
+      return m !== null ? `"${ctx[0]}"; "${m[0]}" (absolute rate is informational: AC-powered CI VM)` : undefined;
+    }),
+  );
+
   await check("a5-toggle-hides", async () => {
     const d = assertCli(app, "toggle");
     return `${d}; ${await expectWindow(app, false, WINDOW_DEADLINE_MS)}`;
@@ -736,7 +766,7 @@ function dumpAppLog(label: string, app: App): void {
 // The lines that make a green run self-explanatory without the full dump:
 // hotkey wiring, index build/progress/summary (which includes "startup
 // complete"), watch backend state, and anything that panicked.
-const SUMMARY_LINE_RE = /hotkey:|index:|watch:|startup complete|panic/;
+const SUMMARY_LINE_RE = /hotkey:|index:|watch:|fps:|startup complete|panic/;
 
 function dumpAppLogSummary(label: string, app: App): void {
   const lines = readLog(app)

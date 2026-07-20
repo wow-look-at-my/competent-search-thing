@@ -2536,6 +2536,44 @@ entries/s (4 workers, warm page cache -- this measures walker overhead
 rather than cold-disk latency). Numbers wobble up to ~2x with
 container load; the shape holds.
 
+### Frame pacing on macOS
+
+Three things decide how smooth the bar feels on a Mac:
+
+- **ProMotion (120Hz) panels**: WebKit caps web content at 60fps by
+  default. The app switches that cap off at startup (a guarded
+  private WebKit toggle -- it degrades to one log line if a macOS
+  update removes it; `COMPETENT_SEARCH_KEEP_NEAR60=1` opts out), so
+  animation and scrolling follow the display's real refresh rate.
+- **Low Power Mode**: macOS makes WebKit halve ALL web rendering to
+  30fps while Low Power Mode is on (System Settings > Battery; often
+  configured as "only on battery"). That is OS design -- no app-level
+  override exists. On a 120Hz panel the uncap above softens the halving
+  to 60fps; on a 60Hz panel expect 30fps until Low Power Mode is off.
+- **Scrolling** uses macOS-native asynchronous scrolling (momentum
+  included), which stays at display rate even when the two throttles
+  above cap the page's animation clock.
+
+To see what your machine is actually doing, run the meter from a
+terminal and read the `fps:` lines:
+
+    COMPETENT_SEARCH_FPS=1 competent-search-thing
+
+1. The startup line names the hardware and the active throttles:
+   `fps: meter on; display 120Hz max, lowPowerMode=off,
+   thermalState=nominal`.
+2. Summon the bar and hold arrow-key or wheel scrolling ~15s; a
+   summary prints every ~5s while the bar is visible:
+   `fps: 59.8 avg, 118.9 max, 2% frames >20ms over 5.0s (rAF ~120Hz)`.
+3. Repeat on battery with Low Power Mode as configured, with it set
+   to Never, and on AC. `~30 avg` with `lowPowerMode=on` is the Low
+   Power Mode throttle (it lifts within a second of turning it off --
+   the meter logs the flip); `rAF ~60Hz` on `display 120Hz max` means
+   the near-60 uncap did not take -- report that log pair.
+4. `thermalState=serious` or worse: thermal throttling; retest cool.
+
+The meter costs nothing when the variable is unset.
+
 ## Wayland
 
 Wayland compositors do not let ordinary clients grab global hotkeys
@@ -2758,6 +2796,11 @@ For debugging and unusual setups:
   global hotkey; the CLI commands keep working).
 - `COMPETENT_SEARCH_SOCKET` -- override the single-instance socket
   path (default `$XDG_RUNTIME_DIR/competent-search-thing.sock`).
+- `COMPETENT_SEARCH_FPS=1` -- dev-only fps meter: logs periodic
+  frame-rate summaries plus a display/power context line (see
+  [Frame pacing on macOS](#frame-pacing-on-macos)). Off = zero cost.
+- `COMPETENT_SEARCH_KEEP_NEAR60=1` -- macOS: skip the WebKit near-60
+  uncap (keep WebKit's default 60fps cap on >60Hz panels).
 
 ### What Wayland does not allow
 

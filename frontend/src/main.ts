@@ -16,6 +16,7 @@
 // GetPreviewConfig + the selection/query hooks).
 
 import { configModeActive, initConfig } from "./config";
+import { initFPSMeter } from "./fpsmeter";
 import {
   initPreview,
   previewOnQueryChange,
@@ -32,6 +33,7 @@ import { reconcileSelection } from "./selection";
 import { renderStats } from "./stats";
 import type { StatsNodes } from "./stats";
 import { initTheme } from "./theme";
+import { shouldInterceptWheel } from "./wheel";
 
 const SEARCH_DEBOUNCE_MS = 15;
 const FLASH_COPIED_MS = 1200;
@@ -802,23 +804,31 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   // instant programmatic scroll cancels the animation mid-flight, so
   // fast detents lost distance. Applying deltas straight to
   // scrollTop interpolates nothing and can swallow nothing.
-  resultsEl.addEventListener(
-    "wheel",
-    (ev: WheelEvent) => {
-      if (ev.ctrlKey) {
-        return; // leave zoom to the webview
-      }
-      ev.preventDefault(); // needs { passive: false } to stick
-      let dy = ev.deltaY;
-      if (ev.deltaMode === 1) {
-        dy *= 40; // lines -> px (WebKitGTK sends pixels; defensive)
-      } else if (ev.deltaMode === 2) {
-        dy *= resultsEl.clientHeight; // pages -> px
-      }
-      resultsEl.scrollTop += dy;
-    },
-    { passive: false },
-  );
+  // macOS-GATED (wheel.ts): a non-passive always-preventDefault wheel
+  // listener forces WebKit's synchronous main-thread scroll path
+  // there, pinning scroll motion to the (Low-Power-Mode-halvable)
+  // rendering-update clock; with no listener macOS scrolls natively
+  // on the async scrolling thread at display rate. Linux behavior is
+  // byte-identical -- the listener registers exactly as before.
+  if (shouldInterceptWheel(navigator.platform)) {
+    resultsEl.addEventListener(
+      "wheel",
+      (ev: WheelEvent) => {
+        if (ev.ctrlKey) {
+          return; // leave zoom to the webview
+        }
+        ev.preventDefault(); // needs { passive: false } to stick
+        let dy = ev.deltaY;
+        if (ev.deltaMode === 1) {
+          dy *= 40; // lines -> px (WebKitGTK sends pixels; defensive)
+        } else if (ev.deltaMode === 2) {
+          dy *= resultsEl.clientHeight; // pages -> px
+        }
+        resultsEl.scrollTop += dy;
+      },
+      { passive: false },
+    );
+  }
   window.addEventListener("blur", () => {
     // The blur auto-hide is suppressed in config mode: users alt-tab
     // away to check things mid-edit, and losing the editor (plus its
@@ -840,6 +850,9 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   // disabled) before the first summon. Pre-first-summon the enabled
   // snapshot is all dashes -- the sampler has not run yet.
   refreshStats(app);
+  // Dev-only fps meter (fpsmeter.ts): registers NOTHING unless
+  // COMPETENT_SEARCH_FPS=1 -- the Go side answers the gate.
+  initFPSMeter(app);
 }
 
 // window.go and window.runtime are injected by the Wails runtime

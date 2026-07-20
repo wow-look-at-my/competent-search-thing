@@ -162,7 +162,20 @@ type platformSeams struct {
 	// Darwin only -- nil on every other platform (the defaultProcTree
 	// pattern), production native.WatchSpaceChanges.
 	watchSpaceChanges func(onChange func()) bool
-	appSource         appctx.Source
+	// powerInfo probes the display's max refresh rate plus the Low
+	// Power Mode / thermal states behind the fps meter's context lines
+	// (fps.go). Darwin only -- nil elsewhere (the watchSpaceChanges
+	// pattern), production native.DisplayPowerInfo.
+	powerInfo func() (platform.PowerInfo, bool)
+	// watchPowerChanges arms the power/thermal-state change observer
+	// (fps.go logs each flip); darwin only -- nil elsewhere,
+	// production native.WatchPowerChanges.
+	watchPowerChanges func(onChange func()) bool
+	// uncapNear60 flips WebKit's near-60 rendering cap off through the
+	// guarded WKPreferences SPI and reports what happened; darwin only
+	// -- nil elsewhere, production native.WebViewUncapNear60.
+	uncapNear60 func() platform.UncapStatus
+	appSource   appctx.Source
 	// firefoxBases lists the Firefox profiles.ini base directories the
 	// frequent-sites discovery probes; production is
 	// firefox.DefaultBaseDirs (the real home), tests pin it.
@@ -222,7 +235,39 @@ func defaultPlatformSeams() platformSeams {
 		firefoxBases:      firefox.DefaultBaseDirs,
 		procTree:          defaultProcTree(goruntime.GOOS),
 		watchSpaceChanges: defaultSpaceWatch(goruntime.GOOS),
+		powerInfo:         defaultPowerInfo(goruntime.GOOS),
+		watchPowerChanges: defaultPowerWatch(goruntime.GOOS),
+		uncapNear60:       defaultUncapNear60(goruntime.GOOS),
 	}
+}
+
+// defaultPowerInfo returns the per-OS display/power probe behind the
+// fps meter's context lines: the native NSScreen/NSProcessInfo read on
+// darwin, nil elsewhere (no probe exists; fps.go says so honestly).
+func defaultPowerInfo(goos string) func() (platform.PowerInfo, bool) {
+	if goos != "darwin" {
+		return nil
+	}
+	return native.DisplayPowerInfo
+}
+
+// defaultPowerWatch returns the per-OS power-state change observer:
+// the native NSProcessInfo observer on darwin, nil elsewhere.
+func defaultPowerWatch(goos string) func(onChange func()) bool {
+	if goos != "darwin" {
+		return nil
+	}
+	return native.WatchPowerChanges
+}
+
+// defaultUncapNear60 returns the per-OS WebKit near-60 uncap: the
+// guarded WKPreferences SPI flip on darwin, nil elsewhere (WebKitGTK
+// has no such cap; fps.go simply skips).
+func defaultUncapNear60(goos string) func() platform.UncapStatus {
+	if goos != "darwin" {
+		return nil
+	}
+	return native.WebViewUncapNear60
 }
 
 // defaultSpaceWatch returns the per-OS Space-change observer: the

@@ -5,6 +5,7 @@
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <Carbon/Carbon.h>
+#import <WebKit/WebKit.h>
 
 #include <string.h>
 
@@ -304,4 +305,179 @@ void csUnregisterHotkey(void) {
 			csHotkeyRef = NULL;
 		}
 	});
+}
+
+// --- display/power probe (powerinfo_darwin.go) ---
+
+// csPowerChanged is exported from Go (powerinfo_darwin.go); cgo emits
+// the definition, this file only references it.
+extern void csPowerChanged(void);
+
+// The installed observer tokens. Retained manually (this file compiles
+// without ARC) and deliberately never removed: the observation is
+// app-lifetime, matching the Go side's forever-drain goroutine (the
+// csSpaceObserver pattern).
+static id csPowerObserver = nil;
+static id csThermalObserver = nil;
+
+int csPowerInfo(int *maxFPS, int *lowPower, int *thermal) {
+	*maxFPS = 0;
+	*lowPower = 0;
+	*thermal = 0;
+	__block int ok = 0;
+	runOnMain(^{
+		NSProcessInfo *info = [NSProcessInfo processInfo];
+		if (info == nil) {
+			return;
+		}
+		// thermalState exists since macOS 10.10.3; Low Power Mode and
+		// maximumFramesPerSecond arrived on macOS 12 -- older systems
+		// keep the defaults (off / 0 = unknown).
+		*thermal = (int)info.thermalState;
+		if (@available(macOS 12.0, *)) {
+			*lowPower = info.lowPowerModeEnabled ? 1 : 0;
+			NSScreen *screen = [NSScreen mainScreen];
+			if (screen != nil) {
+				*maxFPS = (int)screen.maximumFramesPerSecond;
+			}
+		}
+		ok = 1;
+	});
+	return ok;
+}
+
+int csObservePowerChanges(void) {
+	__block int ok = 0;
+	runOnMain(^{
+		if (csPowerObserver != nil || csThermalObserver != nil) {
+			ok = 1; // already observing
+			return;
+		}
+		NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+		// The blocks only poke a buffered Go channel (csPowerChanged
+		// never blocks), so queue:nil -- deliver on the posting thread
+		// -- is safe.
+		if (@available(macOS 12.0, *)) {
+			id token = [nc addObserverForName:NSProcessInfoPowerStateDidChangeNotification
+			                           object:nil
+			                            queue:nil
+			                       usingBlock:^(NSNotification *note) {
+			                           (void)note;
+			                           csPowerChanged();
+			                       }];
+			if (token != nil) {
+				csPowerObserver = [token retain];
+				ok = 1;
+			}
+		}
+		id token = [nc addObserverForName:NSProcessInfoThermalStateDidChangeNotification
+		                           object:nil
+		                            queue:nil
+		                       usingBlock:^(NSNotification *note) {
+		                           (void)note;
+		                           csPowerChanged();
+		                       }];
+		if (token != nil) {
+			csThermalObserver = [token retain];
+			ok = 1;
+		}
+	});
+	return ok;
+}
+
+// --- WebKit near-60 uncap (webkit_darwin.go) ---
+//
+// WKPreferences' feature-list SPI, verified against WebKit
+// WKPreferencesPrivate.h: +_features (macOS 13.3+) paired with
+// -_setEnabled:forFeature:, plus the older
+// +_experimentalFeatures/+_internalDebugFeatures splits. Declared as
+// a category so the compiler emits ordinary (BOOL, id) calls; every
+// use below is respondsToSelector-gated, so a WebKit that drops or
+// renames the SPI degrades to an honest status code, never a crash.
+@interface WKPreferences (CSFeatureSPI)
++ (NSArray *)_features;
++ (NSArray *)_experimentalFeatures;
++ (NSArray *)_internalDebugFeatures;
+- (void)_setEnabled:(BOOL)value forFeature:(id)feature;
+- (void)_setEnabled:(BOOL)value forExperimentalFeature:(id)feature;
+- (void)_setEnabled:(BOOL)value forInternalDebugFeature:(id)feature;
+@end
+
+// csFindFeature returns the feature object whose key equals want, or
+// nil. _WKFeature.key is read through its plain getter, guarded, so
+// unexpected list members are skipped instead of crashing.
+static id csFindFeature(NSArray *features, NSString *want) {
+	if (features == nil) {
+		return nil;
+	}
+	for (id f in features) {
+		if (![f respondsToSelector:@selector(key)]) {
+			continue;
+		}
+		id key = [f performSelector:@selector(key)];
+		if (key != nil && [key isKindOfClass:[NSString class]] && [want isEqualToString:(NSString *)key]) {
+			return f;
+		}
+	}
+	return nil;
+}
+
+int csWebViewUncapNear60(void) {
+	__block int result = CS_UNCAP_NO_WINDOW;
+	runOnMain(^{
+		// Same first-window selection as csMoveWindow/csConfigurePanel;
+		// wails adds the WKWebView as a direct subview of its content
+		// view (verified in the v2.13.0 darwin frontend sources).
+		NSArray<NSWindow *> *windows = [NSApp windows];
+		if (windows == nil || windows.count == 0) {
+			result = CS_UNCAP_NO_WINDOW;
+			return;
+		}
+		WKWebView *webview = nil;
+		for (NSView *v in windows[0].contentView.subviews) {
+			if ([v isKindOfClass:[WKWebView class]]) {
+				webview = (WKWebView *)v;
+				break;
+			}
+		}
+		if (webview == nil || webview.configuration == nil || webview.configuration.preferences == nil) {
+			result = CS_UNCAP_NO_WEBVIEW;
+			return;
+		}
+		WKPreferences *prefs = webview.configuration.preferences;
+		NSString *want = @"PreferPageRenderingUpdatesNear60FPSEnabled";
+		int sawSPI = 0;
+		if ([WKPreferences respondsToSelector:@selector(_features)]
+			&& [prefs respondsToSelector:@selector(_setEnabled:forFeature:)]) {
+			sawSPI = 1;
+			id f = csFindFeature([WKPreferences _features], want);
+			if (f != nil) {
+				[prefs _setEnabled:NO forFeature:f];
+				result = CS_UNCAP_APPLIED;
+				return;
+			}
+		}
+		if ([WKPreferences respondsToSelector:@selector(_experimentalFeatures)]
+			&& [prefs respondsToSelector:@selector(_setEnabled:forExperimentalFeature:)]) {
+			sawSPI = 1;
+			id f = csFindFeature([WKPreferences _experimentalFeatures], want);
+			if (f != nil) {
+				[prefs _setEnabled:NO forExperimentalFeature:f];
+				result = CS_UNCAP_APPLIED;
+				return;
+			}
+		}
+		if ([WKPreferences respondsToSelector:@selector(_internalDebugFeatures)]
+			&& [prefs respondsToSelector:@selector(_setEnabled:forInternalDebugFeature:)]) {
+			sawSPI = 1;
+			id f = csFindFeature([WKPreferences _internalDebugFeatures], want);
+			if (f != nil) {
+				[prefs _setEnabled:NO forInternalDebugFeature:f];
+				result = CS_UNCAP_APPLIED;
+				return;
+			}
+		}
+		result = sawSPI ? CS_UNCAP_FEATURE_NOT_FOUND : CS_UNCAP_SPI_MISSING;
+	});
+	return result;
 }
