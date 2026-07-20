@@ -60,6 +60,21 @@ describe("summarize", () => {
     expect(s!.inferredHz).toBe(25);
   });
 
+  it("clamps rates at the Go validation ceiling on sub-ms deltas", () => {
+    // rAF double-fires on virtualized displays produce sub-millisecond
+    // deltas; an unclamped 1000/min would exceed the Go-side 0..1000
+    // bound and get the whole sample rejected (no log line = a flaked
+    // a4 smoke gate).
+    const deltas = steady(1000 / 60, 100);
+    deltas.push(0.4); // one double-fire
+    const s = summarize(deltas);
+    expect(s!.maxFps).toBe(1000);
+    const allFast = summarize(steady(0.4, 50));
+    expect(allFast!.avgFps).toBe(1000);
+    expect(allFast!.maxFps).toBe(1000);
+    expect(allFast!.inferredHz).toBe(1000);
+  });
+
   it("counts mixed windows correctly", () => {
     // Half 60Hz frames, half 33.3ms frames: avg between, long ~50%.
     const deltas = steady(1000 / 60, 100).concat(steady(1000 / 30, 100));

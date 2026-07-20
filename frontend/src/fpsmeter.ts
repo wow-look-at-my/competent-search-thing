@@ -23,6 +23,12 @@ const FIRST_REPORT_MS = 2500;
 // inference from the 10th-percentile delta is the standard trick; the
 // Go context line supplies the hardware truth to compare against.
 const SNAP_RATES = [30, 48, 60, 72, 90, 120, 144];
+// Rate ceiling, mirroring the Go-side validation (fps.go bounds every
+// rate to 0..1000): sub-millisecond deltas -- rAF double-fires on
+// virtualized displays -- would otherwise push a rate over the bound
+// and get the whole sample rejected (observed maxFps 1000.0 on the CI
+// VM, one double-fire away from a dropped report).
+const MAX_RATE = 1000;
 
 // summarize turns one window of frame deltas (ms) into an FPSSample.
 // PURE (vitest-covered): gap and non-positive deltas are dropped
@@ -47,7 +53,7 @@ export function summarize(deltas: number[]): FPSSample | null {
   }
   const sorted = [...frames].sort((a, b) => a - b);
   const p10 = sorted[Math.floor(sorted.length * 0.1)];
-  const rawHz = 1000 / p10;
+  const rawHz = Math.min(1000 / p10, MAX_RATE);
   let inferredHz = Math.round(rawHz);
   for (const r of SNAP_RATES) {
     if (Math.abs(rawHz - r) <= r * 0.1) {
@@ -56,8 +62,8 @@ export function summarize(deltas: number[]): FPSSample | null {
     }
   }
   return {
-    avgFps: (frames.length / sum) * 1000,
-    maxFps: 1000 / min,
+    avgFps: Math.min((frames.length / sum) * 1000, MAX_RATE),
+    maxFps: Math.min(1000 / min, MAX_RATE),
     longFramePct: Math.round((long / frames.length) * 100),
     windowMs: Math.round(sum),
     frames: frames.length,
