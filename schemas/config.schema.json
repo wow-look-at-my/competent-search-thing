@@ -116,6 +116,22 @@
         },
         "telemetry": {
           "$ref": "#/$defs/searchTelemetryConfig"
+        },
+        "arbiter": {
+          "$ref": "#/$defs/arbiterConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "arbiterConfig": {
+      "title": "Learned arbitration configuration",
+      "description": "Opt-in learned arbitration: a small model, trained entirely on this machine from your own recorded picks (the search.telemetry log), that learns which KIND of result a query means -- when the same name matches a file, a browser tab, and an app, the one you keep choosing floats to the top. It only re-orders and places results the search already found; nothing new is fetched and nothing ever leaves the machine. Off by default.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "true turns learned arbitration on. It stays invisible until it has enough evidence: search.telemetry must also be enabled so picks are recorded, at least 200 picks must exist in the log, and the model must demonstrably predict your picks better than the current result order -- until then everything looks and ranks exactly as before."
         }
       },
       "additionalProperties": false

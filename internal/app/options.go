@@ -76,6 +76,12 @@ type Options struct {
 	// (wire config's search.telemetry here; see telemetry.go in this
 	// package). The zero value keeps the whole feature off.
 	Telemetry config.TelemetryConfig
+	// Arbiter configures the learned composition arbitration layer
+	// (wire config's search.arbiter here; see arbiter.go in this
+	// package). OPT-IN: the zero value keeps the layer entirely
+	// unwired -- no file reads, no goroutines, no model term, and
+	// plugin emissions pass through untouched.
+	Arbiter config.ArbiterConfig
 	// Preview is the preview pane configuration (wire config's
 	// preview section here); the zero value keeps the pane off and
 	// every preview method degrades to a no-op. See preview.go.

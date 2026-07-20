@@ -137,12 +137,22 @@ func (a *App) telLayer() *telemetryLayer {
 // maxResults rows -- microseconds, and only when opted in.
 func (a *App) queryWithTelemetry(q string) []Result {
 	l := a.telLayer()
-	if l == nil {
+	// An ACTIVE arbiter also wants the delivered impression -- its
+	// emission seam compares plugin rows against the best file row of
+	// the same query. Inactive (the normal case) it requests nothing,
+	// keeping the default path exactly Manager.Query.
+	arb := a.activeArbLayer()
+	if l == nil && arb == nil {
 		return a.manager.Query(q, 0)
 	}
 	var trace []index.ResultSignals
 	res := a.manager.QueryTraced(q, 0, &trace)
-	l.stash(q, a.manager.Blend().Active(), trace)
+	if l != nil {
+		l.stash(q, a.manager.Blend().Active(), trace)
+	}
+	if arb != nil {
+		arb.stash(q, trace)
+	}
 	return res
 }
 
@@ -206,7 +216,11 @@ func (a *App) RecordPick(rep telemetry.PickReport) error {
 			a.telErrOnce.Do(func() {
 				log.Printf("telemetry: appending a pick record: %v (further write errors suppressed)", err)
 			})
+			return
 		}
+		// The pick is on disk: count it toward the arbiter's
+		// every-N retrain (a no-op while that layer is off).
+		a.noteArbiterPick()
 	}()
 	return nil
 }
