@@ -17,9 +17,9 @@
 // story until native .ico extraction exists.
 //
 // Nothing touches the disk or execs anything at NewService; the
-// first Resolve pays the one-time initialization (mime database
-// load, icon-theme detection) so callers can construct the service
-// on the startup path for free.
+// first Resolve pays the one-time initialization (icon-theme
+// detection, the embedded pack parse) so callers can construct the
+// service on the startup path for free.
 package icons
 
 import (
@@ -104,7 +104,7 @@ type Service struct {
 	getenv       func(string) string
 	runGsettings func(ctx context.Context) (string, error)
 	logf         func(format string, args ...any)
-	theme        func() string
+	themeName    func() string
 	dataDirs     []string
 	iconBases    []string
 	pixmapDirs   []string
@@ -139,9 +139,9 @@ func NewService(o Options) *Service {
 	if s.logf == nil {
 		s.logf = log.Printf
 	}
-	s.theme = o.Theme
-	if s.theme == nil {
-		s.theme = func() string { return "" }
+	s.themeName = o.Theme
+	if s.themeName == nil {
+		s.themeName = func() string { return "" }
 	}
 	if s.dataDirs == nil {
 		s.dataDirs = xdgDataDirs(s.getenv)
@@ -187,7 +187,7 @@ func (s *Service) Resolve(keys []string, size int) map[string]string {
 	s.once.Do(s.initialize)
 	// One theme read per batch, outside the mutex: the production
 	// getter re-reads config.json (the GetTheme pattern).
-	light := s.theme() == "light"
+	light := s.themeName() == "light"
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make(map[string]string, len(keys))

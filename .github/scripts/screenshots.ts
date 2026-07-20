@@ -95,6 +95,13 @@ const files = [
   "Projects/searchbar/README.md",
   "Projects/searchbar/go.mod",
   "Projects/searchbar/index.go",
+  // "rep"-prefixed names across common code extensions so the
+  // 02-results/03-selection shots demonstrate varied per-file-type
+  // icons (beside the report *.pdf/xlsx/md/csv matches above).
+  "Projects/searchbar/repo.go",
+  "Projects/webapp/src/reply.ts",
+  "Projects/webapp/repack.json",
+  "Projects/webapp/src/repair.css",
   "Projects/webapp/package.json",
   "Projects/webapp/README.md",
   "Projects/webapp/src/app.ts",
