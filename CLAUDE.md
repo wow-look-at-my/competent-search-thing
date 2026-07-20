@@ -717,7 +717,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   restart it" on stderr, exit 1, cobra error line suppressed); not
   running -> start the GUI in-process with RunOptions{Server,
   ShowOnStartup: true, OpenConfig: true} (ErrAlreadyRunning race ->
-  Send CmdConfig again). The CLI
+  Send CmdConfig again). service (service.go) is the login-service
+  group -- install|uninstall|status|restart delegate to
+  internal/service's Manager (the `newServiceManager` seam swaps in
+  a scripted-runner Manager over a temp home in service_test.go);
+  the commands never boot the GUI or touch the IPC socket, print
+  Notes/Extra lines verbatim ("note: " prefix on install/uninstall),
+  and surface the log location on install/status. The CLI
   branches ONLY on ipc.Reply fields (checkReply/summonReply/
   configReply); ALL
   wire parsing lives in ipc.Send -- a non-JSON reply (e.g. a
@@ -732,6 +738,73 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the server (Shutdown closes it). Unit-tested headlessly: fake
   runGUI, real ipc servers on temp sockets, COMPETENT_SEARCH_SOCKET
   (t.Setenv) isolation.
+- `internal/service` -- login-service management behind the CLI's
+  `service` group, pure logic over an injectable `Runner` seam (the
+  internal/gsettings pattern: production `Run` execs launchctl/
+  systemctl directly, no shell, 10s per call, stderr folded into
+  errors; tests script argv -> output and an UNSCRIPTED call fails
+  the test -- the exact argv surface is contract). `Manager{GOOS,
+  Run, Exe, Home, UID, Getenv}` is fully injectable and GOOS
+  dispatches the backend, so BOTH CI jobs test every OS shape (the
+  sysstats darwin.go value-driven pattern); `NewManager` fills
+  production values with Exe = platform.StableExecutable(exe, args0)
+  so a brew-Cellar-versioned path is never baked into a service file
+  (the GNOME keybinding lesson -- it dies on every brew upgrade).
+  darwin backend (darwin.go + plist.go): LaunchAgent plist at
+  ~/Library/LaunchAgents/com.wow-look-at-my.competent-search-thing
+  .plist -- RunAtLoad true; KeepAlive {SuccessfulExit: false} =
+  CRASH-ONLY restart per launchd.plist(5) (the bare KeepAlive true
+  form would respawn the single-instance exit-0 handoff copy every
+  ~10s, each respawn re-summoning the bar; pinned by
+  TestLaunchAgentPlistCrashOnlyKeepAlive); LimitLoadToSessionType
+  Aqua; ProcessType Interactive; StandardOutPath/StandardErrorPath
+  both appending to ~/Library/Logs/competent-search-thing/
+  competent-search-thing.log (no built-in rotation; README says
+  truncate). Modern launchctl surface only: bootstrap gui/<uid> with
+  enable FIRST (launchd refuses to bootstrap a disabled service;
+  enable failure = note, bootstrap is the real gate), bootout on
+  uninstall AND before re-bootstrapping a changed definition,
+  kickstart -k = restart, print gui/<uid>/<label> = real state
+  (parseLaunchdPrint takes the FIRST state/pid facts). DOUBLE-START
+  GUARD: install REFUSES (and status warns) when
+  homebrew.mxcl.competent-search-thing owns startup -- plist present
+  OR job loaded -- because exactly one unit may own it: brew's
+  service block would use keep_alive true, so the losing copy's
+  clean exit respawns ~10s forever, re-summoning the bar; the brew
+  unit WINS (opt_bin tracks brew upgrades) and the refusal names
+  `brew services stop pazer/build/competent-search-thing`. linux
+  backend (linux.go + unit.go): systemd user unit at
+  $XDG_CONFIG_HOME|~/.config/systemd/user/competent-search-thing
+  .service -- Type=exec, Restart=on-failure + RestartSec=2
+  (crash-only, same handoff reasoning), WantedBy/PartOf/After
+  graphical-session.target (a GUI app starts WITH the desktop --
+  which imports DISPLAY/WAYLAND_DISPLAY into the user manager -- and
+  stops with the session), journald logging (JournalHint =
+  "journalctl --user -u competent-search-thing"). install = write +
+  daemon-reload (only when the content changed) + enable + start
+  ONLY while graphical-session.target is active (NEVER start a
+  GTK/WebKit app without a display; otherwise one next-login note),
+  changed-while-running converges via restart; status = systemctl
+  --user show properties (LoadState/UnitFileState/ActiveState/
+  SubState/MainPID; an unavailable user manager degrades to an
+  honest Extra line, never an error); uninstall = disable --now +
+  rm + daemon-reload with manager failures as notes (removing the
+  file still converges at next login). Both service files render
+  from PURE UNTAGGED generators -- LaunchAgentPlist (xmlEscape on
+  every string) and SystemdUnit (systemdExecPath: "%" doubled,
+  whitespace/quote paths double-quoted with C-style escapes) --
+  golden-tested on both CI jobs; writeIfChanged (atomic temp+rename,
+  content-equal = zero writes) makes install idempotent;
+  ProgramArguments/ExecStart = the plain ZERO-ARG binary (GUI boot,
+  start-hidden default -- zero-arg behavior is a CI screenshot
+  contract, never add arguments). Windows/other = honest
+  not-supported errors, zero runner calls. real_darwin_test.go
+  plutil -lints generated plists on the mac job (the
+  readers_darwin_test.go precedent); CI runs NO launchctl/systemctl
+  operations anywhere -- generation + scripted-runner orchestration
+  only, the documented boundary. Consumed by internal/cli
+  service.go; README "Run as a login service" is the user-facing
+  half.
 - `internal/ipc` -- the single-instance unix-socket IPC layer, pure
   and headless-tested. SocketPath: $COMPETENT_SEARCH_SOCKET override,
   else $XDG_RUNTIME_DIR/competent-search-thing.sock, else a per-uid

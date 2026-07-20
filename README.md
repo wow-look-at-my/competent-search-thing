@@ -142,6 +142,46 @@ package-manager (APT, Homebrew, npm, OCI) reference. Avoid the
 debs are generated server-side without `Depends`, which is exactly the
 missing-libraries trap the CI-built `.deb` exists to fix.
 
+## Run as a login service
+
+Start the searchbar automatically at login, keep it running (crash
+restarts) and log somewhere inspectable -- whatever way you installed
+it (deb, raw binary, brew):
+
+```
+competent-search-thing service install
+```
+
+- `service install` -- write the service file for this binary, enable
+  login startup and start it now. Safe to re-run; it converges.
+- `service status` -- the real observed state: installed / loaded /
+  running (with PID), plus where the logs go.
+- `service restart` -- kill and relaunch the service instance.
+- `service uninstall` -- stop it, disable login startup, remove the
+  service file. Logs are left in place. Re-running no-ops.
+
+| | macOS | Linux |
+|---|-------|-------|
+| Mechanism | launchd LaunchAgent in `~/Library/LaunchAgents` | systemd user unit in `~/.config/systemd/user` |
+| Logs | `~/Library/Logs/competent-search-thing/competent-search-thing.log` | `journalctl --user -u competent-search-thing` |
+| Crash restart | `KeepAlive` `SuccessfulExit=false` | `Restart=on-failure` |
+
+- A crash restarts the app; a clean exit does not. Quitting via
+  `!quit` stays quit until the next login or `service restart`.
+- Linux: the unit binds to `graphical-session.target`, so it starts
+  with the desktop and stops with the session. Needs a DE that
+  manages that target (GNOME, KDE and most modern desktops do).
+- macOS + Homebrew: if `brew services` already manages the app,
+  `service install` refuses -- exactly one manager may own startup.
+  Stop it first: `brew services stop pazer/build/competent-search-thing`.
+- If an instance is already running manually, the service copy just
+  summons its bar once and exits cleanly (no loop); quit the manual
+  instance and run `service restart` to hand over.
+- The macOS log file has no built-in rotation; truncate it anytime
+  (`: > <file>` -- launchd appends, writes continue). journald
+  handles rotation on Linux.
+- Windows: not supported yet; `service` commands say so honestly.
+
 ## Indexing scope
 
 By default the app indexes your **whole filesystem**, Everything-style:
