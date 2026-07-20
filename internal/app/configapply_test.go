@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,6 +105,68 @@ func TestApplyConfigEverySectionHasAnApplier(t *testing.T) {
 		if s.group != "" {
 			require.Contains(t, applyGroups, s.group,
 				"section %q names an unregistered group", s.name)
+		}
+	}
+}
+
+// TestApplyTableCoversEveryConfigSection is the reflective half of
+// the table-shape guard: it enumerates config.Config's top-level json
+// sections and FAILS when one lacks live-apply coverage -- either a
+// row named exactly after the section, or (for a section applied at
+// "key.sub" grain) one row per json-tagged subfield. The row-shape
+// guard above only inspects rows that EXIST, which is exactly how
+// search.telemetry (PR #46) landed applier-less: nothing failed on
+// the missing row. This test fails on the absence itself, so a new
+// config section or sub-knob cannot merge without a live applier (or
+// an explicit exclusion below with a ruling).
+func TestApplyTableCoversEveryConfigSection(t *testing.T) {
+	// Deliberately row-less, with the ruling for each:
+	//   rootsVersion -- app-managed (SaveConfig forces the on-disk
+	//   stamp, the Load migrations own it); it can never legitimately
+	//   differ between two loaded configs (see the table comment).
+	// window.translucent is NOT excluded: the "window" section has a
+	// row, and the translucent knob's next-launch handling lives in
+	// applyConfig's ruled NextLaunch block.
+	excluded := map[string]bool{"rootsVersion": true}
+
+	rows := map[string]bool{}
+	subRows := map[string]bool{} // top-level keys applied at "key.sub" grain
+	for _, s := range sectionAppliers {
+		rows[s.name] = true
+		if k, _, ok := strings.Cut(s.name, "."); ok {
+			subRows[k] = true
+		}
+	}
+
+	ct := reflect.TypeOf(config.Config{})
+	for i := 0; i < ct.NumField(); i++ {
+		f := ct.Field(i)
+		tag, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if tag == "" || tag == "-" || excluded[tag] {
+			continue
+		}
+		if rows[tag] {
+			continue // covered whole (one row diffs the section)
+		}
+		if !subRows[tag] {
+			t.Errorf("config section %q has no sectionAppliers row (live-apply is total; add an applier or an excluded ruling)", tag)
+			continue
+		}
+		// Applied at per-knob grain: EVERY subfield needs its own row,
+		// or a new knob inside the section escapes the diff silently
+		// (the search.telemetry gap).
+		if f.Type.Kind() != reflect.Struct {
+			t.Errorf("config section %q has sub-grain rows but is not a struct", tag)
+			continue
+		}
+		for j := 0; j < f.Type.NumField(); j++ {
+			stag, _, _ := strings.Cut(f.Type.Field(j).Tag.Get("json"), ",")
+			if stag == "" || stag == "-" {
+				continue
+			}
+			if !rows[tag+"."+stag] {
+				t.Errorf("config knob %q has no sectionAppliers row while %q applies per-knob (the search.telemetry gap, PR #46)", tag+"."+stag, tag)
+			}
 		}
 	}
 }
