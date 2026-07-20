@@ -2511,8 +2511,9 @@ Both endpoints are configurable for self-hosted or compatible
 servers -- empty (the default) means the official endpoint:
 
 - `preview.kagi.baseUrl` (config only, no environment fallback):
-  searches go to `<baseUrl>/api/v1/search`, so the target must speak
-  the Kagi Search API.
+  replaces the whole default base (`https://kagi.com/api/v1`);
+  searches go to `<baseUrl>/search`, so the target must speak the
+  Kagi Search API.
 - `preview.openai.baseUrl`, or the `OPENAI_BASE_URL` environment
   variable (the SDK convention; the config value wins): answers go to
   `<baseUrl>/v1/responses`, so the target must implement the OpenAI
@@ -2531,9 +2532,10 @@ the page -- the frontend only learns "configured or not", and an
 unconfigured provider's button renders disabled with a hint naming
 the config key.
 
-Web searches go to the Kagi Search API (v1: `GET
-<baseUrl>/api/v1/search`, default base `https://kagi.com`,
-`Authorization: Bot <key>`). Repeat
+Web searches go to the Kagi Search API (`POST <baseUrl>/search` with
+a JSON body, default base `https://kagi.com/api/v1`,
+`Authorization: Bearer <key>`). A failed search logs one line with
+the Kagi trace id (quote it to Kagi support). Repeat
 queries are served from a 15-minute in-memory cache (marked `cached`
 in the pane, zero network), and a client-side courtesy rate limit --
 a burst of 3 requests refilling at 1 per second -- fails fast with

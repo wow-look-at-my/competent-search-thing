@@ -497,7 +497,7 @@
         "baseUrl": {
           "type": "string",
           "default": "",
-          "description": "Custom API base URL, e.g. a self-hosted Kagi-compatible server; empty = the official endpoint (https://kagi.com). No environment fallback. Requests go to <baseUrl>/api/v1/search; a non-http(s) or host-less value leaves the provider unavailable with an error naming this key."
+          "description": "Custom API base URL, e.g. a self-hosted Kagi-compatible server; empty = the official endpoint (https://kagi.com/api/v1). No environment fallback. The value replaces the whole default base; requests go to <baseUrl>/search. A non-http(s) or host-less value leaves the provider unavailable with an error naming this key."
         },
         "maxResults": {
           "type": "integer",
