@@ -235,6 +235,10 @@ func TestBuildIndexCancelledDiscardsPartialAndLogs(t *testing.T) {
 		"the startup summary never fires on the cancelled path")
 	require.Equal(t, 0, m.LiveCount(), "the partial store is discarded, never swapped in")
 	require.False(t, watchUp(a), "a cancelled build never starts the watch layer")
+	a.watchMu.Lock()
+	early := a.earlyWatcher
+	a.watchMu.Unlock()
+	require.Nil(t, early, "the cancelled path stops and detaches the pre-build watcher")
 }
 
 func TestShutdownCancelsInitialBuild(t *testing.T) {
@@ -325,10 +329,56 @@ func TestStartWatchEmitsBackendNoticeAndGrantHint(t *testing.T) {
 	// each with its matching hint.
 	require.Equal(t, watchBackendFor(watch.PerDirBackendName()),
 		r.emitted(eventWatchBackend)[0].payload[0])
+	// The seam path does not exist on disk, so symlink resolution fails
+	// and the hint falls back to the stable spelling -- the pre-fix
+	// behavior, pinned as the fallback contract.
 	require.Contains(t, buf.String(),
 		"watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /test/bin/competent-search-thing",
-		"the grant command names the stable executable path")
+		"an unresolvable executable path falls back to the stable spelling")
+	require.Contains(t, buf.String(),
+		"watch: file capabilities stick to that exact file -- re-run the setcap command after any upgrade that replaces the binary (e.g. brew upgrade)",
+		"the grant hint carries the persistence caveat")
+	require.Contains(t, buf.String(),
+		"watch: note: file capabilities force secure-exec (GOTRACEBACK=none, non-dumpable) -- crashes report as one line; ambient caps keep full crash reports (see README / issue #58)",
+		"the grant hint carries the crash-visibility tradeoff (issue #58)")
 	a.Shutdown(context.Background())
+}
+
+func TestLogFanotifyGrantResolvesSymlinkedExecutable(t *testing.T) {
+	// The field failure this pins: the hint printed the Homebrew bin/
+	// SYMLINK and setcap refused it ("not a regular (non-symlink)
+	// file"). The printed path must be the resolved real file.
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	dir := t.TempDir()
+	real := filepath.Join(dir, "Cellar", "competent-search-thing", "0.1.0", "bin", "competent-search-thing")
+	require.NoError(t, os.MkdirAll(filepath.Dir(real), 0o755))
+	require.NoError(t, os.WriteFile(real, []byte("#!"), 0o755))
+	link := filepath.Join(dir, "bin", "competent-search-thing")
+	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o755))
+	require.NoError(t, os.Symlink(real, link))
+	// t.TempDir may itself sit behind a symlink (darwin /var ->
+	// /private/var), so canonicalize the expectation the same way.
+	wantReal, err := filepath.EvalSymlinks(real)
+	require.NoError(t, err)
+
+	a, _ := newTestApp(t, nil, Options{})
+	a.plat.goos = "linux"
+	a.plat.executable = func() (string, error) { return link, nil }
+	a.logFanotifyGrant()
+
+	out := buf.String()
+	require.Contains(t, out,
+		"watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep "+wantReal,
+		"the grant command names the resolved real file, not the symlink")
+	require.NotContains(t, out, "+ep "+link+"\n",
+		"the symlink spelling setcap refuses must not be printed")
+	require.Contains(t, out, "re-run the setcap command after any upgrade",
+		"the persistence caveat is logged with the command")
+	require.Contains(t, out, "ambient caps keep full crash reports",
+		"the secure-exec tradeoff note is logged with the command")
 }
 
 func TestStartWatchStrictFanotifyNeverFallsBackToInotify(t *testing.T) {
@@ -384,3 +434,7 @@ func TestEmitEventBeforeStartupIsNoOp(t *testing.T) {
 	a.emitDegraded(watch.Stats{})
 	require.Empty(t, r.emits, "no context yet: nothing emitted, nothing crashed")
 }
+
+// The pre-build (deferred) watch registration tests --
+// startEarlyWatch / adoption / mid-build teardown -- live in
+// watch_early_test.go (the hotset.go file-length-cap precedent).
