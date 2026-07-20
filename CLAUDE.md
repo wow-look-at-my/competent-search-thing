@@ -293,7 +293,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   file -- re-run the setcap command after any upgrade that replaces
   the binary (e.g. brew upgrade)") -- deliberately the OPPOSITE
   path preference from hotkey.go's keybinding command, which must
-  survive upgrades; after
+  survive upgrades -- and ONE secure-exec tradeoff line (file caps
+  set AT_SECURE: GOTRACEBACK forced to none + non-dumpable, so
+  caps-on crashes report one line; ambient caps are the verified
+  full-visibility alternative -- issue #58 "secure-exec facts",
+  README "Crash-visibility tradeoff" carries the capsh command);
+  after
   startWatch returns (it waits for the watcher's initial
   registration), buildIndex logs ONE "index: startup complete: N
   entries in D, R ram" summary -- after watch establishment, so the

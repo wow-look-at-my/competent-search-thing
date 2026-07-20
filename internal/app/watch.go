@@ -361,6 +361,14 @@ func (a *App) logFanotifyGrant() {
 		}
 		log.Printf("watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep %s", exe)
 		log.Printf("watch: file capabilities stick to that exact file -- re-run the setcap command after any upgrade that replaces the binary (e.g. brew upgrade)")
+		// The crash-visibility tradeoff (issue #58, "secure-exec
+		// facts", verified): file caps set AT_SECURE, under which the
+		// Go runtime forces GOTRACEBACK=none (not overridable) and the
+		// process is non-dumpable -- a caps-on crash reports one line
+		// with no traceback and no core. Ambient caps are the
+		// verified full-visibility alternative; the README carries
+		// the exact capsh command.
+		log.Printf("watch: note: file capabilities force secure-exec (GOTRACEBACK=none, non-dumpable) -- crashes report as one line; ambient caps keep full crash reports (see README / issue #58)")
 	})
 }
 

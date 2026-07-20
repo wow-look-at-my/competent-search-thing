@@ -343,6 +343,19 @@ capabilities apply process-wide to every run of that binary:
 anyone who can execute the binary gets both. Only do this on a
 single-user machine whose binary you trust.
 
+**Crash-visibility tradeoff.** A file-capability binary runs
+secure-exec (`AT_SECURE`): the Go runtime forces `GOTRACEBACK=none`
+(not overridable) and the process is non-dumpable -- a crash reports
+one line, with no traceback and no core file.
+When chasing a crash, drop the file caps for that session and grant
+AMBIENT capabilities instead -- full crash reports return while
+fanotify still marks (verified in
+[issue #58](https://github.com/wow-look-at-my/competent-search-thing/issues/58)):
+
+```
+sudo -E capsh --user=$USER --inh=cap_sys_admin,cap_dac_read_search --addamb=cap_sys_admin,cap_dac_read_search -- -c 'exec competent-search-thing'
+```
+
 ### How changes converge
 
 The consistency model in practice:
@@ -378,6 +391,7 @@ watch: backend inotify armed before the initial index build; changes during inde
 watch: backend inotify: 41230/612009 dirs live-watched (budget 65536); sweep interval 20m0s; full rescan interval off
 watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /home/linuxbrew/.linuxbrew/Cellar/competent-search-thing/0.412.0/bin/competent-search-thing
 watch: file capabilities stick to that exact file -- re-run the setcap command after any upgrade that replaces the binary (e.g. brew upgrade)
+watch: note: file capabilities force secure-exec (GOTRACEBACK=none, non-dumpable) -- crashes report as one line; ambient caps keep full crash reports (see README / issue #58)
 watch: backend fsevents: whole-filesystem coverage active; per-directory watches not needed
 watch: backend fsevents: 0/0 dirs live-watched (budget 3840); sweep interval 20m0s; full rescan interval off
 ```
