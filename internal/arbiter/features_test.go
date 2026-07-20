@@ -38,6 +38,19 @@ func collect(t *testing.T, r Row) map[int]float64 {
 	return out
 }
 
+// requireNoFeature asserts feature index idx was never emitted for the
+// row. It spells the key-absence lookup directly instead of using
+// require.NotContains: testify's NotContains on a map compares KEYS
+// (int here, an exact match), while the testifycast element-mismatch
+// warning models a map's element type as its VALUE type (float64) --
+// and converting the probe to float64 would break the key comparison
+// and leave an assertion that can never fail.
+func requireNoFeature(t *testing.T, got map[int]float64, idx int, msgAndArgs ...any) {
+	t.Helper()
+	_, found := got[idx]
+	require.False(t, found, msgAndArgs...)
+}
+
 func TestFeatureLayoutBounds(t *testing.T) {
 	// The layout constants must tile without overlap; FeatureDim caps
 	// them all (a regression here silently corrupts every model).
@@ -52,7 +65,7 @@ func TestFileRowFeatures(t *testing.T) {
 	got := collect(t, fullFileRow())
 	require.Equal(t, 1.0, got[idxBias])
 	require.Equal(t, 1.0, got[idxIsFile])
-	require.NotContains(t, got, idxIsPlugin, "a file row never carries plugin features")
+	requireNoFeature(t, got, idxIsPlugin, "a file row never carries plugin features")
 	require.Equal(t, 1.0, got[idxClassBase+1], "class prefix one-hot")
 	require.Equal(t, 1.0, got[idxJumped], "EffClass < Class marks the tier jump")
 	require.InDelta(t, 120.0/256, got[idxAlign], 1e-12)
@@ -70,14 +83,14 @@ func TestFileRowFeatures(t *testing.T) {
 	require.Equal(t, 1.0, got[idxSpaceBase+0])
 	require.Equal(t, 1.0, got[idxSepBase+0])
 	require.Equal(t, 1.0, got[idxTodBase+0*todBuckets+2])
-	require.NotContains(t, got, idxSpaceBase+1, "never the plugin side")
+	requireNoFeature(t, got, idxSpaceBase+1, "never the plugin side")
 }
 
 func TestPluginRowFeatures(t *testing.T) {
 	got := collect(t, fullPluginRow())
 	require.Equal(t, 1.0, got[idxIsPlugin])
-	require.NotContains(t, got, idxIsFile)
-	require.NotContains(t, got, idxClassBase, "plugin rows carry no file block")
+	requireNoFeature(t, got, idxIsFile)
+	requireNoFeature(t, got, idxClassBase, "plugin rows carry no file block")
 	require.Equal(t, 1.0, got[idxBuiltinBase+2], "firefox-tabs is builtin slot 2")
 	require.InDelta(t, 0.85, got[idxPluginScore], 1e-12)
 	require.InDelta(t, 1.0/3, got[idxPluginPriority], 1e-12)
@@ -90,7 +103,7 @@ func TestPluginRowFeatures(t *testing.T) {
 
 	// A non-builtin id hashes into the shared bucket space instead.
 	ext := collect(t, Row{Kind: KindPlugin, Plugin: "my-plugin", Score: 50})
-	require.NotContains(t, ext, idxBuiltinBase+0)
+	requireNoFeature(t, ext, idxBuiltinBase+0)
 	require.Equal(t, 1.0, ext[idxPluginHashBase+hashBucket("my-plugin", pluginBuckets)])
 }
 
@@ -107,10 +120,10 @@ func TestValueClamps(t *testing.T) {
 	})
 	require.Equal(t, 1.0, got[idxClassBase+3], "class clamps into the ladder")
 	require.Equal(t, 1.0, got[idxAlign], "alignment saturates at 1")
-	require.NotContains(t, got, idxBoost, "non-positive boost emits nothing")
+	requireNoFeature(t, got, idxBoost, "non-positive boost emits nothing")
 	require.Equal(t, 1.0, got[idxRecency])
-	require.NotContains(t, got, idxCwd)
-	require.NotContains(t, got, idxPenalty)
+	requireNoFeature(t, got, idxCwd)
+	requireNoFeature(t, got, idxPenalty)
 	require.Equal(t, 1.0, got[idxDepthBase+0])
 	require.Equal(t, 1.0, got[idxTodBase+0*todBuckets+3], "hour clamps to 23")
 	require.Equal(t, 1.0, got[idxQLenBase+0*qlenBuckets+0], "empty query is the shortest bucket")
