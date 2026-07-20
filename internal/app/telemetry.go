@@ -82,6 +82,46 @@ func (a *App) startTelemetry() {
 	log.Printf("telemetry: ranking telemetry enabled (local-only log at %s)", l.store.Path())
 }
 
+// applyTelemetry is the live-apply engine's search.telemetry hook
+// (the applyStats teardown-plus-rebuild shape): drop the current
+// layer, then bring a fresh one up from the incoming config when it
+// opts in. The impression ring restarts empty, so a pick racing the
+// apply logs Joined=false -- the documented, harmless eviction
+// behavior -- and in-flight async appends hold their own store
+// reference, draining through telWG as before. An unresolvable
+// config dir is a real apply error here (unlike startTelemetry's
+// quiet degrade): the user just asked for the feature, so the
+// save/apply report should say why it stayed off.
+func (a *App) applyTelemetry(next *config.Config) error {
+	tc := next.Search.Telemetry
+	if !tc.Enabled {
+		a.telMu.Lock()
+		was := a.tel != nil
+		a.tel = nil
+		a.telMu.Unlock()
+		if was {
+			log.Printf("telemetry: ranking telemetry disabled")
+		}
+		return nil
+	}
+	dir, err := config.Dir()
+	if err != nil {
+		a.telMu.Lock()
+		a.tel = nil
+		a.telMu.Unlock()
+		return err
+	}
+	l := &telemetryLayer{
+		store:         telemetry.New(filepath.Join(dir, telemetryFileName), tc.MaxSizeKB),
+		retainQueries: tc.RetainQueries,
+	}
+	a.telMu.Lock()
+	a.tel = l
+	a.telMu.Unlock()
+	log.Printf("telemetry: ranking telemetry enabled (local-only log at %s)", l.store.Path())
+	return nil
+}
+
 // telLayer returns the telemetry layer; nil before Startup or while
 // config keeps the feature off.
 func (a *App) telLayer() *telemetryLayer {

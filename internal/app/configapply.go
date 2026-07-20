@@ -144,6 +144,11 @@ var sectionAppliers = []sectionApplier{
 		},
 	},
 	{
+		name:    "search.telemetry",
+		changed: func(o, n *config.Config) bool { return o.Search.Telemetry != n.Search.Telemetry },
+		apply:   (*App).applyTelemetry,
+	},
+	{
 		name:    "watcher",
 		changed: func(o, n *config.Config) bool { return !reflect.DeepEqual(o.Watcher, n.Watcher) },
 		group:   groupIndexLayer,

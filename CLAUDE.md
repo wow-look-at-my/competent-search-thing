@@ -330,7 +330,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (the report carries row identities only, so the frontend can never
   forge signal values; a missing ring entry = Joined false, features
   zero), and the append runs async (telWG + telErrOnce, the
-  recordOpen pattern) with Shutdown draining telWG beside frecWG.
+  recordOpen pattern) with Shutdown draining telWG beside frecWG;
+  config changes to search.telemetry hot-apply through
+  applyTelemetry (the sectionAppliers row in configapply.go).
   `GetStats() sysstats.Snapshot` (stats.go) returns the
   sampler's cached snapshot -- instant, never IO on this path -- with
   Enabled stamped true (the sampler itself never sets that field;
@@ -415,6 +417,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   working binding with an honest notice, never an error); empty spec
   = release only), search.frecency (applyFrecencyConfig: rebuild
   store+blend over the SAME frecency.json, disabled = SetBlend(nil)),
+  search.telemetry (applyTelemetry: drop + rebuild the telemetry
+  layer -- the impression ring restarts empty, in-flight appends
+  drain via telWG, and an unresolvable config dir is a reported
+  apply error, unlike startTelemetry's quiet degrade),
   tray/stats (teardown + rebuild through startTrayIcon/startStats;
   disabling stats emits one Enabled-false snapshot so the row
   hides), history (fresh store at the new persist flag: disk seed +
