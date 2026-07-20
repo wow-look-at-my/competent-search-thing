@@ -46,8 +46,11 @@ type QueryOptions struct {
 // case-insensitively, best matches first. Ranking: exact name matches,
 // then name-prefix matches, then other substring matches, then fuzzy
 // (subsequence) matches; within a class directories sort before files,
-// then shorter full paths, then lexicographic path order (the fuzzy
-// class ranks by alignment score first -- see fuzzy.go). An empty
+// then shorter full paths, then numeric-aware lexicographic path
+// order -- aligned digit runs compare numerically DESCENDING so
+// datestamped/versioned families deliver newest first (numorder.go);
+// the fuzzy
+// class ranks by alignment score first -- see fuzzy.go. An empty
 // query, an empty store, or a non-positive limit returns nil.
 //
 // A query containing a path separator switches to path mode and is
@@ -78,9 +81,21 @@ func (s *Store) QueryWith(q string, limit int, opts QueryOptions) []Result {
 		// false-match across the blob separator.
 		return nil
 	}
+	// Resolve the pick-memory prior for this query ONCE, on a
+	// per-query Blend copy, so selectBlended never needs the query
+	// string threaded through the per-mode scan functions and the
+	// caller's Blend stays immutable. A resolver returning nil (no
+	// learned tables apply) leaves priorFn nil = no term.
+	if pb := opts.Blend; pb != nil && pb.Prior != nil {
+		cp := *pb
+		cp.priorFn = pb.Prior(q)
+		opts.Blend = &cp
+	}
 	// A requested signals trace rides a per-query blend copy so every
 	// path below stays untouched (signalstrace.go); with Trace nil
-	// this is exactly opts.Blend.
+	// this is exactly opts.Blend. traceBlend copies the whole Blend
+	// (including the priorFn bound above), so the prior and trace
+	// seams compose without either knowing of the other.
 	b := traceBlend(opts)
 	if hasPathSep(pat) {
 		// Path mode stays literal single-pattern: paths legitimately

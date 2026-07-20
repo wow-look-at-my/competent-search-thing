@@ -98,7 +98,7 @@ func naiveQueryFuzzy(entries []refEntry, q string, limit int) []Result {
 		if len(a.path) != len(b.path) {
 			return len(a.path) < len(b.path)
 		}
-		return a.path < b.path
+		return refPathLess(a.path, b.path)
 	})
 	if len(matches) == 0 {
 		return nil

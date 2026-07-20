@@ -67,6 +67,11 @@ type Options struct {
 	// search.frecency here; see frecency.go). Weights arrive
 	// Normalize-repaired; Disabled leaves the whole layer unwired.
 	Frecency config.FrecencyConfig
+	// Priors configures the pick-memory ranking priors (wire config's
+	// search.priors here; see priors.go in this package). OPT-IN: the
+	// zero value keeps the layer entirely unwired -- no file reads,
+	// no goroutines, no blend term.
+	Priors config.PriorsConfig
 	// Telemetry configures the opt-in local ranking telemetry log
 	// (wire config's search.telemetry here; see telemetry.go in this
 	// package). The zero value keeps the whole feature off.
