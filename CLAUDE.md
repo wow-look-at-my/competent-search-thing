@@ -1087,7 +1087,37 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   loop, so walk-built children slices end at cap == len (the
   append-ladder's measured 1.32x overshoot and copy churn are gone;
   pinned by TestWalkChildrenPresized, the scratch path by
-  TestWalkFullPathPatternOnFiles + TestAppendJoinDir). `Manager`: owns the RWMutex contract (queries
+  TestWalkFullPathPatternOnFiles + TestAppendJoinDir). WALK STRESS
+  GATE (walkstress_test.go, the v395 field-crash regression rig:
+  intermittent "growslice: len out of range" in appendName plus GC
+  scanstack SIGSEGVs during startup indexing -- memory-corruption
+  signatures): TestWalkStressIntegrity swaps readDirFn for an
+  in-memory synthetic tree (~113k entries/walk, fresh name strings
+  per call, base + full-path excludes so the per-file scratch/unsafe
+  path runs, a stack-pump recursion per readdir so walker stacks
+  grow-then-park as shrinkstack fodder) and runs 16 concurrent Walks
+  under the production GOGC=40 window, verifying every store's full
+  integrity (counts, monotonic offset table, NUL-free names, parent
+  paths) per iteration; ~3s budget in CI,
+  COMPETENT_SEARCH_STRESS_SECONDS / COMPETENT_SEARCH_STRESS_CONC
+  extend investigation runs. The 2026-07-20 investigation (v395
+  startup crash: intermittent growslice len-out-of-range / GC
+  scanstack SIGSEGV on one field machine) CLEARED this package: no
+  app-code defect (race-detector-clean; ~700M entries verified
+  across plain/checkptr/clobberfree/gccheckmark/novarmake builds at
+  up to 160 walker goroutines); compiler excluded (v395 disassembly
+  matches stock go1.25.0 codegen for every crash-relevant function);
+  and the same day's gosmopolitan cache-poisoning incident EXCLUDED
+  for this build (stock-keyed action IDs are disjoint from the
+  fork's go1.26.4cosmo collision namespace; the orchestrator
+  predates the first-bad; opposite crash signatures -- team memory
+  competent-search-thing-v395-not-fork-cache-poisoned). Root cause
+  remains external to this repo: leading hypotheses are
+  machine-local memory or an unattributed stock-runtime issue
+  (golang/go#77955/#73259 family). The gate pins the walker/store
+  concurrency+integrity invariants only -- it cannot detect wrong
+  bytes linked into a binary -- so keep it green rather than
+  re-litigating the walker's ownership story. `Manager`: owns the RWMutex contract (queries
   RLock, mutations Lock); roots/excludes are LIVE-mutable now
   (`SetRoots`/`SetExcludes`, the config editor's index-scope apply;
   Roots/Excludes read under the lock and `BuildFromDisk` latches one
