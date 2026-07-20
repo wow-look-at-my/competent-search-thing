@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/icons"
 )
 
@@ -13,11 +14,26 @@ type iconResolver interface {
 
 // buildIcons is the production newIcons value: the icon resolution
 // service over its own defaults (XDG dirs and gsettings on linux,
-// .app bundle extraction on darwin -- see internal/icons).
-// icons.NewService does no IO; the first Resolve pays the one-time
-// initialization, so building it on the startup path is free.
+// .app bundle extraction on darwin, the embedded Material file-type
+// pack everywhere -- see internal/icons) plus the live theme getter
+// below. icons.NewService does no IO; the first Resolve pays the
+// one-time initialization, so building it on the startup path is
+// free.
 func (a *App) buildIcons() iconResolver {
-	return icons.NewService(icons.Options{})
+	return icons.NewService(icons.Options{Theme: iconTheme})
+}
+
+// iconTheme reads the configured theme name fresh per resolve batch
+// (the translucent.go standalone-read pattern, consumed live like
+// GetTheme's own re-read) so a config theme switch selects the
+// Material pack's light icon variants without a relaunch. Any config
+// error reads as "" -- the dark-default icon set.
+func iconTheme() string {
+	cfg, err := config.Load()
+	if err != nil {
+		return ""
+	}
+	return cfg.Theme
 }
 
 // startIcons builds the resolver once, at Startup. A nil seam result

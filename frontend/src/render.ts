@@ -103,11 +103,21 @@ export function highlightedName(
   return span;
 }
 
+// fileIconKey builds the ResolveIcons key for a file row (the
+// internal/icons wire protocol): directories share the one "dir"
+// folder icon, files resolve per basename.
+export function fileIconKey(name: string, isDir: boolean): string {
+  return isDir ? "dir" : "file:" + name;
+}
+
 // renderResults replaces container's children with one row per item
 // and returns the row elements for the selection model to drive. The
 // "No matches" empty state is owned by main.ts (the static #empty
 // element): it depends on the plugin sections too, which arrive after
-// the file response.
+// the file response. Each row's template glyph doubles as the instant
+// placeholder for the real per-file-type icon: the glyph is wrapped
+// in a .file-icon span and the batched ResolveIcons answer swaps in
+// the Material pack image exactly like plugin-row app icons.
 export function renderResults(
   container: HTMLElement,
   items: WailsSearchResult[],
@@ -121,7 +131,11 @@ export function renderResults(
     row.setAttribute("role", "option");
 
     const tpl = item.isDir ? folderTpl : fileTpl;
-    row.append(tpl.content.cloneNode(true));
+    const iconWrap = document.createElement("span");
+    iconWrap.className = "file-icon";
+    iconWrap.append(tpl.content.cloneNode(true));
+    row.append(iconWrap);
+    requestIcon(iconWrap, fileIconKey(item.name, item.isDir));
     row.append(highlightedName(item.name, item.matchRanges));
 
     const dir = document.createElement("span");
@@ -278,6 +292,15 @@ const ICON_SIZE = 64;
 const iconUriCache = new Map<string, string>(); // key -> data URI ("" = known miss)
 let pendingIconEls = new Map<string, HTMLSpanElement[]>();
 let iconFlushQueued = false;
+
+// clearIconCache drops every cached ResolveIcons answer. theme.ts
+// calls it on "theme:changed": the Material file-type icons are
+// theme-variant aware Go-side, so a live theme switch must re-resolve
+// instead of serving the other theme's cached variants. Already
+// rendered rows keep their images until the next render.
+export function clearIconCache(): void {
+  iconUriCache.clear();
+}
 
 // setIconImage swaps a glyph span's content for the resolved image.
 function setIconImage(el: HTMLSpanElement, uri: string): void {

@@ -8,6 +8,8 @@
 // themes/ directory changes, and everything is re-fetched and
 // re-applied -- theme edits show up live.
 
+import { clearIconCache } from "./render";
+
 const TOKEN_PREFIX = "--sb-";
 const CUSTOM_STYLE_ID = "sb-custom-css";
 
@@ -53,13 +55,19 @@ async function fetchAndApply(app: WailsAppBindings): Promise<void> {
 
 // initTheme applies the configured theme immediately and re-applies it
 // on every "theme:changed" runtime event. Failures are logged and
-// leave the current (or the CSS-fallback dark) look in place.
+// leave the current (or the CSS-fallback dark) look in place. A theme
+// change also drops the frontend's resolved-icon cache: the Material
+// file-type icons vary per theme (light variants), so the next render
+// must re-ask Go instead of reusing the old theme's answers.
 export function initTheme(app: WailsAppBindings, rt: WailsRuntime): void {
   const refresh = (): void => {
     fetchAndApply(app).catch((err: unknown) => {
       console.error("theme: applying failed:", err);
     });
   };
-  rt.EventsOn("theme:changed", refresh);
+  rt.EventsOn("theme:changed", () => {
+    clearIconCache();
+    refresh();
+  });
   refresh();
 }

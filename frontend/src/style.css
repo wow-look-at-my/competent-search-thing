@@ -402,6 +402,16 @@ body {
   object-fit: contain;
 }
 
+/* File-row icon slot: render.ts wraps the 16px template glyph so the
+   resolved Material file-type icon (an <img.plugin-icon-img>, same
+   16px footprint) can swap in without moving the row layout; the svg
+   inside keeps the .result .icon styling while it stands. */
+.file-icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
 .plugin-title .hl {
   /* Per-character match highlight: LETTER COLOR ONLY (same rule as
      .result .name .hl) -- never a background rectangle. The token is
