@@ -840,7 +840,19 @@ mode (the same single window -- no second window, no dialog).
 
 The editor is rendered ENTIRELY from the shipped JSON Schema
 (`schemas/config.schema.json`), so every setting appears with its
-real type and its full documentation:
+real type and its full documentation.
+
+Navigation works like VS Code's settings page: a table-of-contents
+sidebar on the left lists every section in order -- one entry per
+top-level section (`search`, `watcher`, `window`, ...), indented
+sub-entries for nested groups (`search.frecency`, `preview.kagi`,
+...), and a "General" entry collecting the top-level settings that
+belong to no section (`roots`, `excludes`, `hotkey`, `theme`, ...).
+Clicking an entry (or Tab to it and Enter) jumps the settings column
+to that section, and scrolling the column highlights the entry whose
+section is at the top. While you type in the filter box, entries
+with no matching settings dim and the rest show a match count;
+clicking a dimmed entry clears the filter and jumps there.
 
 - booleans are toggles, enums dropdowns, numbers spinners carrying
   the schema's bounds, strings text fields; every control shows the
@@ -865,9 +877,14 @@ launch" note (see below), and any apply errors, then re-fetches so
 the app-repaired values are what you see. Esc (or Close) leaves the
 editor; with unsaved edits the first press warns and a second within
 two seconds discards them. Hiding the bar mid-edit (hotkey, tray,
-`hide`) keeps the unsaved working copy in memory: the next summon is
-the normal search bar, and reopening the editor in the same run
-restores the edits with the unsaved-changes note showing. While the
+`hide`) does NOT lose your place: the next summon restores the
+editor exactly as you left it -- same scroll position, same focused
+setting, unsaved edits intact with the unsaved-changes note showing
+-- so you can close with the hotkey, look something up, and summon
+straight back into the setting you were on (in memory for the app
+run; leaving via Esc/Close instead makes the next summon a normal
+search bar, and reopening the editor then still restores unsaved
+edits). While the
 editor is up, alt-tabbing away does NOT hide the window (the normal
 focus-loss auto-hide is suspended so you can check things mid-edit).
 
