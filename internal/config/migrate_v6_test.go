@@ -15,11 +15,13 @@ import (
 // explicit enabled:false included (overruled by design; the log is
 // private by staying on the machine). The learned layers
 // (search.priors, search.arbiter) turn on by default: their old
-// opt-in "enabled" keys map onto the new opt-out "disabled" debug
-// escape hatches, and an explicit enabled:false survives as
-// disabled:true. The raw-bytes matrix drives migrateRootsFor
-// directly (the TestMigrateV4* convention); the Load-driven test
-// proves the rewrite drops every old key.
+// opt-in "enabled" keys carry the same spelling as the v7-era
+// affirmative switches, so explicit values parse straight through
+// and an explicit enabled:false survives as the opt-out. A config
+// migrating from below 6 lands directly on the v7 shape (the v7
+// polarity step runs in the same pass). The raw-bytes matrix drives
+// migrateRootsFor directly (the TestMigrateV4* convention); the
+// Load-driven test proves the rewrite drops every old key.
 
 // v6Raw builds a v5-stamped raw config whose search section is
 // exactly section -> body (empty section = search absent entirely).
@@ -75,11 +77,11 @@ func TestMigrateV6TelemetryAlwaysOn(t *testing.T) {
 
 func TestMigrateV6LearnedLayersMatrix(t *testing.T) {
 	sections := []struct {
-		name     string
-		disabled func(c *Config) *bool
+		name    string
+		enabled func(c *Config) *bool
 	}{
-		{"priors", func(c *Config) *bool { return &c.Search.Priors.Disabled }},
-		{"arbiter", func(c *Config) *bool { return &c.Search.Arbiter.Disabled }},
+		{"priors", func(c *Config) *bool { return c.Search.Priors.Enabled }},
+		{"arbiter", func(c *Config) *bool { return c.Search.Arbiter.Enabled }},
 	}
 	for _, sec := range sections {
 		full := "search." + sec.name
@@ -88,17 +90,17 @@ func TestMigrateV6LearnedLayersMatrix(t *testing.T) {
 			var c Config
 			require.NoError(t, json.Unmarshal(raw, &c))
 			require.True(t, c.migrateRootsFor("linux", raw))
-			require.False(t, *sec.disabled(&c), "absent old key = the new default (on)")
+			require.True(t, Enabled(sec.enabled(&c)), "absent old key = the new default (on)")
 			require.Len(t, c.MigrationNotes, 2, "the telemetry note plus the learned-layers note")
 			require.Contains(t, c.MigrationNotes[1], "on by default")
 			require.Contains(t, c.MigrationNotes[1], full)
 		})
-		t.Run(sec.name+" explicit enabled:false is preserved as disabled:true", func(t *testing.T) {
+		t.Run(sec.name+" explicit enabled:false is preserved", func(t *testing.T) {
 			raw := v6Raw(sec.name, `{"enabled": false}`)
 			var c Config
 			require.NoError(t, json.Unmarshal(raw, &c))
 			require.True(t, c.migrateRootsFor("linux", raw))
-			require.True(t, *sec.disabled(&c), "an explicit opt-out is respected")
+			require.False(t, Enabled(sec.enabled(&c)), "an explicit opt-out is respected")
 			var offNote string
 			for _, n := range c.MigrationNotes {
 				if strings.Contains(n, "opt-outs were preserved") {
@@ -117,7 +119,7 @@ func TestMigrateV6LearnedLayersMatrix(t *testing.T) {
 			var c Config
 			require.NoError(t, json.Unmarshal(raw, &c))
 			require.True(t, c.migrateRootsFor("linux", raw))
-			require.False(t, *sec.disabled(&c), "already opted in stays on")
+			require.True(t, Enabled(sec.enabled(&c)), "already opted in stays on")
 			for _, n := range c.MigrationNotes {
 				if strings.Contains(n, "on by default") {
 					require.NotContains(t, n, full, "no behavior flip = no flip announcement")
@@ -127,14 +129,18 @@ func TestMigrateV6LearnedLayersMatrix(t *testing.T) {
 	}
 }
 
-func TestMigrateV6NewShapeDisabledSurvives(t *testing.T) {
-	// A hand-edited pre-v6-stamped file already carrying the NEW
-	// shape's disabled:true keeps its opt-out and earns no flip note.
+func TestMigrateV6EraDisabledShapeSurvives(t *testing.T) {
+	// A pre-v6-stamped file already carrying the v6-era shape's
+	// disabled:true keeps its opt-out (the v7 polarity step converts
+	// the key) and earns no flip note.
 	raw := v6Raw("priors", `{"disabled": true}`)
 	var c Config
 	require.NoError(t, json.Unmarshal(raw, &c))
 	require.True(t, c.migrateRootsFor("linux", raw))
-	require.True(t, c.Search.Priors.Disabled)
+	require.False(t, Enabled(c.Search.Priors.Enabled), "the opt-out survives, converted to enabled:false")
+	joined := strings.Join(c.MigrationNotes, "\n")
+	require.Contains(t, joined, "migrated search.priors.disabled=true -> search.priors.enabled=false",
+		"the v7 polarity step announces the key conversion")
 	for _, n := range c.MigrationNotes {
 		if strings.Contains(n, "on by default") {
 			require.NotContains(t, n, "search.priors")
@@ -172,8 +178,8 @@ func TestMigrateV6RetainQueriesDropNotes(t *testing.T) {
 // Load: the old opt-in keys and retainQueries vanish from the
 // rewritten file (UnknownKeys stays clean), the telemetry opt-out is
 // overruled (always on -- only maxSizeKB survives), the priors
-// opt-out lands as disabled:true on disk, and a second load migrates
-// nothing.
+// opt-out lands as enabled:false on disk (the v7 shape), and a
+// second load migrates nothing.
 func TestMigrateV6LoadRewritesOldKeys(t *testing.T) {
 	setConfigDir(t)
 	p := writeConfig(t, `{
@@ -191,8 +197,8 @@ func TestMigrateV6LoadRewritesOldKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t, 128, c.Search.Telemetry.MaxSizeKB, "the configured size cap survives the flip")
-	require.True(t, c.Search.Priors.Disabled, "the explicit priors opt-out is preserved")
-	require.False(t, c.Search.Arbiter.Disabled, "the absent section gets the new default (on)")
+	require.Equal(t, Bool(false), c.Search.Priors.Enabled, "the explicit priors opt-out is preserved")
+	require.Equal(t, Bool(true), c.Search.Arbiter.Enabled, "the absent section gets the new default (on)")
 	require.Equal(t, []string{".git"}, c.Excludes, "the v6 step never touches excludes")
 
 	joined := strings.Join(c.MigrationNotes, "\n")
@@ -214,13 +220,13 @@ func TestMigrateV6LoadRewritesOldKeys(t *testing.T) {
 	tel := search["telemetry"].(map[string]any)
 	require.Equal(t, map[string]any{"maxSizeKB": float64(128)}, tel,
 		"telemetry keeps ONLY the size bound -- no switch of either polarity exists")
-	require.Equal(t, map[string]any{"disabled": true}, search["priors"].(map[string]any))
-	require.Equal(t, map[string]any{"disabled": false}, search["arbiter"].(map[string]any))
+	require.Equal(t, map[string]any{"enabled": false}, search["priors"].(map[string]any))
+	require.Equal(t, map[string]any{"enabled": true}, search["arbiter"].(map[string]any))
 
 	again, err := Load()
 	require.NoError(t, err)
 	require.Empty(t, again.MigrationNotes, "the second load has nothing left to migrate")
-	require.True(t, again.Search.Priors.Disabled)
+	require.Equal(t, Bool(false), again.Search.Priors.Enabled)
 }
 
 func TestMigrateV6Idempotent(t *testing.T) {

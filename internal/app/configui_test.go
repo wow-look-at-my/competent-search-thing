@@ -134,12 +134,12 @@ func TestSaveConfigAppliesLive(t *testing.T) {
 	a, _ := newTestApp(t, mgr, Options{})
 	t.Setenv(config.EnvConfigDir, t.TempDir())
 
-	res := a.SaveConfig(`{"maxResults": 7, "search": {"fuzzyDisabled": true}}`)
+	res := a.SaveConfig(`{"maxResults": 7, "search": {"fuzzyEnabled": false}}`)
 	require.True(t, res.OK, "error: %s", res.Error)
 	require.Equal(t, 7, mgr.MaxResults(), "maxResults applied live")
-	require.True(t, mgr.FuzzyDisabled(), "search.fuzzyDisabled applied live")
+	require.True(t, mgr.FuzzyDisabled(), "search.fuzzyEnabled applied live")
 	require.Contains(t, res.Applied, "maxResults")
-	require.Contains(t, res.Applied, "search.fuzzyDisabled")
+	require.Contains(t, res.Applied, "search.fuzzyEnabled")
 	require.Empty(t, res.ApplyErrors)
 }
 

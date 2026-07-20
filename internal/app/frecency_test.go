@@ -55,9 +55,9 @@ func TestStartFrecencyDisabled(t *testing.T) {
 	// own blend resolvers; their escape hatches keep this pin about
 	// the frecency layer alone.
 	a, _ := newTestApp(t, m, Options{
-		Frecency: config.FrecencyConfig{Disabled: true},
-		Priors:   config.PriorsConfig{Disabled: true},
-		Arbiter:  config.ArbiterConfig{Disabled: true},
+		Frecency: config.FrecencyConfig{Enabled: config.Bool(false)},
+		Priors:   config.PriorsConfig{Enabled: config.Bool(false)},
+		Arbiter:  config.ArbiterConfig{Enabled: config.Bool(false)},
 	})
 	a.plat.procTree = func() frecency.ProcTree {
 		t.Fatal("the process tree must never be consulted when frecency is disabled")
@@ -296,7 +296,7 @@ func TestAppUsageReadsLiveStore(t *testing.T) {
 
 	// Disable live: the same getter now reads 0 through the swapped
 	// (nil) store.
-	a.applyFrecencyConfig(config.FrecencyConfig{Disabled: true})
+	a.applyFrecencyConfig(config.FrecencyConfig{Enabled: config.Bool(false)})
 	require.Zero(t, a.appUsage("app:code.desktop"), "disabled frecency = cold ordering")
 
 	// Re-enable live: the store rebuilds over the SAME frecency.json,

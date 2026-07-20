@@ -70,7 +70,7 @@ func TestStartPriorsDisabledIsInert(t *testing.T) {
 	m, _, _ := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{
 		Frecency: config.DefaultFrecency(),
-		Priors:   config.PriorsConfig{Disabled: true},
+		Priors:   config.PriorsConfig{Enabled: config.Bool(false)},
 	})
 	a.Startup(context.Background())
 	require.False(t, a.priorsConfigured())
@@ -110,7 +110,7 @@ func TestStartPriorsPinsPickedRow(t *testing.T) {
 func TestStartPriorsWithFrecencyDisabled(t *testing.T) {
 	m, one, two := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{
-		Frecency: config.FrecencyConfig{Disabled: true},
+		Frecency: config.FrecencyConfig{Enabled: config.Bool(false)},
 	})
 	seedTelemetry(t, 2, two, one)
 	a.Startup(context.Background())
@@ -130,7 +130,7 @@ func TestStartPriorsWithFrecencyDisabled(t *testing.T) {
 func TestOpenKicksPriorsRefresh(t *testing.T) {
 	m, one, two := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{
-		Frecency: config.FrecencyConfig{Disabled: true},
+		Frecency: config.FrecencyConfig{Enabled: config.Bool(false)},
 	})
 	a.Startup(context.Background())
 	require.Eventually(t, a.priorsConfigured, time.Second, 5*time.Millisecond)
@@ -205,7 +205,7 @@ func TestApplyConfigPriorsTogglesLive(t *testing.T) {
 	a, _ := newTestApp(t, m, Options{Frecency: config.DefaultFrecency()})
 	a.frecOnce.Do(a.startFrecency)
 	off := config.Default()
-	off.Search.Priors.Disabled = true
+	off.Search.Priors.Enabled = config.Bool(false)
 	seedBaseline(a, off)
 	require.False(t, a.priorsConfigured())
 
@@ -234,7 +234,7 @@ func TestApplyConfigFrecencyPreservesPrior(t *testing.T) {
 	a, _ := newTestApp(t, m, Options{Frecency: config.DefaultFrecency()})
 	a.frecOnce.Do(a.startFrecency)
 	priorsOff := config.Default()
-	priorsOff.Search.Priors.Disabled = true
+	priorsOff.Search.Priors.Enabled = config.Bool(false)
 	seedBaseline(a, priorsOff)
 
 	on := config.Default()
@@ -244,7 +244,7 @@ func TestApplyConfigFrecencyPreservesPrior(t *testing.T) {
 	// Disable frecency: the blend rebuild keeps the Prior (a
 	// prior-only blend still activates).
 	noFrec := on
-	noFrec.Search.Frecency.Disabled = true
+	noFrec.Search.Frecency.Enabled = config.Bool(false)
 	res := a.applyConfig(&noFrec, "test")
 	require.Contains(t, res.Applied, "search.frecency")
 	require.NotNil(t, m.Blend(), "a prior-only blend stays installed")

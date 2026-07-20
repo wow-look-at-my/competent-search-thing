@@ -24,9 +24,9 @@
     "rootsVersion": {
       "type": "integer",
       "minimum": 0,
-      "default": 6,
+      "default": 7,
       "x-editor-hidden": true,
-      "description": "Config-defaults version stamp, written by the app. 0 (or absent) marks a config from before whole-filesystem indexing: on load the app upgrades roots still set to the old default (the home directory) to the whole-filesystem default and appends the missing system excludes. Configs stamped below 3 additionally get the high-churn noise exclude patterns (.hg, .svn, __pycache__, ...) appended; on macOS configs stamped below 4 get the firmlink-dedup exclude /System/Volumes/Data (the same files macOS also shows at /Users, /Applications, ...), and below 5 the macOS noise set (Caches, DerivedData, _CodeSignature, CodeResources, /private/var/folders) -- each addition only when the exclude list still carries all three base patterns (.git, node_modules, .cache); curated or emptied lists are stamped only. Below 6 the ranking sections flip to their new shape: search.telemetry becomes always-on (its old 'enabled' switch and 'retainQueries' are removed outright, an explicit enabled:false included -- the log is private by staying on the machine), while the search.priors/arbiter opt-in 'enabled' switches become opt-out 'disabled' debug escape hatches (an explicit enabled:false is preserved as disabled:true). Every change is logged loudly, the stamp advances to 6, and the file is rewritten once. Customized roots are never touched by the migration. Do not edit by hand unless you want the migration to run again."
+      "description": "Config-defaults version stamp, written by the app. 0 (or absent) marks a config from before whole-filesystem indexing: on load the app upgrades roots still set to the old default (the home directory) to the whole-filesystem default and appends the missing system excludes. Configs stamped below 3 additionally get the high-churn noise exclude patterns (.hg, .svn, __pycache__, ...) appended; on macOS configs stamped below 4 get the firmlink-dedup exclude /System/Volumes/Data (the same files macOS also shows at /Users, /Applications, ...), and below 5 the macOS noise set (Caches, DerivedData, _CodeSignature, CodeResources, /private/var/folders) -- each addition only when the exclude list still carries all three base patterns (.git, node_modules, .cache); curated or emptied lists are stamped only. Below 6 the ranking sections flip to their new shape: search.telemetry becomes always-on (its old 'enabled' switch and 'retainQueries' are removed outright, an explicit enabled:false included -- the log is private by staying on the machine) while search.priors/arbiter turn on by default. Below 7 every negative boolean switch is renamed to its affirmative 'enabled' spelling with the value inverted -- a pure rename, zero behavior change (search.fuzzyDisabled -> search.fuzzyEnabled, the frecency/priors/arbiter/plugins/plugin-entry/rewrite/tray/stats 'disabled' keys -> 'enabled', watcher.sweepDisabled -> watcher.sweepEnabled, history.persistDisabled -> history.persistEnabled); explicitly present old keys land inverted on the new key, absent keys stay absent (still meaning ON), and a file carrying both spellings keeps the new key. Every change is logged loudly, the stamp advances to 7, and the file is rewritten once. Customized roots are never touched by the migration. Do not edit by hand unless you want the migration to run again."
     },
     "excludes": {
       "type": "array",
@@ -105,10 +105,10 @@
       "title": "Search engine configuration",
       "type": "object",
       "properties": {
-        "fuzzyDisabled": {
+        "fuzzyEnabled": {
           "type": "boolean",
-          "default": false,
-          "description": "true turns the fuzzy (subsequence) name-match tier off, leaving exact/prefix/substring matching only. The default keeps fuzzy matching on; exact, prefix, and substring matches always rank above fuzzy ones either way (see the README's 'Fuzzy matching')."
+          "default": true,
+          "description": "false turns the fuzzy (subsequence) name-match tier off, leaving exact/prefix/substring matching only. Absent means enabled -- the default; exact, prefix, and substring matches always rank above fuzzy ones either way (see the README's 'Fuzzy matching')."
         },
         "frecency": {
           "$ref": "#/$defs/frecencyConfig"
@@ -130,10 +130,10 @@
       "description": "Learned arbitration, on by default: a small model, trained entirely on this machine from your own recorded picks (the search.telemetry log), that learns which KIND of result a query means -- when the same name matches a file, a browser tab, and an app, the one you keep choosing floats to the top. It only re-orders and places results the search already found; nothing new is fetched and nothing ever leaves the machine. It stays invisible until it has enough evidence: at least 200 picks must exist in the ranking log and the model must demonstrably predict your picks better than the current result order -- until then everything looks and ranks exactly as before.",
       "type": "object",
       "properties": {
-        "disabled": {
+        "enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "true turns learned arbitration off -- a debug escape hatch: use it to reproduce the deterministic ranking baseline when diagnosing a ranking bug, or as a kill switch if the learned layer misbehaves. Not a privacy option (the model and its training data are local either way)."
+          "default": true,
+          "description": "false turns learned arbitration off -- a debug escape hatch: use it to reproduce the deterministic ranking baseline when diagnosing a ranking bug, or as a kill switch if the learned layer misbehaves. Absent means enabled -- the default. Not a privacy option (the model and its training data are local either way)."
         }
       },
       "additionalProperties": false
@@ -143,10 +143,10 @@
       "description": "Pick-memory priors, on by default: small local lookup tables (exact-query pick memory plus per-extension and per-directory-prefix pick rates) learned from the search.telemetry log and bootstrapped from frecency.json, folded into result ranking as one additive term. Everything stays on this machine; the feature only READS the local files.",
       "type": "object",
       "properties": {
-        "disabled": {
+        "enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "true turns the pick-memory priors off -- a debug escape hatch: use it to reproduce the deterministic ranking baseline when diagnosing a ranking bug, or as a kill switch if the learned layer misbehaves. Not a privacy option (the tables and their inputs are local either way)."
+          "default": true,
+          "description": "false turns the pick-memory priors off -- a debug escape hatch: use it to reproduce the deterministic ranking baseline when diagnosing a ranking bug, or as a kill switch if the learned layer misbehaves. Absent means enabled -- the default. Not a privacy option (the tables and their inputs are local either way)."
         }
       },
       "additionalProperties": false
@@ -170,10 +170,10 @@
       "description": "Tunes how learned open counts, on-disk recency, focused-app working-directory proximity, and location noise blend into result ranking (see the README's 'Ranking: frecency, recency and noise'). Numeric convention: omit a knob for its default; a NEGATIVE weight (or tierJumpCount) explicitly disables that one signal. The literal 0 is rejected here because the app would silently repair it to the default -- write the default explicitly or a negative to disable.",
       "type": "object",
       "properties": {
-        "disabled": {
+        "enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "true turns the whole blend off: no open counts are recorded or loaded, no recency stats run, and result ordering is exactly the pre-blend engine's."
+          "default": true,
+          "description": "false turns the whole blend off: no open counts are recorded or loaded, no recency stats run, and result ordering is exactly the pre-blend engine's. Absent means enabled -- the default."
         },
         "halfLifeDays": {
           "type": "number",
@@ -240,10 +240,10 @@
           "default": 0,
           "description": "Minutes between reconcile sweep passes -- the convergence bound for directories without a live watch. 0 (the default) selects the built-in 20-minute cadence. Negative values are repaired to 0 by the app; this schema rejects them."
         },
-        "sweepDisabled": {
+        "sweepEnabled": {
           "type": "boolean",
-          "default": false,
-          "description": "true turns the sweep tier off entirely. The default keeps sweeps on. With sweeps off, directories without a live watch converge only at full rescans (!rescan or rescanIntervalMinutes); the app logs a loud warning saying so."
+          "default": true,
+          "description": "false turns the sweep tier off entirely. Absent means enabled -- the default keeps sweeps on. With sweeps off, directories without a live watch converge only at full rescans (!rescan or rescanIntervalMinutes); the app logs a loud warning saying so."
         },
         "watchExcludes": {
           "type": "array",
@@ -264,10 +264,10 @@
       "title": "Plugin system configuration",
       "type": "object",
       "properties": {
-        "disabled": {
+        "enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "true turns the whole plugin system off, built-in providers included."
+          "default": true,
+          "description": "false turns the whole plugin system off, built-in providers included. Absent means enabled -- the default."
         },
         "entries": {
           "type": "object",
@@ -286,10 +286,10 @@
       "title": "One plugin's configuration",
       "type": "object",
       "properties": {
-        "disabled": {
+        "enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "true turns this one provider off."
+          "default": true,
+          "description": "false turns this one provider off. Absent means enabled -- the default."
         },
         "settings": {
           "type": "object",
@@ -302,10 +302,10 @@
       "title": "Tray icon configuration",
       "type": "object",
       "properties": {
-        "disabled": {
+        "enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "true turns the tray icon (StatusNotifierItem) off. The default keeps it on; sessions without an SNI host (no AppIndicator extension, headless) just never show it."
+          "default": true,
+          "description": "false turns the tray icon (StatusNotifierItem) off. Absent means enabled -- the default keeps it on; sessions without an SNI host (no AppIndicator extension, headless) just never show it."
         }
       },
       "additionalProperties": false
@@ -325,7 +325,7 @@
     },
     "frequentSitesConfig": {
       "title": "Frequently-visited Firefox sites",
-      "description": "The 'Frequent Sites' result section: pages from your own local Firefox history, read on your machine and never transmitted. A page qualifies when it was visited at least minVisitsMonth times in the past 30 days AND at least minVisitsWeek times in the past 7 days. Turn the section off via plugins.entries['firefox-frequent'].disabled. Zero or negative numbers are repaired to the defaults by the app; this schema rejects them.",
+      "description": "The 'Frequent Sites' result section: pages from your own local Firefox history, read on your machine and never transmitted. A page qualifies when it was visited at least minVisitsMonth times in the past 30 days AND at least minVisitsWeek times in the past 7 days. Turn the section off via plugins.entries['firefox-frequent'].enabled = false. Zero or negative numbers are repaired to the defaults by the app; this schema rejects them.",
       "type": "object",
       "properties": {
         "minVisitsMonth": {
@@ -362,7 +362,7 @@
     },
     "openTabsConfig": {
       "title": "Open Firefox tabs",
-      "description": "The 'Open Tabs' result section: the tabs currently open in your own local Firefox, read from its crash-recovery session snapshot on your machine and never transmitted. The snapshot only exists while Firefox runs, so a closed browser means an empty section; private windows are never in it. Activating a result RE-OPENS the URL in the default browser -- it cannot focus the already-open tab. Turn the section off via plugins.entries['firefox-tabs'].disabled. Zero or negative numbers are repaired to the defaults by the app; this schema rejects them.",
+      "description": "The 'Open Tabs' result section: the tabs currently open in your own local Firefox, read from its crash-recovery session snapshot on your machine and never transmitted. The snapshot only exists while Firefox runs, so a closed browser means an empty section; private windows are never in it. Activating a result RE-OPENS the URL in the default browser -- it cannot focus the already-open tab. Turn the section off via plugins.entries['firefox-tabs'].enabled = false. Zero or negative numbers are repaired to the defaults by the app; this schema rejects them.",
       "type": "object",
       "properties": {
         "maxResults": {
@@ -418,10 +418,10 @@
       "title": "System stats row configuration",
       "type": "object",
       "properties": {
-        "disabled": {
+        "enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "true turns the system-stats row's sampler off (the row then shows placeholders only). The default keeps it on; sampling happens only while the bar is visible, and metrics without a source on this machine (no GPU busy file, non-Linux platforms) degrade to placeholders by themselves."
+          "default": true,
+          "description": "false turns the system-stats row's sampler off (the row then shows placeholders only). Absent means enabled -- the default keeps it on; sampling happens only while the bar is visible, and metrics without a source on this machine (no GPU busy file, non-Linux platforms) degrade to placeholders by themselves."
         }
       },
       "additionalProperties": false
@@ -430,10 +430,10 @@
       "title": "Query history configuration",
       "type": "object",
       "properties": {
-        "persistDisabled": {
+        "persistEnabled": {
           "type": "boolean",
-          "default": false,
-          "description": "true keeps the query history in memory only: nothing is read from or written to <configDir>/history.json. In-session Up/Down recall still works; the list is simply forgotten when the app quits. The default persists the newest 100 committed queries to that file (created 0600)."
+          "default": true,
+          "description": "false keeps the query history in memory only: nothing is read from or written to <configDir>/history.json. In-session Up/Down recall still works; the list is simply forgotten when the app quits. Absent means enabled -- the default persists the newest 100 committed queries to that file (created 0600)."
         }
       },
       "additionalProperties": false
@@ -595,10 +595,10 @@
           "type": "string",
           "description": "Optional icon (builtin name or literal glyph); defaults to \"link\"."
         },
-        "disabled": {
+        "enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "Turns the rule off without deleting it."
+          "default": true,
+          "description": "false turns the rule off without deleting it. Absent means enabled -- the default."
         }
       },
       "additionalProperties": false
@@ -609,7 +609,7 @@
       "roots": [
         "/"
       ],
-      "rootsVersion": 6,
+      "rootsVersion": 7,
       "excludes": [
         ".git",
         "node_modules",
@@ -635,9 +635,9 @@
       "rescanIntervalMinutes": 0,
       "maxResults": 50,
       "search": {
-        "fuzzyDisabled": false,
+        "fuzzyEnabled": true,
         "frecency": {
-          "disabled": false,
+          "enabled": true,
           "halfLifeDays": 14,
           "weightFrecency": 1.0,
           "weightRecency": 1.0,
@@ -649,16 +649,16 @@
       "watcher": {
         "maxWatches": 0,
         "sweepMinutes": 0,
-        "sweepDisabled": false,
+        "sweepEnabled": true,
         "watchExcludes": [],
         "backend": "auto"
       },
       "theme": "dark",
       "plugins": {
-        "disabled": false,
+        "enabled": true,
         "entries": {
           "calc": {
-            "disabled": false,
+            "enabled": true,
             "settings": {}
           }
         }
@@ -674,13 +674,13 @@
         }
       },
       "tray": {
-        "disabled": false
+        "enabled": true
       },
       "history": {
-        "persistDisabled": false
+        "persistEnabled": true
       },
       "stats": {
-        "disabled": false
+        "enabled": true
       },
       "window": {
         "translucent": false,

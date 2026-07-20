@@ -45,7 +45,7 @@ func (a *App) startStats() {
 	st.Start(ctx)
 }
 
-// applyStats is the config live-apply path for stats.disabled: cancel
+// applyStats is the config live-apply path for stats.enabled: cancel
 // and drop the running sampler either way (idempotent, nil-safe), then
 // -- when the section is enabled -- rebuild through the exact startup
 // path (buildStats re-reads config.json, which the apply pass follows
@@ -62,7 +62,7 @@ func (a *App) applyStats(next *config.Config) error {
 	if cancel != nil {
 		cancel()
 	}
-	if next.Stats.Disabled {
+	if !config.Enabled(next.Stats.Enabled) {
 		log.Printf("stats: disabled in config")
 		a.emitEvent(eventStatsUpdate, sysstats.Snapshot{})
 		return nil
@@ -76,7 +76,7 @@ func (a *App) applyStats(next *config.Config) error {
 
 // buildStats is the production value behind the newStats seam: a fresh
 // config read (the standalone-read pattern translucent.go uses; the
-// App deliberately carries no Config), the stats.disabled kill switch,
+// App deliberately carries no Config), the stats.enabled kill switch,
 // and a sampler whose published samples are relayed to the frontend
 // as eventStatsUpdate. sysstats.New logs the one-line source summary
 // itself.
@@ -85,7 +85,7 @@ func (a *App) buildStats() statsSource {
 	if err != nil {
 		log.Printf("stats: config: %v (continuing with defaults)", err)
 	}
-	if cfg.Stats.Disabled {
+	if !config.Enabled(cfg.Stats.Enabled) {
 		log.Printf("stats: disabled in config")
 		return nil
 	}

@@ -99,7 +99,7 @@ func (a *App) buildRegistry() dispatcher {
 	}
 	entries := make(map[string]plugin.Entry, len(cfg.Plugins.Entries))
 	for id, e := range cfg.Plugins.Entries {
-		entries[id] = plugin.Entry{Disabled: e.Disabled, Settings: e.Settings}
+		entries[id] = plugin.Entry{Disabled: !config.Enabled(e.Enabled), Settings: e.Settings}
 	}
 	sites, tabs := a.firefoxSources(cfg.Firefox)
 	rewrites := make([]plugin.RewriteRule, len(cfg.Rewrites))
@@ -110,7 +110,7 @@ func (a *App) buildRegistry() dispatcher {
 			Replacement: rw.Replacement,
 			Title:       rw.Title,
 			Icon:        rw.Icon,
-			Disabled:    rw.Disabled,
+			Disabled:    !config.Enabled(rw.Enabled),
 		}
 	}
 	reg := plugin.New(plugin.Options{
@@ -118,7 +118,7 @@ func (a *App) buildRegistry() dispatcher {
 		LoadErrors:       loadErrs,
 		Sigils:           cfg.Bangs.Sigils,
 		Aliases:          cfg.Bangs.Aliases,
-		AllDisabled:      cfg.Plugins.Disabled,
+		AllDisabled:      !config.Enabled(cfg.Plugins.Enabled),
 		Entries:          entries,
 		Version:          Version,
 		InstalledApps:    a.installedApps,
@@ -128,7 +128,7 @@ func (a *App) buildRegistry() dispatcher {
 		FrequentSitesMax: cfg.Firefox.FrequentSites.MaxResults,
 		OpenTabs:         tabs,
 		OpenTabsMax:      cfg.Firefox.OpenTabs.MaxResults,
-		FuzzyDisabled:    cfg.Search.FuzzyDisabled,
+		FuzzyDisabled:    !config.Enabled(cfg.Search.FuzzyEnabled),
 		Rewrites:         rewrites,
 		Logf:             log.Printf,
 	})

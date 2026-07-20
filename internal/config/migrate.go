@@ -41,10 +41,29 @@ import (
 //	  private by staying on the machine; there is deliberately no off
 //	  state) -- while the two learned layers (search.priors,
 //	  search.arbiter) turn ON by default with their opt-in "enabled"
-//	  switches becoming opt-out "disabled" debug escape hatches. For
-//	  those two an explicit `"enabled": false` is preserved as
-//	  `"disabled": true` -- a deliberate opt-out is respected.
-const currentRootsVersion = 6
+//	  switches becoming opt-out debug escape hatches. (The v6-era
+//	  builds spelled the opt-out `"disabled": true`; since v7 the
+//	  affirmative `"enabled": false` is the one spelling, and the v7
+//	  step below converts the intermediate shape.)
+//	7 -- the boolean-polarity rename (see migrateBoolPolarity in
+//	  migrate_v7.go): every negative enable/disable switch gets the
+//	  affirmative "enabled" spelling with its VALUE INVERTED, a pure
+//	  rename with zero behavior change -- search.fuzzyDisabled ->
+//	  search.fuzzyEnabled; search.frecency/priors/arbiter.disabled ->
+//	  .enabled; watcher.sweepDisabled -> watcher.sweepEnabled;
+//	  plugins.disabled and plugins.entries.<id>.disabled -> .enabled;
+//	  rewrites[].disabled -> rewrites[].enabled; tray.disabled ->
+//	  tray.enabled; history.persistDisabled ->
+//	  history.persistEnabled; stats.disabled -> stats.enabled. Old
+//	  keys explicitly present in the file land as the inverted new
+//	  key (announced per key); absent keys stay absent (defaults
+//	  preserved: missing means ON, exactly as the missing negative
+//	  key did); a file carrying BOTH spellings keeps the new key and
+//	  drops the old one, announced. preview.enabled (already
+//	  affirmative) and window.translucent (an affirmative flag, not
+//	  enable/disable naming) are untouched, and search.telemetry
+//	  stays switchless by design.
+const currentRootsVersion = 7
 
 // CurrentRootsVersion returns the rootsVersion stamp this build
 // writes. Writers that must preserve the field across a full-file
@@ -180,13 +199,17 @@ func legacyDefaultRoots() []string {
 // The v5 step: the same policy again for the macOS noise excludes
 // (darwinNoiseExcludesFor).
 // The v6 step (migrateRankingDefaults) reads raw -- the on-disk JSON
-// bytes -- because the old opt-in "enabled" keys no longer exist on
-// the Config struct: for priors/arbiter an explicit
-// `"enabled": false` becomes `"disabled": true` (the opt-out
-// survives the shape flip) and anything else means the layer is on;
-// for telemetry every old key (enabled and retainQueries) is dropped
-// outright -- the ranking log is always on now. nil raw behaves as
-// "no old keys present".
+// bytes -- to ANNOUNCE the ranking-defaults flip: for
+// priors/arbiter the old opt-in `"enabled"` key happens to be the
+// same spelling v7 lands on (explicit values parse straight into the
+// struct; absent means the new default, on), so the step only emits
+// the turn-on/kept-off notes, while the telemetry keys (enabled and
+// retainQueries) are dropped outright by the rewrite -- the ranking
+// log is always on now. nil raw behaves as "no old keys present".
+// The v7 step (migrateBoolPolarity, migrate_v7.go) converts every
+// remaining negative-polarity switch in raw to its affirmative
+// "enabled" spelling with the value inverted -- including the
+// v6-era `"disabled"` spelling of the priors/arbiter opt-outs.
 // Patterns the user wrote are never touched or reordered either way.
 // Every user-visible change is recorded in MigrationNotes for the app
 // to log loudly at startup -- the index scope never changes silently.
@@ -265,24 +288,33 @@ func (c *Config) migrateRootsFor(goos string, raw []byte) bool {
 	if c.RootsVersion < 6 {
 		c.migrateRankingDefaults(raw)
 	}
+	// v7: the boolean-polarity rename (migrate_v7.go).
+	if c.RootsVersion < 7 {
+		c.migrateBoolPolarity(raw)
+	}
 	c.RootsVersion = currentRootsVersion
 	return true
 }
 
 // rankingV6Raw is the minimal raw-document shape the v6 step reads:
 // the pre-v6 opt-in switches (and retainQueries), as pointers so an
-// absent key is distinguishable from an explicit false.
+// absent key is distinguishable from an explicit false, plus the
+// v6-era "disabled" spelling a hand-edited under-stamped file may
+// already carry (it gates the turn-on announcement; the v7 step owns
+// converting it).
 type rankingV6Raw struct {
 	Search struct {
 		Priors struct {
-			Enabled *bool `json:"enabled"`
+			Enabled  *bool `json:"enabled"`
+			Disabled *bool `json:"disabled"`
 		} `json:"priors"`
 		Telemetry struct {
 			Enabled       *bool `json:"enabled"`
 			RetainQueries *bool `json:"retainQueries"`
 		} `json:"telemetry"`
 		Arbiter struct {
-			Enabled *bool `json:"enabled"`
+			Enabled  *bool `json:"enabled"`
+			Disabled *bool `json:"disabled"`
 		} `json:"arbiter"`
 	} `json:"search"`
 }
@@ -294,14 +326,16 @@ type rankingV6Raw struct {
 // `"enabled": false` is overruled by design and announced, and
 // retainQueries goes with it (query text is always recorded now).
 // The learned layers (search.priors, search.arbiter) flip to ON by
-// default with their opt-in "enabled" switches becoming opt-out
-// "disabled" debug escape hatches; for those, per section from the
-// RAW old key: absent -> the new default (on) applies; an explicit
-// `"enabled": false` is preserved as `"disabled": true` (a
-// deliberate opt-out is respected); an explicit `"enabled": true`
-// stays on with the old key dropped by the rewrite. Every
-// user-visible flip lands in MigrationNotes; the Save-back drops the
-// old keys so UnknownKeys never flags leftovers.
+// default; their pre-v6 opt-in "enabled" keys carry the same
+// spelling (and, for explicit values, the same meaning) as the
+// affirmative v7 switches, so explicit values parse straight into
+// the struct and this step only ANNOUNCES the flip: absent old key
+// -> the new default (on) applies, unless the file already carries
+// the v6-era `"disabled": true` opt-out (converted by the v7 step);
+// an explicit `"enabled": false` is a deliberate opt-out and is
+// respected. Every user-visible flip lands in MigrationNotes; the
+// Save-back drops the removed keys so UnknownKeys never flags
+// leftovers.
 func (c *Config) migrateRankingDefaults(raw []byte) {
 	var old rankingV6Raw
 	if len(raw) > 0 {
@@ -322,28 +356,25 @@ func (c *Config) migrateRankingDefaults(raw []byte) {
 		switch {
 		case enabled == nil:
 			// No old opt-in key: the new default (on) applies -- unless
-			// the file already carries the NEW shape's disabled:true
-			// (parsed into the struct before this step), which stays.
-			if !*disabled {
+			// the file already carries the v6-era disabled:true opt-out
+			// (the v7 step converts it to enabled:false), which stays.
+			if disabled == nil || !*disabled {
 				turnedOn = append(turnedOn, section)
 			}
 		case !*enabled:
-			*disabled = true
 			keptOff = append(keptOff, section)
-		default:
-			*disabled = false
 		}
 	}
-	apply("search.priors", old.Search.Priors.Enabled, &c.Search.Priors.Disabled)
-	apply("search.arbiter", old.Search.Arbiter.Enabled, &c.Search.Arbiter.Disabled)
+	apply("search.priors", old.Search.Priors.Enabled, old.Search.Priors.Disabled)
+	apply("search.arbiter", old.Search.Arbiter.Enabled, old.Search.Arbiter.Disabled)
 	if len(turnedOn) > 0 {
 		c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
-			"the learned ranking layers are now on by default: %s turned on (everything stays on this machine; set the section's disabled flag in config.json to turn one back off)",
+			"the learned ranking layers are now on by default: %s turned on (everything stays on this machine; set the section's enabled flag to false in config.json to turn one back off)",
 			strings.Join(turnedOn, ", ")))
 	}
 	if len(keptOff) > 0 {
 		c.MigrationNotes = append(c.MigrationNotes, fmt.Sprintf(
-			"your ranking opt-outs were preserved: %s stay off (the old \"enabled\" switch became \"disabled\")",
+			"your ranking opt-outs were preserved: %s stay off (\"enabled\" is an opt-out switch now -- the layers default on)",
 			strings.Join(keptOff, ", ")))
 	}
 	if rq := old.Search.Telemetry.RetainQueries; rq != nil {

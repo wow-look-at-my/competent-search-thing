@@ -194,7 +194,7 @@ To narrow the scope, edit `roots` in config.json (see
 ```json
 {
   "roots": ["/home/me", "/etc"],
-  "rootsVersion": 4
+  "rootsVersion": 7
 }
 ```
 
@@ -213,15 +213,25 @@ curated or emptied list is left exactly as you wrote it. On macOS,
 configs stamped below 4 get the v4 step under the same rule: the
 firmlink-dedup exclude `/System/Volumes/Data` (see above) is appended
 to default-shaped lists, while curated lists only get an
-informational note. Either way
-`"rootsVersion": 4` is written back so the check never re-runs. Watch
-for these startup log lines:
+informational note; below 5 the macOS noise excludes follow the same
+rule. Configs stamped below 6 get the ranking-defaults flip (the
+always-on ranking log and the on-by-default learned layers -- see
+[Ranking log](#ranking-log)), and below 7 every negative boolean
+switch is renamed to its affirmative `enabled` spelling with the
+value inverted -- a pure rename with zero behavior change: an old key
+explicitly in your file lands as the inverted new key (e.g.
+`"tray": { "disabled": true }` becomes `"tray": { "enabled": false }`),
+an absent key stays absent-and-on, and a file already carrying both
+spellings keeps the new one. Either way the current `rootsVersion` is
+written back so the checks never re-run. Watch for these startup log
+lines:
 
 ```
 config: index roots upgraded to the whole-filesystem default (/); edit roots in config.json to revert -- the first rescan will re-walk everything
 config: system exclude patterns added for whole-filesystem indexing: /proc, /sys, /dev, /run, /tmp, /var/tmp, lost+found
 config: high-churn exclude patterns added for the watch layer: .hg, .svn, __pycache__, .mypy_cache, .pytest_cache, .ruff_cache, .tox, .nox, .venv; remove any of them in config.json to index those trees
 config: macOS firmlink exclude added: /System/Volumes/Data (macOS shows the same files at /Users, /Applications, ...; indexing both nearly doubles the index and its RAM); remove it in config.json to index the Data volume twice
+config: migrated tray.disabled=true -> tray.enabled=false
 ```
 
 To revert, set `roots` back to what you want (e.g. `["/home/me"]`) and
@@ -275,7 +285,7 @@ index state** -- they differ only in how quickly a change shows up.
 | fanotify whole-filesystem marks | every directory on the roots' filesystems, one kernel mark per filesystem, no per-directory watches | ~1 second (debounced) | Linux, automatic, when the binary holds `CAP_SYS_ADMIN` (see below) |
 | FSEvents stream | every directory under the roots, one recursive kernel stream, a handful of file descriptors total | ~1 second (debounced; 0.3s stream latency) | macOS, automatic, no privileges needed |
 | per-directory hot set (inotify on Linux, kqueue on macOS, ReadDirectoryChangesW on Windows) | a bounded budget of per-directory watches: the roots first, then your home subtree, then the rest, rotated LRU-style toward recently active directories | ~1 second (debounced) for watched directories | whenever no whole-filesystem backend is available; the only live tier on Windows |
-| reconcile sweeps | every indexed directory, every pass | one sweep interval (default 20 minutes) | always (unless `watcher.sweepDisabled`) |
+| reconcile sweeps | every indexed directory, every pass | one sweep interval (default 20 minutes) | always (unless `watcher.sweepEnabled` is `false`) |
 
 On macOS the per-directory fallback deserves a warning: kqueue (what
 fsnotify uses there) opens one file descriptor per watched directory
@@ -411,7 +421,7 @@ The `watcher` section of config.json tunes the layer (see
 | `watcher.backend` | `"auto"` | Backend selection. `"auto"` uses a whole-filesystem backend where one exists -- fanotify on Linux (see [Enable full-filesystem watching](#enable-full-filesystem-watching-recommended)), FSEvents on macOS (automatic, no privileges) -- and falls back to the per-directory hot set. `"fanotify"` and `"fsevents"` are STRICT: when the named backend cannot start (including on the wrong OS), live watching is disabled outright -- no per-directory fallback; sweeps keep the index converging -- announced loudly in-app and in the log. `"inotify"` skips the whole-filesystem probe and pins the per-directory model on every OS (debugging; the runtime label stays honest: `kqueue` on macOS). `kqueue` is a runtime label, not a config value. Empty or unknown values are repaired to `"auto"`. |
 | `watcher.maxWatches` | `0` | The hot-set budget for the per-directory fallback. `0` = automatic: on Linux half of `fs.inotify.max_user_watches`, capped at 65536; on macOS a sixteenth of the process fd limit, capped at 8192 (kqueue costs one fd per watched dir PLUS one per direct child file, so the budget must leave fds for the app itself). Any negative value = explicitly unlimited (watch every indexed directory; on macOS this can exhaust the fd limit and break the process -- prefer the fsevents backend). Positive = exactly that many. Irrelevant while a whole-filesystem backend is active. |
 | `watcher.sweepMinutes` | `0` | Minutes between reconcile sweeps; `0` = the built-in 20 minutes. |
-| `watcher.sweepDisabled` | `false` | `true` turns the sweep tier off. Directories without a live watch then converge only at full rescans, and the app logs a loud warning at startup saying exactly that. |
+| `watcher.sweepEnabled` | `true` | `false` turns the sweep tier off. Directories without a live watch then converge only at full rescans, and the app logs a loud warning at startup saying exactly that. Absent means enabled. |
 | `watcher.watchExcludes` | `[]` | Patterns (same syntax as `excludes`) applied to live watching ONLY: a matching directory -- and everything beneath it -- never holds a watch but stays fully indexed and swept, so its freshness bound becomes the sweep interval. Use it to keep high-churn trees you still want searchable from consuming watch budget. |
 
 ### Default excludes for high-churn directories
@@ -512,7 +522,8 @@ buildhost (see [Install](#install)):
       navigating the result list. Only queries whose activation
       actually ran are recorded (capped at 100, newest kept), persisted
       to `<configDir>/history.json` -- or memory-only with
-      `history.persistDisabled` (see [Configuration](#configuration))
+      `"history": { "persistEnabled": false }` (see
+      [Configuration](#configuration))
 - [x] Theming: design tokens as CSS custom properties, builtin dark +
       light themes, validated user JSON themes with live reload, and a
       custom.css escape hatch (see [Theming](#theming))
@@ -592,7 +603,7 @@ Common queries cost nothing extra: whenever the substring tiers alone
 already fill the result limit, the fuzzy pass is skipped outright
 (every substring match outranks every fuzzy one, so it could not
 change the list). Turn the fuzzy tier off EVERYWHERE (files and all
-builtin sections) with `"search": { "fuzzyDisabled": true }` in
+builtin sections) with `"search": { "fuzzyEnabled": false }` in
 [the configuration](#configuration); term splitting applies regardless
 of the toggle.
 
@@ -638,8 +649,9 @@ Signals only reorder the top candidates the text match already
 selected -- keystroke latency does not change (see
 [Performance](#performance) for the measured numbers). Everything is
 tunable under `search.frecency` in
-[the configuration](#configuration): `disabled` turns the whole blend
-off (exact pre-blend ordering), each `weight*` scales one signal, and
+[the configuration](#configuration): `enabled: false` turns the whole
+blend off (exact pre-blend ordering), each `weight*` scales one
+signal, and
 a NEGATIVE weight (or `tierJumpCount`) turns just that signal off --
 `0` means "use the default", the config-wide zero-value convention.
 
@@ -647,7 +659,7 @@ Privacy: the learned open counts live in
 `<configDir>/frecency.json` (next to `config.json`), capped at 4096
 paths (the lowest decayed counts are pruned), created with mode 0600.
 Delete the file to reset the learning; set
-`"search": { "frecency": { "disabled": true } }` to never record
+`"search": { "frecency": { "enabled": false } }` to never record
 anything.
 
 ### Pick-memory priors
@@ -656,7 +668,7 @@ anything.
 of the blend: priors derived from which results you actually PICK.
 
 ```json
-"search": { "priors": { "disabled": true } }
+"search": { "priors": { "enabled": false } }
 ```
 
 turns it off -- a debug escape hatch for reproducing the
@@ -704,11 +716,11 @@ picking `.md` files over their `.txt` siblings, file rows get a
 small learned nudge too.
 
 ```json
-"search": { "arbiter": { "disabled": true } }
+"search": { "arbiter": { "enabled": false } }
 ```
 
 turns it off -- the same debug escape hatch / kill switch stance as
-`search.priors.disabled`, and equally not a privacy option.
+`search.priors.enabled`, and equally not a privacy option.
 
 What it is: a small pairwise model (a single weight vector -- class,
 alignment, frecency/recency/noise signals, extension and depth
@@ -828,7 +840,7 @@ opens your tracker.
 - Every matching rule emits one result, in config order, at the
   triggered tier (above all text-matched rows). Invalid patterns are
   logged once at startup and skipped. `title` defaults to the URL,
-  `icon` to `link`; `"disabled": true` turns a rule off.
+  `icon` to `link`; `"enabled": false` turns a rule off.
 
 ## Building
 
@@ -949,7 +961,7 @@ button instead.
 EVERY setting applies LIVE -- no restarts, no "restart required"
 badges:
 
-- `theme`, `maxResults`, `search.fuzzyDisabled`, and everything the
+- `theme`, `maxResults`, `search.fuzzyEnabled`, and everything the
   plugin registry serves (`plugins`, `bangs`, `rewrites`, `firefox`)
   as before;
 - `roots` / `excludes` / `watcher.*` / `rescanIntervalMinutes`: the
@@ -972,9 +984,9 @@ badges:
 - `search.telemetry.maxSizeKB`: the ranking log's size bound
   applies on the spot (the log file itself is kept; delete it to
   erase);
-- `stats.disabled` / `tray.disabled`: the sampler/icon stops or
+- `stats.enabled` / `tray.enabled`: the sampler/icon stops or
   starts on the spot;
-- `history.persistDisabled`: the store flips persistence without
+- `history.persistEnabled`: the store flips persistence without
   losing in-session recall;
 - `preview.*`: the pane's engine is rebuilt (keys, base URLs, caps)
   and the window follows `preview.enabled`'s size;
@@ -1057,15 +1069,15 @@ configs gain it on their next save):
 {
   "$schema": "./config.schema.json",
   "roots": ["/"],
-  "rootsVersion": 6,
+  "rootsVersion": 7,
   "excludes": [".git", "node_modules", ".cache", ".hg", ".svn", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox", ".venv", "/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"],
   "hotkey": "alt+space",
   "rescanIntervalMinutes": 0,
   "maxResults": 50,
   "search": {
-    "fuzzyDisabled": false,
+    "fuzzyEnabled": true,
     "frecency": {
-      "disabled": false,
+      "enabled": true,
       "halfLifeDays": 14,
       "weightFrecency": 1,
       "weightRecency": 1,
@@ -1073,17 +1085,17 @@ configs gain it on their next save):
       "weightNoise": 1,
       "tierJumpCount": 3
     },
-    "priors": { "disabled": false },
+    "priors": { "enabled": true },
     "telemetry": { "maxSizeKB": 65536 },
-    "arbiter": { "disabled": false }
+    "arbiter": { "enabled": true }
   },
-  "watcher": { "maxWatches": 0, "sweepMinutes": 0, "sweepDisabled": false, "watchExcludes": [] },
+  "watcher": { "maxWatches": 0, "sweepMinutes": 0, "sweepEnabled": true, "watchExcludes": [] },
   "theme": "dark",
-  "plugins": { "disabled": false, "entries": {} },
+  "plugins": { "enabled": true, "entries": {} },
   "bangs": { "sigils": ["!", "/", "@"], "aliases": {} },
-  "tray": { "disabled": false },
-  "history": { "persistDisabled": false },
-  "stats": { "disabled": false },
+  "tray": { "enabled": true },
+  "history": { "persistEnabled": true },
+  "stats": { "enabled": true },
   "window": { "translucent": false, "width": 780, "height": 550 },
   "firefox": {
     "frequentSites": {
@@ -1127,13 +1139,16 @@ Field reference:
   indexed as entries but never descended. Network and virtual
   filesystem mountpoints under a root are skipped automatically; list
   such a mountpoint here explicitly to index it anyway.
-- `rootsVersion` -- the roots-defaults version stamp the app writes
-  (currently `6`). Older stamps trigger the one-time migrations
-  described under [Indexing scope](#indexing-scope) plus, below 6,
-  the ranking-defaults flip (the always-on ranking log and the
-  on-by-default learned layers -- see [Ranking log](#ranking-log)).
-  Not a knob -- leave it alone unless you want the migration to run
-  again.
+- `rootsVersion` -- the config-defaults version stamp the app writes
+  (currently `7`). Older stamps trigger the one-time migrations
+  described under [Indexing scope](#indexing-scope): the roots and
+  exclude upgrades, below 6 the ranking-defaults flip (the always-on
+  ranking log and the on-by-default learned layers -- see
+  [Ranking log](#ranking-log)), and below 7 the boolean-polarity
+  rename (every negative `disabled`-style switch becomes the
+  affirmative `enabled` with its value inverted; pure rename, zero
+  behavior change). Not a knob -- leave it alone unless you want the
+  migration to run again.
 - `excludes` -- patterns pruned from indexing (default `.git`,
   `node_modules`, `.cache`, the high-churn noise directories `.hg`,
   `.svn`, `__pycache__`, `.mypy_cache`, `.pytest_cache`,
@@ -1160,25 +1175,27 @@ Field reference:
   net on top of the live watch layer and the reconcile sweeps; `0`
   (the default) disables the timer. It is the convergence path for
   the sweep's one blind spot (mtime-backdated writes) and -- with
-  `watcher.sweepDisabled` -- for everything the hot set misses; see
+  `watcher.sweepEnabled` -- for everything the hot set misses; see
   [File watching and freshness](#file-watching-and-freshness).
 - `maxResults` -- the maximum number of results one query returns
   (default 50; zero or negative values are reset to the default).
-- `search` -- search engine behavior. `fuzzyDisabled` (default
-  `false`) turns the fuzzy (subsequence) name-match tier off, leaving
+- `search` -- search engine behavior. `fuzzyEnabled` (default
+  `true`; absent means enabled) set to `false` turns the fuzzy
+  (subsequence) name-match tier off, leaving
   exact/prefix/substring matching only -- see
   [Fuzzy matching](#fuzzy-matching). Exact, prefix, and substring
   matches always rank above fuzzy ones either way. `frecency`
   configures the ranking blend described under
-  [Ranking](#ranking-frecency-recency-and-noise): `disabled` (default
-  `false`) turns the whole blend off; `halfLifeDays` (default 14) is
+  [Ranking](#ranking-frecency-recency-and-noise): `enabled` (default
+  `true`) set to `false` turns the whole blend off; `halfLifeDays` (default 14) is
   the open-count decay; `weightFrecency`, `weightRecency`,
   `weightCwd`, `weightNoise` (default 1 each) scale the four signals;
   `tierJumpCount` (default 3) is the decayed-open-count threshold for
   competing one match tier up. For every frecency number, `0` means
   "use the default" and a NEGATIVE value turns that one signal off.
-  `priors.disabled` and `arbiter.disabled` (default `false` -- both
-  learned layers are on) are debug escape hatches / kill switches,
+  `priors.enabled` and `arbiter.enabled` (default `true` -- both
+  learned layers are on) set to `false` are debug escape hatches /
+  kill switches,
   not privacy options -- see [Pick-memory priors](#pick-memory-priors)
   and [Learned arbitration](#learned-arbitration). `telemetry`
   bounds the always-on local [ranking log](#ranking-log):
@@ -1190,7 +1207,7 @@ Field reference:
   per-directory model on every OS; unset means `auto`),
   `maxWatches` (hot-set budget for the per-directory fallback; 0 =
   auto, per-OS), `sweepMinutes` (sweep cadence; 0 = 20 minutes),
-  `sweepDisabled` (kills the sweep tier, loudly) and `watchExcludes`
+  `sweepEnabled: false` (kills the sweep tier, loudly) and `watchExcludes`
   (patterns never live-watched but still indexed and swept). The full
   table lives under
   [File watching and freshness](#file-watching-and-freshness).
@@ -1199,11 +1216,12 @@ Field reference:
   `<configDir>/themes/<name>.json`. An unknown or invalid theme is
   logged and falls back to `dark`. Theme changes apply live -- see
   [Theming](#theming).
-- `plugins` -- the [plugin system](#plugins). `disabled` (default
-  `false`) turns the whole system off, built-in providers included.
+- `plugins` -- the [plugin system](#plugins). `enabled` (default
+  `true`) set to `false` turns the whole system off, built-in
+  providers included.
   `entries` maps a provider id to per-plugin config:
-  `{ "entries": { "calc": { "disabled": false, "settings": { } } } }`.
-  `disabled` turns that one provider off (the built-in ids `bangs`,
+  `{ "entries": { "calc": { "enabled": true, "settings": { } } } }`.
+  `enabled: false` turns that one provider off (the built-in ids `bangs`,
   `app`, `apps`, `apps-search`, `windows`, `firefox-frequent` and
   `firefox-tabs` work here too);
   `settings` is an opaque JSON object passed verbatim to that plugin
@@ -1216,20 +1234,21 @@ Field reference:
   defaults). `aliases` maps extra names onto registered bangs, e.g.
   `{ "aliases": { "math": "calc" } }` makes `!math` target the plugin
   that registered `calc`.
-- `tray` -- the [tray icon](#tray-icon). `disabled` (default `false`)
-  turns it off. Leaving it on costs nothing on desktops without a
+- `tray` -- the [tray icon](#tray-icon). `enabled` (default `true`)
+  set to `false` turns it off. Leaving it on costs nothing on desktops without a
   status-icon host: the app just never shows one.
 - `history` -- the query history behind the bar's Up/Down recall.
   A query is recorded only when its activation actually runs (a file
   is opened or revealed, a plugin action executes); the newest 100
   entries are kept (exact repeats move to the newest slot instead of
   duplicating) and stored at `<configDir>/history.json`, created with
-  `0600` permissions. `persistDisabled` (default `false`) keeps the
+  `0600` permissions. `persistEnabled` (default `true`) set to `false`
+  keeps the
   history in memory only: nothing is read from or written to
   `history.json`, while in-session Up/Down recall keeps working.
   Delete `history.json` to forget previously saved entries.
-- `stats` -- the [system stats row](#system-stats-row). `disabled`
-  (default `false`) turns the feature off entirely: no sampler runs
+- `stats` -- the [system stats row](#system-stats-row). `enabled`
+  (default `true`) set to `false` turns the feature off entirely: no sampler runs
   and the row disappears from the bar. Leaving it on costs nothing
   while the bar is hidden: sampling only ever happens while the bar
   is on screen.
@@ -1258,11 +1277,11 @@ Field reference:
   override (empty = the same discovery `frequentSites` uses).
   Everything is read locally from your own profile and never
   transmitted; disable the sections via
-  `plugins.entries["firefox-frequent"].disabled` and
-  `plugins.entries["firefox-tabs"].disabled`.
+  `plugins.entries["firefox-frequent"].enabled` and
+  `plugins.entries["firefox-tabs"].enabled` to `false`.
 - `rewrites` -- regex -> URL rewrite rules; see
   [Rewrite rules](#rewrite-rules). Empty by default; disable all at
-  once via `plugins.entries["rewrites"].disabled`.
+  once via `plugins.entries["rewrites"].enabled` = `false`.
 - `preview` -- the preview pane (opt-in). `enabled` (default `false`)
   turns on a right-hand pane showing the selected result and widens
   the window to `windowWidth` x `windowHeight` (defaults 1600 x 800;
@@ -1852,7 +1871,7 @@ exactly like `!app` does. This is the fourth built-in provider,
   launch through the bar counts, decaying with the same 14-day
   half-life as file opens (under namespaced `app:` keys in
   `frecency.json`, invisible to file ranking). Cold start -- or
-  `search.frecency.disabled` -- keeps the honest name order.
+  `search.frecency.enabled` = `false` -- keeps the honest name order.
 - Bang routing keeps the two paths mutually exclusive: a `!app ...` /
   `!launch ...` query dispatches only the targeted launcher (in the
   classic below zone -- there are no file results to outrank on a
@@ -1861,7 +1880,7 @@ exactly like `!app` does. This is the fourth built-in provider,
   bangs are unaffected):
 
 ```json
-{ "plugins": { "entries": { "apps-search": { "disabled": true } } } }
+{ "plugins": { "entries": { "apps-search": { "enabled": false } } } }
 ```
 
 The remaining built-ins, `firefox-frequent` and `firefox-tabs`, have
@@ -1951,7 +1970,7 @@ substring anywhere in the title or URL; ties go to the more-visited
 page. To turn the section off entirely:
 
 ```json
-{ "plugins": { "entries": { "firefox-frequent": { "disabled": true } } } }
+{ "plugins": { "entries": { "firefox-frequent": { "enabled": false } } } }
 ```
 
 Zero or negative numbers are repaired to the defaults on load. The
@@ -2066,7 +2085,7 @@ then a title substring, then a substring anywhere in the URL; ties go
 to the most recently used tab. To turn the section off entirely:
 
 ```json
-{ "plugins": { "entries": { "firefox-tabs": { "disabled": true } } } }
+{ "plugins": { "entries": { "firefox-tabs": { "enabled": false } } } }
 ```
 
 ### Trust model
@@ -2258,7 +2277,7 @@ Details:
 - Untitled windows and the searchbar's own window are skipped; the
   list is capped at 100 windows.
 - Disable it like any plugin section:
-  `"plugins": { "entries": { "windows": { "disabled": true } } }`.
+  `"plugins": { "entries": { "windows": { "enabled": false } } }`.
 - Window titles are read locally over X11/EWMH and are fed ONLY to
   this built-in section -- they are never sent to external plugins
   (the plugin request context remains focused/running/installed).
@@ -2365,7 +2384,7 @@ a stale or fake number, and the failure is logged once, not per
 sample. On Windows there are no sources wired up yet, so the whole
 row shows dashes there for now.
 
-`stats.disabled` in `config.json` turns the feature off entirely: no
+`"stats": { "enabled": false }` in `config.json` turns the feature off entirely: no
 sampler is built and the row is removed from the bar (not dashes --
 gone), taking effect on the next launch.
 
@@ -2616,7 +2635,7 @@ Implementation notes and requirements:
   before -- the tray is an extra, never a requirement.
 - Linux-only for now (the user-facing ask was GNOME); windows/darwin
   builds simply skip it.
-- Turn it off with `"tray": { "disabled": true }` in
+- Turn it off with `"tray": { "enabled": false }` in
   [`config.json`](#configuration).
 
 If the icon does not appear on Ubuntu, check that the extension is
@@ -2655,7 +2674,7 @@ Queries with 50+ substring hits (common/prefix/single) skip the fuzzy
 pass entirely and cost what they always did; sparse queries (rare, no
 match) now include the fuzzy subsequence sweep -- that is the rare/no
 match delta vs the pre-fuzzy numbers (0.74 and 0.69 at 1M), and
-`search.fuzzyDisabled` restores those exactly. The fuzzy scenarios
+`search.fuzzyEnabled` = `false` restores those exactly. The fuzzy scenarios
 themselves (`BenchmarkSearchFuzzy`):
 
 | store | scenario                        | query  | ms/query |

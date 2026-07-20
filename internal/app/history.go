@@ -13,8 +13,8 @@ const historyFileName = "history.json"
 
 // startHistory brings the query-history store up once, at Startup.
 // The store lives at <configDir>/history.json and persists unless
-// config's history.persistDisabled opted out (Options carries the
-// flag, like TrayDisabled). Failures degrade, never block: an
+// config's history.persistEnabled = false opted out (Options carries
+// the flag, inverted, like TrayDisabled). Failures degrade, never block: an
 // unresolvable config dir or an unreadable/corrupt file is logged
 // once with a "history: " prefix and the app runs on -- a nil store
 // turns the bound methods into safe no-ops.
@@ -41,7 +41,7 @@ func (a *App) historyStore() *history.Store {
 }
 
 // applyHistory is the config live-apply path for
-// history.persistDisabled: build a fresh store at the same path with
+// history.persistEnabled: build a fresh store at the same path with
 // the new persist flag, seed it -- from disk when persistence turns
 // on, so older entries survive -- then replay the current in-memory
 // entries on top (Add's move-to-newest dedup keeps the recall order
@@ -53,7 +53,7 @@ func (a *App) applyHistory(next *config.Config) error {
 	if err != nil {
 		return err
 	}
-	st := history.New(filepath.Join(dir, historyFileName), !next.History.PersistDisabled)
+	st := history.New(filepath.Join(dir, historyFileName), config.Enabled(next.History.PersistEnabled))
 	if err := st.Load(); err != nil {
 		log.Printf("history: %v (starting from the in-memory entries)", err)
 	}

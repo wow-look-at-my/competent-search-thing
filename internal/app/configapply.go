@@ -74,7 +74,7 @@ const (
 
 // applyGroups maps a group name to its shared applier. The registry
 // group covers every section buildRegistry re-reads from disk on a
-// reload (plugins, bangs, rewrites, firefox, and search.fuzzyDisabled
+// reload (plugins, bangs, rewrites, firefox, and search.fuzzyEnabled
 // for the plugin engine's ranking): one reload per pass applies them
 // all. The other groups follow the same one-run-per-pass contract.
 var applyGroups = map[string]func(a *App, next *config.Config) error{
@@ -123,11 +123,13 @@ var sectionAppliers = []sectionApplier{
 		},
 	},
 	{
-		name:    "search.fuzzyDisabled",
-		changed: func(o, n *config.Config) bool { return o.Search.FuzzyDisabled != n.Search.FuzzyDisabled },
+		name: "search.fuzzyEnabled",
+		changed: func(o, n *config.Config) bool {
+			return config.Enabled(o.Search.FuzzyEnabled) != config.Enabled(n.Search.FuzzyEnabled)
+		},
 		apply: func(a *App, n *config.Config) error {
 			if a.manager != nil {
-				a.manager.SetFuzzyDisabled(n.Search.FuzzyDisabled)
+				a.manager.SetFuzzyDisabled(!config.Enabled(n.Search.FuzzyEnabled))
 			}
 			return nil
 		},
@@ -144,8 +146,12 @@ var sectionAppliers = []sectionApplier{
 		},
 	},
 	{
+		// DeepEqual, not struct equality: the section carries a *bool
+		// switch, and == would compare the pointer identities the
+		// per-load allocations never share. Same for every pointer-
+		// carrying section below.
 		name:    "search.priors",
-		changed: func(o, n *config.Config) bool { return o.Search.Priors != n.Search.Priors },
+		changed: func(o, n *config.Config) bool { return !reflect.DeepEqual(o.Search.Priors, n.Search.Priors) },
 		apply:   (*App).applyPriors,
 	},
 	{
@@ -155,7 +161,7 @@ var sectionAppliers = []sectionApplier{
 	},
 	{
 		name:    "search.arbiter",
-		changed: func(o, n *config.Config) bool { return o.Search.Arbiter != n.Search.Arbiter },
+		changed: func(o, n *config.Config) bool { return !reflect.DeepEqual(o.Search.Arbiter, n.Search.Arbiter) },
 		apply:   (*App).applyArbiter,
 	},
 	{
@@ -184,17 +190,17 @@ var sectionAppliers = []sectionApplier{
 	},
 	{
 		name:    "tray",
-		changed: func(o, n *config.Config) bool { return o.Tray != n.Tray },
+		changed: func(o, n *config.Config) bool { return !reflect.DeepEqual(o.Tray, n.Tray) },
 		apply:   (*App).applyTray,
 	},
 	{
 		name:    "history",
-		changed: func(o, n *config.Config) bool { return o.History != n.History },
+		changed: func(o, n *config.Config) bool { return !reflect.DeepEqual(o.History, n.History) },
 		apply:   (*App).applyHistory,
 	},
 	{
 		name:    "stats",
-		changed: func(o, n *config.Config) bool { return o.Stats != n.Stats },
+		changed: func(o, n *config.Config) bool { return !reflect.DeepEqual(o.Stats, n.Stats) },
 		apply:   (*App).applyStats,
 	},
 	{

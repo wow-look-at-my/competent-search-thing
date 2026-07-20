@@ -165,7 +165,7 @@ function refreshIdleStatus(): void {
 /* --- stats row ------------------------------------------------------ */
 
 // applyStats renders one stats snapshot into the bottom row -- or
-// hides the whole row when the feature is off (stats.disabled: the Go
+// hides the whole row when the feature is off (stats.enabled false: the Go
 // side sends enabled false). Per-metric dashes are stats.ts's job.
 function applyStats(snap: StatsSnapshot | undefined): void {
   if (snap === undefined) {

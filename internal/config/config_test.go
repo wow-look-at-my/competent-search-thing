@@ -194,9 +194,18 @@ func TestNormalize(t *testing.T) {
 	require.Equal(t, WatcherBackendAuto, empty.Watcher.Backend, "an empty watcher.backend means auto")
 	require.Equal(t, DefaultTelemetryMaxSizeKB, empty.Search.Telemetry.MaxSizeKB,
 		"zero telemetry maxSizeKB repairs to the default")
-	require.False(t, empty.Search.Priors.Disabled,
-		"the learned layers are on by default: the zero value stays on and repair never flips a switch")
-	require.False(t, empty.Search.Arbiter.Disabled, "the arbiter defaults on")
+	require.True(t, Enabled(empty.Search.Priors.Enabled),
+		"the learned layers are on by default: an absent switch stays on and repair never flips one")
+	require.Equal(t, Bool(true), empty.Search.Priors.Enabled,
+		"Normalize repairs the absent affirmative switch to explicit true")
+	require.Equal(t, Bool(true), empty.Search.Arbiter.Enabled, "the arbiter defaults on")
+	require.Equal(t, Bool(true), empty.Search.FuzzyEnabled, "fuzzy matching defaults on")
+	require.Equal(t, Bool(true), empty.Search.Frecency.Enabled, "the frecency blend defaults on")
+	require.Equal(t, Bool(true), empty.Watcher.SweepEnabled, "sweeps default on")
+	require.Equal(t, Bool(true), empty.Plugins.Enabled, "plugins default on")
+	require.Equal(t, Bool(true), empty.Tray.Enabled, "the tray defaults on")
+	require.Equal(t, Bool(true), empty.History.PersistEnabled, "history persistence defaults on")
+	require.Equal(t, Bool(true), empty.Stats.Enabled, "the stats row defaults on")
 
 	negTel := Config{Search: SearchConfig{Telemetry: TelemetryConfig{MaxSizeKB: -5}}}
 	negTel.Normalize()
@@ -205,11 +214,11 @@ func TestNormalize(t *testing.T) {
 
 	keepTel := Config{Search: SearchConfig{
 		Telemetry: TelemetryConfig{MaxSizeKB: 64},
-		Priors:    PriorsConfig{Disabled: true},
+		Priors:    PriorsConfig{Enabled: Bool(false)},
 	}}
 	keepTel.Normalize()
 	require.Equal(t, 64, keepTel.Search.Telemetry.MaxSizeKB, "a configured telemetry size cap is preserved")
-	require.True(t, keepTel.Search.Priors.Disabled,
+	require.Equal(t, Bool(false), keepTel.Search.Priors.Enabled,
 		"an explicit opt-out (the debug escape hatch) is never repaired away")
 
 	allEmpty := Config{Roots: []string{""}}
@@ -272,9 +281,9 @@ func TestPluginsAndBangsRoundTrip(t *testing.T) {
 	setConfigDir(t)
 	in := Default()
 	in.Plugins = PluginsConfig{
-		Disabled: true,
+		Enabled: Bool(false),
 		Entries: map[string]PluginEntry{
-			"calc": {Disabled: true, Settings: json.RawMessage(`{"precision": 2, "mode": "deg"}`)},
+			"calc": {Enabled: Bool(false), Settings: json.RawMessage(`{"precision": 2, "mode": "deg"}`)},
 			"ps":   {},
 		},
 	}
@@ -286,12 +295,13 @@ func TestPluginsAndBangsRoundTrip(t *testing.T) {
 
 	got, err := Load()
 	require.NoError(t, err)
-	require.True(t, got.Plugins.Disabled)
+	require.Equal(t, Bool(false), got.Plugins.Enabled)
 	require.Len(t, got.Plugins.Entries, 2)
-	require.True(t, got.Plugins.Entries["calc"].Disabled)
+	require.Equal(t, Bool(false), got.Plugins.Entries["calc"].Enabled)
 	require.JSONEq(t, `{"precision": 2, "mode": "deg"}`, string(got.Plugins.Entries["calc"].Settings),
 		"settings round-trip as an opaque JSON object")
-	require.False(t, got.Plugins.Entries["ps"].Disabled)
+	require.Equal(t, Bool(true), got.Plugins.Entries["ps"].Enabled,
+		"an entry saved without the switch loads as the explicit default (on)")
 	require.Nil(t, got.Plugins.Entries["ps"].Settings)
 	require.Equal(t, []string{"!", "$"}, got.Bangs.Sigils)
 	require.Equal(t, map[string]string{"add": "calc"}, got.Bangs.Aliases)
@@ -311,7 +321,7 @@ func TestLoadOldConfigWithoutNewSections(t *testing.T) {
 	c, err := Load()
 	require.NoError(t, err)
 	require.Equal(t, []string{"/data"}, c.Roots, "old fields still load")
-	require.False(t, c.Plugins.Disabled)
+	require.Equal(t, Bool(true), c.Plugins.Enabled)
 	require.NotNil(t, c.Plugins.Entries, "missing plugins section normalized")
 	require.Empty(t, c.Plugins.Entries)
 	require.Equal(t, DefaultBangSigils(), c.Bangs.Sigils, "missing bangs section gets default sigils")
@@ -328,53 +338,60 @@ func TestNormalizePluginsAndBangs(t *testing.T) {
 	require.NotNil(t, c.Bangs.Aliases)
 	require.Empty(t, c.Bangs.Aliases)
 
-	// Existing values survive normalization untouched.
+	// Existing values survive normalization untouched; an entry
+	// without the switch gains the explicit default (on).
 	c2 := Config{
-		Plugins: PluginsConfig{Entries: map[string]PluginEntry{"x": {Disabled: true}}},
-		Bangs:   BangsConfig{Sigils: []string{"$"}, Aliases: map[string]string{"a": "b"}},
+		Plugins: PluginsConfig{Entries: map[string]PluginEntry{
+			"x": {Enabled: Bool(false)},
+			"y": {},
+		}},
+		Bangs: BangsConfig{Sigils: []string{"$"}, Aliases: map[string]string{"a": "b"}},
 	}
 	c2.Normalize()
-	require.Equal(t, map[string]PluginEntry{"x": {Disabled: true}}, c2.Plugins.Entries)
+	require.Equal(t, map[string]PluginEntry{
+		"x": {Enabled: Bool(false)},
+		"y": {Enabled: Bool(true)},
+	}, c2.Plugins.Entries)
 	require.Equal(t, []string{"$"}, c2.Bangs.Sigils)
 	require.Equal(t, map[string]string{"a": "b"}, c2.Bangs.Aliases)
 }
 
 func TestTrayConfig(t *testing.T) {
 	setConfigDir(t)
-	require.False(t, Default().Tray.Disabled, "the tray is on by default")
+	require.Equal(t, Bool(true), Default().Tray.Enabled, "the tray is on by default")
 
 	// A config predating the tray block loads as enabled...
 	var c Config
 	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
 	c.Normalize()
-	require.False(t, c.Tray.Disabled)
+	require.Equal(t, Bool(true), c.Tray.Enabled)
 
 	// ...and an explicit opt-out round-trips.
 	in := Default()
-	in.Tray.Disabled = true
+	in.Tray.Enabled = Bool(false)
 	require.NoError(t, Save(in))
 	got, err := Load()
 	require.NoError(t, err)
-	require.True(t, got.Tray.Disabled)
+	require.Equal(t, Bool(false), got.Tray.Enabled)
 }
 
 func TestStatsConfig(t *testing.T) {
 	setConfigDir(t)
-	require.False(t, Default().Stats.Disabled, "the stats row is on by default")
+	require.Equal(t, Bool(true), Default().Stats.Enabled, "the stats row is on by default")
 
 	// A config predating the stats block loads as enabled...
 	var c Config
 	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
 	c.Normalize()
-	require.False(t, c.Stats.Disabled)
+	require.Equal(t, Bool(true), c.Stats.Enabled)
 
 	// ...and an explicit opt-out round-trips.
 	in := Default()
-	in.Stats.Disabled = true
+	in.Stats.Enabled = Bool(false)
 	require.NoError(t, Save(in))
 	got, err := Load()
 	require.NoError(t, err)
-	require.True(t, got.Stats.Disabled)
+	require.Equal(t, Bool(false), got.Stats.Enabled)
 }
 
 func TestWindowConfig(t *testing.T) {
@@ -440,21 +457,21 @@ func TestWindowSizeConfig(t *testing.T) {
 
 func TestHistoryConfig(t *testing.T) {
 	setConfigDir(t)
-	require.False(t, Default().History.PersistDisabled, "history persistence is on by default")
+	require.Equal(t, Bool(true), Default().History.PersistEnabled, "history persistence is on by default")
 
 	// A config predating the history block loads as persisting...
 	var c Config
 	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
 	c.Normalize()
-	require.False(t, c.History.PersistDisabled)
+	require.Equal(t, Bool(true), c.History.PersistEnabled)
 
 	// ...and an explicit opt-out round-trips.
 	in := Default()
-	in.History.PersistDisabled = true
+	in.History.PersistEnabled = Bool(false)
 	require.NoError(t, Save(in))
 	got, err := Load()
 	require.NoError(t, err)
-	require.True(t, got.History.PersistDisabled)
+	require.Equal(t, Bool(false), got.History.PersistEnabled)
 }
 
 func TestDefaultBangSigilsReturnsFreshSlice(t *testing.T) {
@@ -524,6 +541,7 @@ func TestFirefoxConfig(t *testing.T) {
 func TestFrecencyConfig(t *testing.T) {
 	setConfigDir(t)
 	require.Equal(t, FrecencyConfig{
+		Enabled:        Bool(true),
 		HalfLifeDays:   14,
 		WeightFrecency: 1.0,
 		WeightRecency:  1.0,
@@ -542,7 +560,7 @@ func TestFrecencyConfig(t *testing.T) {
 	// per-signal off switch and pass through untouched -- except the
 	// half-life, which has no off meaning and repairs on <= 0.
 	c = Config{Search: SearchConfig{Frecency: FrecencyConfig{
-		Disabled:       true,
+		Enabled:        Bool(false),
 		HalfLifeDays:   -2,
 		WeightFrecency: 0,
 		WeightRecency:  -1,
@@ -552,7 +570,7 @@ func TestFrecencyConfig(t *testing.T) {
 	}}}
 	c.Normalize()
 	fr := c.Search.Frecency
-	require.True(t, fr.Disabled, "the kill switch is never touched")
+	require.Equal(t, Bool(false), fr.Enabled, "the kill switch is never touched")
 	require.Equal(t, float64(DefaultFrecencyHalfLifeDays), fr.HalfLifeDays)
 	require.Equal(t, DefaultFrecencyWeight, fr.WeightFrecency)
 	require.Equal(t, -1.0, fr.WeightRecency, "negative weight = off, preserved")

@@ -115,7 +115,7 @@ func TestApplyStatsDisableAndReEnable(t *testing.T) {
 	seedBaseline(a, config.Default())
 
 	next := config.Default()
-	next.Stats.Disabled = true
+	next.Stats.Enabled = config.Bool(false)
 	res := a.applyConfig(&next, "test")
 	require.Contains(t, res.Applied, "stats")
 	require.Error(t, startCtx.Err(), "the sampler context is cancelled on disable")
@@ -151,7 +151,7 @@ func TestApplyTrayDisableAndReEnable(t *testing.T) {
 	seedBaseline(a, config.Default())
 
 	next := config.Default()
-	next.Tray.Disabled = true
+	next.Tray.Enabled = config.Bool(false)
 	res := a.applyConfig(&next, "test")
 	require.Contains(t, res.Applied, "tray")
 	require.Eventually(t, func() bool { _, c, _ := f.snapshot(); return c == 1 },
@@ -177,7 +177,7 @@ func TestApplyHistoryPersistFlipKeepsRecall(t *testing.T) {
 	histPath := filepath.Join(dir, historyFileName)
 
 	next := config.Default()
-	next.History.PersistDisabled = true
+	next.History.PersistEnabled = config.Bool(false)
 	res := a.applyConfig(&next, "test")
 	require.Contains(t, res.Applied, "history")
 	require.Equal(t, []string{"one", "two"}, a.GetHistory(), "in-session recall survives the flip")
@@ -207,8 +207,8 @@ func TestApplyFrecencyDisableAndRebuild(t *testing.T) {
 	// alone (the priors-riding interaction has its own test in
 	// priors_test.go).
 	a, _ := newTestApp(t, mgr, Options{
-		Priors:  config.PriorsConfig{Disabled: true},
-		Arbiter: config.ArbiterConfig{Disabled: true},
+		Priors:  config.PriorsConfig{Enabled: config.Bool(false)},
+		Arbiter: config.ArbiterConfig{Enabled: config.Bool(false)},
 	})
 	a.Startup(context.Background())
 	require.NotNil(t, a.frecencyStore(), "the default configuration builds the store")
@@ -218,7 +218,7 @@ func TestApplyFrecencyDisableAndRebuild(t *testing.T) {
 	seedBaseline(a, config.Default())
 
 	next := config.Default()
-	next.Search.Frecency.Disabled = true
+	next.Search.Frecency.Enabled = config.Bool(false)
 	res := a.applyConfig(&next, "test")
 	require.Contains(t, res.Applied, "search.frecency")
 	require.Nil(t, a.frecencyStore(), "disabled clears the store")

@@ -116,7 +116,7 @@ func watchConfigFrom(cfg *config.Config) watchConfig {
 		rescanEvery:   time.Duration(cfg.RescanIntervalMinutes) * time.Minute,
 		maxWatches:    cfg.Watcher.MaxWatches,
 		sweepInterval: time.Duration(cfg.Watcher.SweepMinutes) * time.Minute,
-		sweepDisabled: cfg.Watcher.SweepDisabled,
+		sweepDisabled: !config.Enabled(cfg.Watcher.SweepEnabled),
 		watchExcludes: cfg.Watcher.WatchExcludes,
 		backend:       cfg.Watcher.Backend,
 	}
@@ -216,7 +216,7 @@ func (a *App) takeEarlyWatcher() *watch.Watcher {
 // watcher is ADOPTED instead of building a fresh one: the trio is
 // wired around it and Release applies everything queued during the
 // build against the just-swapped index.
-// watcher.sweepDisabled skips the Sweeper and logs a LOUD warning
+// watcher.sweepEnabled = false skips the Sweeper and logs a LOUD warning
 // instead: the coverage invariant (tiers differ only in latency) then
 // holds only through full rescans. After everything is up it waits
 // for the watcher's initial registration (ctx-abortable, so Shutdown

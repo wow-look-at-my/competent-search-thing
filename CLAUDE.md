@@ -106,7 +106,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   EMPTY unless a summon path actually registered, and consumed by the
   tray tooltip), starts the tray icon once (tray.go in this package:
   linux-only goos gate -- windows/darwin get nothing for now --
-  Options.TrayDisabled = config tray.disabled logs "tray: disabled in
+  Options.TrayDisabled = config tray.enabled=false logs "tray: disabled in
   config" and skips; otherwise the `newTray` builder seam (production
   buildTray = tray.New over trayOptions()) yields the handle and ONE
   goroutine runs Start under a ctx cancelled in Shutdown -- the tray
@@ -130,7 +130,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the space-switch ghost fix: Spotlight itself dismisses on a Space
   switch), starts the system-stats sampler once (stats.go in this
   package: the `newStats` builder seam -- production buildStats does a
-  fresh config.Load (translucent.go pattern), stats.disabled = one
+  fresh config.Load (translucent.go pattern), stats.enabled=false = one
   "stats: disabled in config" log + nil, else sysstats.New wired with
   OnUpdate = emitStats (the guarded "stats:update" emit) and
   log.Printf -- and a non-nil sampler is Start()ed under a dedicated
@@ -443,7 +443,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   `AddHistory(entry string)` (history.go) wrap the internal/history
   store Startup builds once: <configDir>/history.json, persist =
   !Options.HistoryPersistDisabled (main.go wires config's
-  history.persistDisabled there, like TrayDisabled); an unresolvable
+  the inverse of history.persistEnabled there, like TrayDisabled); an
+  unresolvable
   config dir or a failed Load logs once with a "history: " prefix
   and the app runs on -- nil store = GetHistory returns a non-nil
   empty slice and AddHistory no-ops, so newTestApp needs no extra
@@ -463,7 +464,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   errors logged once (frecErrOnce), never blocking or failing the
   action. Pick-memory priors wiring (priors.go in this package):
   Startup's startPriors (config search.priors, ON by default -- the
-  tray.disabled convention; search.priors.disabled is a debug escape
+  tray.enabled convention; search.priors.enabled=false is a debug escape
   hatch: no store, no file reads, no goroutines) builds the
   internal/priors Store, installs store.PriorFunc as frecBlend.Prior
   (riding the SAME blend the cwd stash re-swaps, so the resolver
@@ -502,7 +503,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   configapply.go).
   Learned-arbitration wiring (arbiter.go in this package): Startup's
   startArbiter (config search.arbiter, ON by default -- the
-  tray.disabled convention; search.arbiter.disabled is the debug
+  tray.enabled convention; search.arbiter.enabled=false is the debug
   escape hatch / kill switch: no store, no file reads, no
   goroutines, emissions untouched) builds the arbiterLayer -- an internal/arbiter Store plus its OWN
   8-slot query->ResultSignals impression ring -- and applies the
@@ -603,7 +604,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   changed row's apply plus each named GROUP once per pass, and
   returns ApplyResult{Applied, Pending, Errors, NextLaunch}. The
   table is TOTAL -- Pending stays empty; every section applies live:
-  maxResults (Manager.SetMaxResults), search.fuzzyDisabled
+  maxResults (Manager.SetMaxResults), search.fuzzyEnabled
   (Manager.SetFuzzyDisabled + registry), theme (existing
   GetTheme/watcher machinery), plugins/bangs/rewrites/firefox (the
   groupRegistry reloadRegistry), roots/excludes/watcher/
@@ -1109,7 +1110,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   naive reference (naiveQueryFuzzy in fuzzy_test.go) reuses the score
   function but keeps matching/ordering independent.
   `QueryWith(q, limit, QueryOptions{FuzzyDisabled, Blend})` is the
-  options path (config search.fuzzyDisabled -> main.go ->
+  options path (the inverse of config search.fuzzyEnabled -> main.go ->
   Manager.SetFuzzyDisabled): disabled dispatches to queryNamesSub,
   the pre-fuzzy scan, behavior-identical to the old engine. blend.go
   is the frecency ranking blend, applied at EXACTLY one stage --
@@ -1283,32 +1284,43 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   file.
 - `internal/config` -- config.json load/save (roots, rootsVersion,
   excludes, hotkey,
-  rescanIntervalMinutes, maxResults, search {fuzzyDisabled -- the
-  fuzzy-tier kill switch, zero value = fuzzy ON per the tray.disabled
-  convention; main.go wires it to Manager.SetFuzzyDisabled -- and
-  frecency {disabled, halfLifeDays 14, weightFrecency/weightRecency/
+  rescanIntervalMinutes, maxResults. BOOLEAN POLARITY (v7, the
+  tray.enabled convention): every enable/disable-style switch is the
+  AFFIRMATIVE `enabled` spelling, and the default-ON ones are *bool
+  fields (`config.Bool` builds pointers, `config.Enabled(p)` is the
+  nil-safe effective read: nil = absent = ON) so an absent key stays
+  distinguishable from an explicit false -- Normalize repairs nil to
+  explicit true for search.fuzzyEnabled, search.frecency/priors/
+  arbiter.enabled, watcher.sweepEnabled, plugins.enabled, per-entry
+  plugins.entries.<id>.enabled, tray.enabled, history.persistEnabled
+  and stats.enabled, while rewrites[].enabled deliberately stays
+  nil-able (omitempty; user rule objects never grow keys) and
+  preview.enabled stays a plain default-OFF bool. search
+  {fuzzyEnabled -- the
+  fuzzy-tier kill switch, absent/true = fuzzy ON; main.go wires its
+  inverse to Manager.SetFuzzyDisabled -- and
+  frecency {enabled, halfLifeDays 14, weightFrecency/weightRecency/
   weightCwd/weightNoise 1.0, tierJumpCount 3.0}, the ranking-blend
   knobs main.go wires to app.Options.Frecency; NUMERIC CONVENTION
   UNIQUE HERE: Normalize repairs only the EXACT zero to the default
   (halfLifeDays repairs <= 0), a NEGATIVE value is the documented
   per-signal off switch and passes through, and the schema rejects
-  the ambiguous literal 0 -- and priors {disabled}, the
-  pick-memory priors knob (ON by default, the tray.disabled
-  convention; disabled is a debug escape hatch, a single bool, so
-  Normalize has nothing to repair) main.go wires to
+  the ambiguous literal 0 -- and priors {enabled}, the
+  pick-memory priors knob (ON by default; enabled=false is a debug
+  escape hatch) main.go wires to
   app.Options.Priors -- and telemetry {maxSizeKB 65536}, the
   ALWAYS-ON local ranking log's one knob (deliberately NO off
-  switch: the log is private by staying on the machine; query text
+  switch of either polarity: the log is private by staying on the
+  machine; query text
   and plugin titles recorded in full) main.go wires to
   app.Options.Telemetry, Normalize repairs maxSizeKB <= 0 while the
-  schema rejects it -- and arbiter {disabled}, the learned
+  schema rejects it -- and arbiter {enabled}, the learned
   composition arbitration knob main.go wires to app.Options.Arbiter
-  (ON by default, the tray.disabled convention; disabled is a debug
-  escape hatch / kill switch, a single bool, so Normalize has
-  nothing to repair)},
+  (ON by default; enabled=false is a debug
+  escape hatch / kill switch)},
   watcher {maxWatches 0 = auto-budget / negative = unlimited,
-  sweepMinutes 0 = the 20m default, sweepDisabled (zero value = sweeps
-  ON, the tray.disabled convention), watchExcludes
+  sweepMinutes 0 = the 20m default, sweepEnabled (absent = sweeps
+  ON), watchExcludes
   (json omitempty; excluder-syntax patterns never LIVE-WATCHED but
   still indexed + swept), backend (json omitempty; the
   WatcherBackend* constants "auto"/"fanotify"/"fsevents"/"inotify" --
@@ -1317,15 +1329,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   label only); Normalize trims+lowercases and repairs
   empty/unknown to "auto", schema enum in lockstep) -- main.go copies
   all five into app.Options
-  {WatchMaxWatches, SweepInterval, SweepDisabled, WatchExcludes,
+  {WatchMaxWatches, SweepInterval, SweepDisabled (inverted),
+  WatchExcludes,
   WatchBackend}},
-  theme, plugins {disabled, entries
-  {<id>: {disabled, settings}}}, bangs {sigils, aliases}, rewrites
-  [{name, pattern, replacement, title?, icon?, disabled?}] (the regex
+  theme, plugins {enabled, entries
+  {<id>: {enabled, settings}}}, bangs {sigils, aliases}, rewrites
+  [{name, pattern, replacement, title?, icon?, enabled?}] (the regex
   rewrite rules; passed to plugin.Options.Rewrites), tray
-  {disabled}, history {persistDisabled}, stats {disabled -- the
-  system-stats sampler kill switch, zero value = on per the
-  tray.disabled convention; internal/app's buildStats reads it, so it
+  {enabled}, history {persistEnabled}, stats {enabled -- the
+  system-stats sampler kill switch, absent = on; internal/app's
+  buildStats reads it, so it
   applies on the next launch}, window {translucent -- the
   per-pixel-alpha window flag main.go reads via
   app.WindowTranslucent(); zero value = opaque = the safe default,
@@ -1390,7 +1403,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   before the config-dir watcher comes up; its file name never
   matches the config.json hot-apply path, so no watcher loop).
   rootsVersion (0 = legacy, current
-  6) drives the one-shot Load migration (migrateRootsFor; goos and
+  7) drives the one-shot Load migration (migrateRootsFor; goos and
   the RAW file bytes are parameters so tests cover the darwin shape
   and the old-key reads headlessly), each missing
   step applied in
@@ -1405,15 +1418,25 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   stamp, nothing added or announced); the v5 step applies it AGAIN to
   darwinNoiseExcludesFor -- a NEW version rather than an extension of
   v4, so configs a v4-era build already stamped still receive it --
-  the v6 step (migrateRankingDefaults, reads the RAW bytes because
-  the old keys left the struct) makes search.telemetry always-on
+  the v6 step (migrateRankingDefaults, reads the RAW bytes) makes
+  search.telemetry always-on
   (every old enabled/retainQueries key dropped outright, an explicit
   enabled:false included -- overruled by design and announced) and
   flips search.priors/arbiter to on-by-default (absent old key = on;
-  enabled:false preserved as disabled:true; enabled:true = on, key
-  dropped) -- and each step is gated on its
+  an explicit pre-v6 enabled value parses straight into the v7-shaped
+  struct, so the step only announces); the v7 step
+  (migrateBoolPolarity, migrate_v7.go, reads the RAW bytes because
+  the old keys left the struct) is the boolean-polarity rename --
+  every negative disabled-style key explicitly present lands as the
+  affirmative enabled key with the VALUE INVERTED (one note per key,
+  "migrated tray.disabled=true -> tray.enabled=false" style), absent
+  old keys migrate nothing (absent still means ON), and a document
+  carrying BOTH spellings keeps the new key and drops the old one,
+  announced (plugins.entries.<id> and rewrites[i] pairs included,
+  entries sorted by id for deterministic notes) -- and each step is
+  gated on its
   own version so already-fired informational notes never repeat.
-  Either way version 6 is
+  Either way version 7 is
   Saved back, and every user-visible change lands in the
   non-serialized MigrationNotes (json:"-") that internal/app logs
   loudly at startup -- the scope never changes silently. `Load` never crashes: missing file -> defaults
@@ -1421,8 +1444,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   logging, failed migration rewrite -> migrated config + error.
   `Normalize` repairs zero values (empty theme -> dark, nil plugin
   entries/bang aliases -> empty maps, empty sigils -> the ! / @
-  defaults; history needs nothing -- its zero value means persistence
-  ON, the tray.disabled convention; non-positive firefox.frequentSites
+  defaults; the affirmative *bool switches' nil pointers -> explicit
+  true, the tray.enabled convention (rewrites[].enabled excepted --
+  it stays nil-able); non-positive firefox.frequentSites
   and firefox.openTabs numbers -> their defaults; negative
   watcher.sweepMinutes -> 0, while watcher.maxWatches keeps its sign
   and watchExcludes stays as written); entry settings are
@@ -1457,7 +1481,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   goroutines); persist=false never touches the disk, not even reads.
   Persist format: a plain JSON array of strings at
   <configDir>/history.json (wired by internal/app history.go;
-  config.json's history.persistDisabled opts out).
+  config.json's history.persistEnabled=false opts out).
 - `internal/frecency` -- the PURE half of result prioritization:
   the signal sources the ranking blend consumes (the blend itself is
   internal/index blend.go, the app wiring internal/app frecency.go,
@@ -1801,7 +1825,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   each source declares ordered match Texts instead (apps [name],
   windows [title, app], sites [host-sans-www, title, url], tabs
   [title, host-sans-www, url]) and the engine's canonical bands
-  apply. Options gains FuzzyDisabled (config search.fuzzyDisabled,
+  apply. Options gains FuzzyDisabled (the inverse of config
+  search.fuzzyEnabled,
   threaded into every Rank) and Rewrites (builtin_rewrites.go:
   "rewrites" preRanked source at the triggered tier -- RE2 rules
   compiled at New via compileRewrites, full-match ^(?:pat)$ unless
@@ -2529,7 +2554,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   watch.Options, builds watcher + rescanner + sweeper (SweepOptions
   .Interval = app.Options.SweepInterval, 0 -> the app-side 20m
   default) -- EXCEPT under Options.SweepDisabled (config
-  watcher.sweepDisabled): the Sweeper is never built and ONE loud
+  watcher.sweepEnabled=false): the Sweeper is never built and ONE loud
   warning says unwatched dirs now converge only at full rescans
   (overflow recovery then falls back to the Rescanner request path)
   -- starts them in that order, waits
@@ -3089,7 +3114,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   --sb-warning chip rule in style.css),
   "stats:update" -> applyStats. STATS ROW wiring (all in main.ts):
   applyStats hides the whole #stats row when snapshot.enabled is
-  false (stats.disabled) and otherwise unhides + delegates to
+  false (stats.enabled=false) and otherwise unhides + delegates to
   stats.ts renderStats; wire() calls refreshStats once at startup
   (same missed-app:shown reasoning as the cheat-sheet prefetch --
   pre-first-summon the enabled snapshot renders all dashes) and
