@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/ffext"
@@ -41,9 +42,8 @@ func runFirefoxHost(t *testing.T, e *env, args []string) chan error {
 		err := root.Execute()
 		// The relay must never write to cobra's out: that stream is
 		// the native-messaging frame channel in production.
-		if out.Len() != 0 {
-			t.Errorf("firefox-host wrote %q to cobra out", out.String())
-		}
+		assert.Equal(t, 0, out.Len())
+
 		done <- err
 	}()
 	return done
