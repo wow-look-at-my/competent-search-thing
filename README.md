@@ -849,7 +849,10 @@ badges:
   win; a GNOME-Settings edit still survives restarts as before. The
   portal backend may show its approval dialog again;
 - `search.frecency`: the ranking blend is rebuilt with the new
-  weights (the learned open counts in `frecency.json` are kept);
+  weights (the learned open counts in `frecency.json` are kept, and
+  an enabled priors layer survives the rebuild);
+- `search.priors`: the pick-memory layer starts or stops on the spot
+  (its tables rebuild from the local files it already reads);
 - `search.telemetry`: the opt-in ranking log starts or stops on the
   spot (the log file itself is kept; delete it to erase);
 - `stats.disabled` / `tray.disabled`: the sampler/icon stops or

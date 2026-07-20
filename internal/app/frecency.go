@@ -57,12 +57,21 @@ func (a *App) startFrecency() {
 // values just rebuilds the same state.
 func (a *App) applyFrecencyConfig(fc config.FrecencyConfig) {
 	if fc.Disabled {
+		// Preserve the pick-memory Prior across frecency rebuilds: the
+		// priors layer (priors.go) installs its resolver on this SAME
+		// blend, and wiping it here would silently kill an enabled
+		// priors feature on any live frecency config change.
 		a.frecMu.Lock()
 		a.frecStore = nil
-		a.frecBlend = index.Blend{}
+		a.frecBlend = index.Blend{Prior: a.frecBlend.Prior}
+		b := a.frecBlend
 		a.frecMu.Unlock()
 		if a.manager != nil {
-			a.manager.SetBlend(nil)
+			if b.Prior != nil {
+				a.manager.SetBlend(&b)
+			} else {
+				a.manager.SetBlend(nil)
+			}
 		}
 		return
 	}
@@ -91,10 +100,11 @@ func (a *App) applyFrecencyConfig(fc config.FrecencyConfig) {
 	}
 	a.frecMu.Lock()
 	a.frecStore = store
+	blend.Prior = a.frecBlend.Prior // survive rebuilds (see the Disabled path)
 	a.frecBlend = blend
+	b := blend
 	a.frecMu.Unlock()
 	if a.manager != nil {
-		b := blend
 		a.manager.SetBlend(&b)
 	}
 	// Async so a slow disk never delays Startup. A recordOpen racing

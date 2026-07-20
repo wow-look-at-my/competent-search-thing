@@ -144,6 +144,11 @@ var sectionAppliers = []sectionApplier{
 		},
 	},
 	{
+		name:    "search.priors",
+		changed: func(o, n *config.Config) bool { return o.Search.Priors != n.Search.Priors },
+		apply:   (*App).applyPriors,
+	},
+	{
 		name:    "search.telemetry",
 		changed: func(o, n *config.Config) bool { return o.Search.Telemetry != n.Search.Telemetry },
 		apply:   (*App).applyTelemetry,

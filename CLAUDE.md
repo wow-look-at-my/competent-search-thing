@@ -431,7 +431,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   gains Rebound/PreviousBinding/RebindSkipped; all-taken keeps the
   working binding with an honest notice, never an error); empty spec
   = release only), search.frecency (applyFrecencyConfig: rebuild
-  store+blend over the SAME frecency.json, disabled = SetBlend(nil)),
+  store+blend over the SAME frecency.json, disabled = SetBlend of a
+  Prior-only blend when priors ride it else nil -- frecBlend.Prior is
+  PRESERVED across both rebuild paths, so a live frecency change can
+  never drop an enabled priors layer), search.priors (applyPriors:
+  the applyTelemetry shape over the priors store + blend resolver;
+  disable detaches Prior and re-installs the blend only if it stays
+  Active, enable rebuilds the layer and kicks a table build, an
+  unresolvable config dir is a reported apply error),
   search.telemetry (applyTelemetry: drop + rebuild the telemetry
   layer -- the impression ring restarts empty, in-flight appends
   drain via telWG, and an unresolvable config dir is a reported

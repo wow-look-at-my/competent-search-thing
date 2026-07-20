@@ -64,6 +64,60 @@ func (a *App) startPriors() {
 	a.kickPriorsRefresh()
 }
 
+// applyPriors is the live-apply engine's search.priors hook (the
+// applyTelemetry shape): disable clears the store and detaches the
+// blend's Prior resolver; enable (re)builds the layer exactly like
+// startPriors and kicks a table build. An in-flight refresh finishes
+// against the detached store harmlessly (the blend no longer holds
+// its resolver), and an unresolvable config dir is a reported apply
+// error, unlike startPriors' quiet degrade -- the user just asked
+// for the feature, so the save/apply report should say why it
+// stayed off.
+func (a *App) applyPriors(next *config.Config) error {
+	if !next.Search.Priors.Enabled {
+		a.priorsMu.Lock()
+		was := a.priorsStore != nil
+		a.priorsStore = nil
+		a.priorsMu.Unlock()
+		if was {
+			a.frecMu.Lock()
+			a.frecBlend.Prior = nil
+			b := a.frecBlend
+			a.frecMu.Unlock()
+			if a.manager != nil {
+				if b.Active() {
+					a.manager.SetBlend(&b)
+				} else {
+					a.manager.SetBlend(nil)
+				}
+			}
+			log.Printf("priors: pick-memory priors disabled")
+		}
+		return nil
+	}
+	dir, err := config.Dir()
+	if err != nil {
+		a.priorsMu.Lock()
+		a.priorsStore = nil
+		a.priorsMu.Unlock()
+		return err
+	}
+	store := priors.New(priors.Options{})
+	a.priorsMu.Lock()
+	a.priorsStore = store
+	a.priorsDir = dir
+	a.priorsMu.Unlock()
+	a.frecMu.Lock()
+	a.frecBlend.Prior = store.PriorFunc
+	b := a.frecBlend
+	a.frecMu.Unlock()
+	if a.manager != nil {
+		a.manager.SetBlend(&b)
+	}
+	a.kickPriorsRefresh()
+	return nil
+}
+
 // kickPriorsRefresh schedules one asynchronous table rebuild:
 // single-flight, with at most one pending re-run remembered while a
 // build is in flight (a burst of activations coalesces). No-op while
