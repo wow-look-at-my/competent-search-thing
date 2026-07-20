@@ -549,7 +549,22 @@ async function scenarioA(): Promise<void> {
 
   await check("a2-show", async () => assertCli(app, "show"));
   await check("a3-window-appears", () => expectWindow(app, true, WINDOW_DEADLINE_MS));
-  await screenshotBestEffort("01-summoned-macos.png");
+
+  // NO screencapture before a4/a5: on the macOS 26 runner image the job's
+  // FIRST screencapture can pop the TCC screen-recording consent dialog
+  // ("bash is requesting to ... directly access your screen"), a system
+  // modal that steals key status from the bar. The webview then fires
+  // blur and the app's (deliberate, Spotlight-style) blur auto-hide hides
+  // the bar -- starving a4's rAF accumulation (a hidden WKWebView services
+  // no frames) and inverting a5's toggle into a re-SHOW. Proven by run
+  // 29728632030 (head 464438e): 02-reshown-macos.png captured the dialog,
+  // a4+a5 failed exactly that way while every focus-independent gate
+  // passed. The race is per-VM, so the ONLY safe ordering is to keep every
+  // capture behind the focus/visibility-sensitive hard gates; scenario A's
+  // one evidence shot now lands after a6 re-shows the bar (same summoned
+  // state), where the remaining gates (a7 hide, a9 hidden-IPC ack) are
+  // dialog-tolerant -- run 29728632030 itself proved a7/a9 and all of
+  // scenario B green with the dialog on screen.
 
   // a4-fps-meter: with COMPETENT_SEARCH_FPS=1 and the bar visible, a
   // parseable fps summary line must land in the app log (the meter's
@@ -583,7 +598,10 @@ async function scenarioA(): Promise<void> {
     const d = assertCli(app, "toggle");
     return `${d}; ${await expectWindow(app, true, WINDOW_DEADLINE_MS)}`;
   });
-  await screenshotBestEffort("02-reshown-macos.png");
+  // Scenario A's one evidence shot: the a6-reshown bar IS the summoned
+  // state (01 keeps its docs-referenced name). Placed here, after the
+  // focus-sensitive gates, per the TCC-dialog note above a4.
+  await screenshotBestEffort("01-summoned-macos.png");
 
   await check("a7-hide", async () => {
     const d = assertCli(app, "hide");

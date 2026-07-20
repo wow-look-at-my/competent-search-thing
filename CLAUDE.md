@@ -3099,7 +3099,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   screenshots are best-effort "evidence:" captures (never a SMOKE
   id), copied to smoke-shots/ and uploaded via actions/
   upload-artifact@v4 as `darwin-smoke-<sha>` (`if-no-files-found:
-  ignore` -- the linux screenshots pattern) -- including the
+  ignore` -- the linux screenshots pattern), and EVERY capture is
+  ordered AFTER the focus/visibility-sensitive hard gates: the job's
+  FIRST screencapture can pop the macOS 26 TCC screen-recording
+  consent dialog, a key-stealing system modal whose focus loss
+  blur-auto-hides the bar (correct product behavior) -- it starved
+  a4's rAF accumulation and inverted a5's toggle into a re-show on
+  run 29728632030, so scenario A's one shot (01-summoned-macos.png,
+  the a6-reshown bar = the summoned state) lands after a6, where the
+  remaining gates (a7, a9, all of B) are proven dialog-tolerant --
+  including the
   translucentEvidence run between scenarios A and B: one extra boot
   with window.translucent=true (startApp's extraCfg param) captured
   as 03-translucent-macos.png, EVERY failure swallowed as an
