@@ -31,8 +31,9 @@ type Impression struct {
 	// TS is the pick's timestamp (zero when the record carried none
 	// or it did not parse).
 	TS time.Time
-	// Query is the query text as logged ("" under retainQueries
-	// false -- the query-shape features then read an empty query).
+	// Query is the query text as logged ("" only in records from
+	// builds predating the always-record flip -- the query-shape
+	// features then read an empty query).
 	Query string
 	// Joined reports whether the record's file features were joined
 	// from the app's impression ring at log time; only joined records

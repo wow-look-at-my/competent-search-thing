@@ -81,7 +81,7 @@ func TestMigrateLegacyDefaultRootsUpgrade(t *testing.T) {
 			".hg", ".svn", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox", ".venv"}),
 		c.Excludes, "missing system excludes, then the v3 noise excludes, are appended after the user's patterns")
 
-	require.Len(t, c.MigrationNotes, plusDarwinNotes(3), "the roots change, the system excludes, and the noise excludes are reported")
+	require.Len(t, c.MigrationNotes, plusDarwinNotes(3)+2, "the roots change, the system excludes, the noise excludes, and the two v6 ranking-defaults notes are reported")
 	require.Contains(t, c.MigrationNotes[0], "whole-filesystem default (/)")
 	require.Contains(t, c.MigrationNotes[0], "edit roots in config.json to revert")
 	require.Contains(t, c.MigrationNotes[1], "/proc")
@@ -111,7 +111,7 @@ func TestMigrateCustomRootsUntouched(t *testing.T) {
 	require.Equal(t, []string{"/data", "/srv/media"}, c.Roots, "customized roots are never touched")
 	require.Equal(t, []string{".git"}, c.Excludes, "customized excludes are never touched")
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
-	require.Len(t, c.MigrationNotes, plusDarwinNotes(1), "a curated exclude list gets the informational note(s) only")
+	require.Len(t, c.MigrationNotes, plusDarwinNotes(1)+2, "a curated exclude list gets the informational note(s) plus the two v6 ranking notes")
 	require.Contains(t, c.MigrationNotes[0], "your customized exclude list was left unchanged")
 
 	// The version stamp alone is still persisted (the check must not
@@ -159,7 +159,11 @@ func TestMigrateEmptyRootsGetNewDefaults(t *testing.T) {
 	// step, which also never forced the base name patterns on it.
 	require.Equal(t, []string{"/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"}, c.Excludes,
 		"only the system excludes are appended; base and noise patterns are not forced on an exclude-less config")
-	require.Contains(t, c.MigrationNotes[len(c.MigrationNotes)-1], "left unchanged")
+	require.Contains(t, c.MigrationNotes[len(c.MigrationNotes)-3], "left unchanged")
+	require.Contains(t, c.MigrationNotes[len(c.MigrationNotes)-2], "ranking telemetry is now always on",
+		"the v6 telemetry note precedes the learned-layers note")
+	require.Contains(t, c.MigrationNotes[len(c.MigrationNotes)-1], "on by default",
+		"the v6 learned-layers note lands last")
 }
 
 func TestMigrateMergePreservesUserExcludes(t *testing.T) {
@@ -176,7 +180,7 @@ func TestMigrateMergePreservesUserExcludes(t *testing.T) {
 	require.Equal(t,
 		[]string{"*.tmp", "/proc", "secrets", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found"},
 		c.Excludes, "user patterns keep their order; only missing system ones are appended")
-	require.Len(t, c.MigrationNotes, plusDarwinNotes(3))
+	require.Len(t, c.MigrationNotes, plusDarwinNotes(3)+2)
 	require.NotContains(t, c.MigrationNotes[1], "/proc", "an exclude already present is not announced as added")
 	require.Contains(t, c.MigrationNotes[2], "left unchanged",
 		"a curated list (no base patterns) never gains the noise patterns")
@@ -200,7 +204,7 @@ func TestMigrateV2DefaultShapedGainsNoiseExcludes(t *testing.T) {
 	want := withDarwinDefaults([]string{".git", "node_modules", ".cache", "/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "lost+found",
 		".hg", ".svn", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox", ".venv"})
 	require.Equal(t, want, c.Excludes, "the noise patterns are appended after everything the config already had")
-	require.Len(t, c.MigrationNotes, plusDarwinNotes(1))
+	require.Len(t, c.MigrationNotes, plusDarwinNotes(1)+2)
 	require.Contains(t, c.MigrationNotes[0], "high-churn exclude patterns added for the watch layer")
 	require.Contains(t, c.MigrationNotes[0], ".hg, .svn, __pycache__")
 	require.Contains(t, c.MigrationNotes[0], "remove any of them in config.json to index those trees")
@@ -233,7 +237,7 @@ func TestMigrateV2PartialNoiseAppendsOnlyMissing(t *testing.T) {
 		withDarwinDefaults([]string{".git", ".hg", "node_modules", ".cache",
 			".svn", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox", ".venv"}),
 		c.Excludes, "the user's .hg keeps its position; only the missing patterns are appended")
-	require.Len(t, c.MigrationNotes, plusDarwinNotes(1))
+	require.Len(t, c.MigrationNotes, plusDarwinNotes(1)+2)
 	require.NotContains(t, c.MigrationNotes[0], ".hg,", "an already-present pattern is not announced as added")
 	require.Contains(t, c.MigrationNotes[0], ".svn")
 }
@@ -254,7 +258,7 @@ func TestMigrateV2CuratedExcludesStampOnly(t *testing.T) {
 	require.Equal(t, []string{"node_modules", ".cache", "/proc"}, c.Excludes,
 		"a curated exclude list is never extended")
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
-	require.Len(t, c.MigrationNotes, plusDarwinNotes(1))
+	require.Len(t, c.MigrationNotes, plusDarwinNotes(1)+2)
 	require.Contains(t, c.MigrationNotes[0], "new default exclude patterns exist")
 	require.Contains(t, c.MigrationNotes[0], "__pycache__")
 	require.Contains(t, c.MigrationNotes[0], "your customized exclude list was left unchanged")
@@ -274,7 +278,7 @@ func TestMigrateV2ExplicitEmptyExcludesStampOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, c.Excludes, "an explicitly empty exclude list is respected")
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
-	require.Len(t, c.MigrationNotes, plusDarwinNotes(1))
+	require.Len(t, c.MigrationNotes, plusDarwinNotes(1)+2)
 	require.Contains(t, c.MigrationNotes[0], "left unchanged")
 
 	doc := readRawConfig(t, p)
@@ -357,19 +361,19 @@ func TestMigrateV4DarwinDefaultShapedGainsFirmlinkExclude(t *testing.T) {
 		RootsVersion: 3,
 		Excludes:     append([]string{}, before...),
 	}
-	require.True(t, c.migrateRootsFor("darwin"), "a v3 config is rewritten")
+	require.True(t, c.migrateRootsFor("darwin", nil), "a v3 config is rewritten")
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t,
 		append(append(before, "/System/Volumes/Data"), darwinNoiseExcludesFor("darwin")...),
 		c.Excludes,
 		"the firmlink exclude, then the v5 noise set, are appended after everything the config already had")
-	require.Len(t, c.MigrationNotes, 2)
+	require.Len(t, c.MigrationNotes, 4)
 	require.Contains(t, c.MigrationNotes[0], "macOS firmlink exclude added: /System/Volumes/Data")
 	require.Contains(t, c.MigrationNotes[0], "remove it in config.json",
 		"the note names the way back for someone who truly wants the Data volume indexed raw")
 	require.Contains(t, c.MigrationNotes[1], "macOS noise exclude patterns added")
 
-	require.False(t, c.migrateRootsFor("darwin"), "the migration is idempotent once stamped")
+	require.False(t, c.migrateRootsFor("darwin", nil), "the migration is idempotent once stamped")
 }
 
 func TestMigrateV4DarwinCuratedStampOnly(t *testing.T) {
@@ -378,11 +382,11 @@ func TestMigrateV4DarwinCuratedStampOnly(t *testing.T) {
 		RootsVersion: 3,
 		Excludes:     []string{"node_modules", "/proc"}, // base patterns curated away
 	}
-	require.True(t, c.migrateRootsFor("darwin"))
+	require.True(t, c.migrateRootsFor("darwin", nil))
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t, []string{"node_modules", "/proc"}, c.Excludes,
 		"a curated exclude list is never extended")
-	require.Len(t, c.MigrationNotes, 2)
+	require.Len(t, c.MigrationNotes, 4)
 	require.Contains(t, c.MigrationNotes[0], "/System/Volumes/Data")
 	require.Contains(t, c.MigrationNotes[0], "your customized exclude list was left unchanged")
 	require.Contains(t, c.MigrationNotes[1], "your customized exclude list was left unchanged")
@@ -395,15 +399,17 @@ func TestMigrateV4NonDarwinStampOnly(t *testing.T) {
 		RootsVersion: 3,
 		Excludes:     append([]string{}, before...),
 	}
-	require.True(t, c.migrateRootsFor("linux"), "the stamp still advances")
+	require.True(t, c.migrateRootsFor("linux", nil), "the stamp still advances")
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t, before, c.Excludes, "no firmlink exclude exists off macOS")
-	require.Empty(t, c.MigrationNotes, "nothing user-visible changed, so nothing is announced")
+	require.Len(t, c.MigrationNotes, 2, "only the two v6 ranking-defaults notes fire")
+	require.Contains(t, c.MigrationNotes[0], "ranking telemetry is now always on")
+	require.Contains(t, c.MigrationNotes[1], "on by default")
 }
 
 func TestMigrateV4AlreadyCurrentIsNoOp(t *testing.T) {
 	c := &Config{Roots: []string{"/"}, RootsVersion: currentRootsVersion, Excludes: []string{".git"}}
-	require.False(t, c.migrateRootsFor("darwin"))
+	require.False(t, c.migrateRootsFor("darwin", nil))
 	require.Empty(t, c.MigrationNotes)
 	require.Equal(t, []string{".git"}, c.Excludes)
 }
@@ -419,14 +425,16 @@ func TestMigrateLegacyDarwinFullChain(t *testing.T) {
 		Roots:    []string{home},
 		Excludes: append([]string{}, baseExcludes()...),
 	}
-	require.True(t, c.migrateRootsFor("darwin"))
+	require.True(t, c.migrateRootsFor("darwin", nil))
 	require.Equal(t, []string{"/"}, c.Roots)
 	want := append(append(append(baseExcludes(), systemExcludesFor("darwin")...), noiseExcludes()...), "/System/Volumes/Data")
 	want = append(want, darwinNoiseExcludesFor("darwin")...)
 	require.Equal(t, want, c.Excludes)
-	require.Len(t, c.MigrationNotes, 5)
+	require.Len(t, c.MigrationNotes, 7)
 	require.Contains(t, c.MigrationNotes[3], "macOS firmlink exclude added")
 	require.Contains(t, c.MigrationNotes[4], "macOS noise exclude patterns added")
+	require.Contains(t, c.MigrationNotes[5], "ranking telemetry is now always on")
+	require.Contains(t, c.MigrationNotes[6], "on by default", "the v6 learned-layers note lands last")
 }
 
 func TestDarwinNoiseExcludesFor(t *testing.T) {
@@ -451,15 +459,15 @@ func TestMigrateV5DarwinDefaultShapedGainsNoiseExcludes(t *testing.T) {
 		RootsVersion: 4,
 		Excludes:     append([]string{}, before...),
 	}
-	require.True(t, c.migrateRootsFor("darwin"), "a v4 config is rewritten")
+	require.True(t, c.migrateRootsFor("darwin", nil), "a v4 config is rewritten")
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t, append(before, darwinNoiseExcludesFor("darwin")...), c.Excludes,
 		"the darwin noise set is appended after everything the config already had")
-	require.Len(t, c.MigrationNotes, 1, "the v4 firmlink note must NOT repeat")
+	require.Len(t, c.MigrationNotes, 3, "the v4 firmlink note must NOT repeat")
 	require.Contains(t, c.MigrationNotes[0], "macOS noise exclude patterns added: Caches, DerivedData, _CodeSignature, CodeResources, /private/var/folders")
 	require.Contains(t, c.MigrationNotes[0], "remove any of them in config.json")
 
-	require.False(t, c.migrateRootsFor("darwin"), "the migration is idempotent once stamped")
+	require.False(t, c.migrateRootsFor("darwin", nil), "the migration is idempotent once stamped")
 }
 
 func TestMigrateV5DarwinPartialAppendsOnlyMissing(t *testing.T) {
@@ -470,12 +478,12 @@ func TestMigrateV5DarwinPartialAppendsOnlyMissing(t *testing.T) {
 		RootsVersion: 4,
 		Excludes:     append(baseExcludes(), "DerivedData"),
 	}
-	require.True(t, c.migrateRootsFor("darwin"))
+	require.True(t, c.migrateRootsFor("darwin", nil))
 	require.Equal(t,
 		append(append(baseExcludes(), "DerivedData"),
 			"Caches", "_CodeSignature", "CodeResources", "/private/var/folders"),
 		c.Excludes, "the user's DerivedData keeps its position; only missing patterns append")
-	require.Len(t, c.MigrationNotes, 1)
+	require.Len(t, c.MigrationNotes, 3)
 	require.NotContains(t, c.MigrationNotes[0], "DerivedData,",
 		"an already-present pattern is not announced as added")
 }
@@ -486,11 +494,11 @@ func TestMigrateV5DarwinCuratedStampOnly(t *testing.T) {
 		RootsVersion: 4,
 		Excludes:     []string{"node_modules"}, // base patterns curated away
 	}
-	require.True(t, c.migrateRootsFor("darwin"))
+	require.True(t, c.migrateRootsFor("darwin", nil))
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t, []string{"node_modules"}, c.Excludes,
 		"a curated exclude list is never extended")
-	require.Len(t, c.MigrationNotes, 1)
+	require.Len(t, c.MigrationNotes, 3)
 	require.Contains(t, c.MigrationNotes[0], "macOS cache/derived/temp noise set")
 	require.Contains(t, c.MigrationNotes[0], "your customized exclude list was left unchanged")
 }
@@ -502,10 +510,10 @@ func TestMigrateV5NonDarwinStampOnly(t *testing.T) {
 		RootsVersion: 4,
 		Excludes:     append([]string{}, before...),
 	}
-	require.True(t, c.migrateRootsFor("linux"), "the stamp still advances")
+	require.True(t, c.migrateRootsFor("linux", nil), "the stamp still advances")
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t, before, c.Excludes, "no darwin noise set exists off macOS")
-	require.Empty(t, c.MigrationNotes, "nothing user-visible changed, so nothing is announced")
+	require.Len(t, c.MigrationNotes, 2, "only the two v6 ranking-defaults notes fire")
 }
 
 // TestMigrateV3StepDoesNotRerunOnV3Configs pins the version gate: a
@@ -513,10 +521,12 @@ func TestMigrateV5NonDarwinStampOnly(t *testing.T) {
 // the v3 informational note again when the v4 bump rewrites it.
 func TestMigrateV3StepDoesNotRerunOnV3Configs(t *testing.T) {
 	c := &Config{Roots: []string{"/"}, RootsVersion: 3, Excludes: []string{"node_modules"}}
-	require.True(t, c.migrateRootsFor("linux"))
+	require.True(t, c.migrateRootsFor("linux", nil))
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
-	require.Empty(t, c.MigrationNotes,
-		"the v3 note fired when the config was stamped 3; the v4 bump must not repeat it")
+	require.Len(t, c.MigrationNotes, 2,
+		"the v3 note fired when the config was stamped 3; only the v6 ranking notes are new")
+	require.Contains(t, c.MigrationNotes[0], "ranking telemetry is now always on")
+	require.Contains(t, c.MigrationNotes[1], "on by default")
 }
 
 func TestLegacyDefaultRootsFallsBackWithoutHome(t *testing.T) {
@@ -524,4 +534,226 @@ func TestLegacyDefaultRootsFallsBackWithoutHome(t *testing.T) {
 	roots := legacyDefaultRoots()
 	require.Len(t, roots, 1)
 	require.True(t, filepath.IsAbs(roots[0]), "fallback root is the absolutized cwd")
+}
+
+// The TestMigrateV6* tests pin the ranking-defaults flip.
+// search.telemetry -- the local ranking log -- is ALWAYS ON now:
+// every old key (enabled, retainQueries) is dropped outright, an
+// explicit enabled:false included (overruled by design; the log is
+// private by staying on the machine). The learned layers
+// (search.priors, search.arbiter) turn on by default: their old
+// opt-in "enabled" keys map onto the new opt-out "disabled" debug
+// escape hatches, and an explicit enabled:false survives as
+// disabled:true. The raw-bytes matrix drives migrateRootsFor
+// directly (the TestMigrateV4* convention); the Load-driven test
+// proves the rewrite drops every old key.
+
+// v6Raw builds a v5-stamped raw config whose search section is
+// exactly section -> body (empty section = search absent entirely).
+func v6Raw(section, body string) []byte {
+	search := "{}"
+	if section != "" {
+		search = `{"` + section + `": ` + body + `}`
+	}
+	return []byte(`{"roots": ["/"], "rootsVersion": 5, "excludes": [".git"], "search": ` + search + `}`)
+}
+
+// telemetryAlwaysOnNote returns the always-on note, or "" when none
+// fired.
+func telemetryAlwaysOnNote(c *Config) string {
+	for _, n := range c.MigrationNotes {
+		if strings.Contains(n, "ranking telemetry is now always on") {
+			return n
+		}
+	}
+	return ""
+}
+
+func TestMigrateV6TelemetryAlwaysOn(t *testing.T) {
+	cases := map[string]struct {
+		body     string
+		wantNote bool
+	}{
+		"absent":              {"", true},
+		"explicit false":      {`{"enabled": false}`, true}, // overruled by design
+		"explicit true":       {`{"enabled": true}`, false}, // was already on
+		"new-shape leftovers": {`{"maxSizeKB": 128}`, true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := v6Raw("telemetry", tc.body)
+			if tc.body == "" {
+				raw = v6Raw("", "")
+			}
+			var c Config
+			require.NoError(t, json.Unmarshal(raw, &c))
+			require.True(t, c.migrateRootsFor("linux", raw))
+			require.Equal(t, currentRootsVersion, c.RootsVersion)
+			note := telemetryAlwaysOnNote(&c)
+			if tc.wantNote {
+				require.Contains(t, note, "local-only and never leaves this machine",
+					"a previously-off log announces the flip in the owner's words")
+			} else {
+				require.Empty(t, note, "an already-on log has nothing to announce")
+			}
+		})
+	}
+}
+
+func TestMigrateV6LearnedLayersMatrix(t *testing.T) {
+	sections := []struct {
+		name     string
+		disabled func(c *Config) *bool
+	}{
+		{"priors", func(c *Config) *bool { return &c.Search.Priors.Disabled }},
+		{"arbiter", func(c *Config) *bool { return &c.Search.Arbiter.Disabled }},
+	}
+	for _, sec := range sections {
+		full := "search." + sec.name
+		t.Run(sec.name+" absent turns on with a note", func(t *testing.T) {
+			raw := v6Raw("", "")
+			var c Config
+			require.NoError(t, json.Unmarshal(raw, &c))
+			require.True(t, c.migrateRootsFor("linux", raw))
+			require.False(t, *sec.disabled(&c), "absent old key = the new default (on)")
+			require.Len(t, c.MigrationNotes, 2, "the telemetry note plus the learned-layers note")
+			require.Contains(t, c.MigrationNotes[1], "on by default")
+			require.Contains(t, c.MigrationNotes[1], full)
+		})
+		t.Run(sec.name+" explicit enabled:false is preserved as disabled:true", func(t *testing.T) {
+			raw := v6Raw(sec.name, `{"enabled": false}`)
+			var c Config
+			require.NoError(t, json.Unmarshal(raw, &c))
+			require.True(t, c.migrateRootsFor("linux", raw))
+			require.True(t, *sec.disabled(&c), "an explicit opt-out is respected")
+			var offNote string
+			for _, n := range c.MigrationNotes {
+				if strings.Contains(n, "opt-outs were preserved") {
+					offNote = n
+				}
+			}
+			require.Contains(t, offNote, full, "the preserved opt-out is announced")
+			for _, n := range c.MigrationNotes {
+				if strings.Contains(n, "on by default") {
+					require.NotContains(t, n, full, "an opted-out section is never announced as turned on")
+				}
+			}
+		})
+		t.Run(sec.name+" explicit enabled:true stays on without a flip note", func(t *testing.T) {
+			raw := v6Raw(sec.name, `{"enabled": true}`)
+			var c Config
+			require.NoError(t, json.Unmarshal(raw, &c))
+			require.True(t, c.migrateRootsFor("linux", raw))
+			require.False(t, *sec.disabled(&c), "already opted in stays on")
+			for _, n := range c.MigrationNotes {
+				if strings.Contains(n, "on by default") {
+					require.NotContains(t, n, full, "no behavior flip = no flip announcement")
+				}
+			}
+		})
+	}
+}
+
+func TestMigrateV6NewShapeDisabledSurvives(t *testing.T) {
+	// A hand-edited pre-v6-stamped file already carrying the NEW
+	// shape's disabled:true keeps its opt-out and earns no flip note.
+	raw := v6Raw("priors", `{"disabled": true}`)
+	var c Config
+	require.NoError(t, json.Unmarshal(raw, &c))
+	require.True(t, c.migrateRootsFor("linux", raw))
+	require.True(t, c.Search.Priors.Disabled)
+	for _, n := range c.MigrationNotes {
+		if strings.Contains(n, "on by default") {
+			require.NotContains(t, n, "search.priors")
+		}
+	}
+}
+
+func TestMigrateV6RetainQueriesDropNotes(t *testing.T) {
+	// Present-and-false: the behavior changes (queries are recorded
+	// now), and the note says so.
+	rawFalse := v6Raw("telemetry", `{"enabled": true, "retainQueries": false}`)
+	var c Config
+	require.NoError(t, json.Unmarshal(rawFalse, &c))
+	require.True(t, c.migrateRootsFor("linux", rawFalse))
+	joined := strings.Join(c.MigrationNotes, "\n")
+	require.Contains(t, joined, "retainQueries was removed: query text is now always recorded")
+
+	// Present-and-true: only the key drop is announced.
+	rawTrue := v6Raw("telemetry", `{"enabled": true, "retainQueries": true}`)
+	var c2 Config
+	require.NoError(t, json.Unmarshal(rawTrue, &c2))
+	require.True(t, c2.migrateRootsFor("linux", rawTrue))
+	joined = strings.Join(c2.MigrationNotes, "\n")
+	require.Contains(t, joined, "retainQueries was removed (query text was already recorded")
+
+	// Absent: no retainQueries note at all.
+	rawAbsent := v6Raw("", "")
+	var c3 Config
+	require.NoError(t, json.Unmarshal(rawAbsent, &c3))
+	require.True(t, c3.migrateRootsFor("linux", rawAbsent))
+	require.NotContains(t, strings.Join(c3.MigrationNotes, "\n"), "retainQueries")
+}
+
+// TestMigrateV6LoadRewritesOldKeys drives the whole path through
+// Load: the old opt-in keys and retainQueries vanish from the
+// rewritten file (UnknownKeys stays clean), the telemetry opt-out is
+// overruled (always on -- only maxSizeKB survives), the priors
+// opt-out lands as disabled:true on disk, and a second load migrates
+// nothing.
+func TestMigrateV6LoadRewritesOldKeys(t *testing.T) {
+	setConfigDir(t)
+	p := writeConfig(t, `{
+		"roots": ["/"],
+		"rootsVersion": 5,
+		"excludes": [".git"],
+		"search": {
+			"telemetry": {"enabled": false, "maxSizeKB": 128, "retainQueries": false},
+			"priors": {"enabled": false},
+			"arbiter": {}
+		}
+	}`)
+
+	c, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, currentRootsVersion, c.RootsVersion)
+	require.Equal(t, 128, c.Search.Telemetry.MaxSizeKB, "the configured size cap survives the flip")
+	require.True(t, c.Search.Priors.Disabled, "the explicit priors opt-out is preserved")
+	require.False(t, c.Search.Arbiter.Disabled, "the absent section gets the new default (on)")
+	require.Equal(t, []string{".git"}, c.Excludes, "the v6 step never touches excludes")
+
+	joined := strings.Join(c.MigrationNotes, "\n")
+	require.Contains(t, joined, "ranking telemetry is now always on")
+	require.Contains(t, joined, "on by default")
+	require.Contains(t, joined, "search.arbiter")
+	require.Contains(t, joined, "opt-outs were preserved")
+	require.Contains(t, joined, "search.priors")
+	require.Contains(t, joined, "retainQueries was removed")
+
+	// The rewrite drops every old key: UnknownKeys sees nothing, and
+	// the new shape is on disk.
+	data, err := os.ReadFile(p)
+	require.NoError(t, err)
+	require.Empty(t, UnknownKeys(data), "no old keys survive the Save-back")
+	require.NotContains(t, string(data), "retainQueries")
+	doc := readRawConfig(t, p)
+	search := doc["search"].(map[string]any)
+	tel := search["telemetry"].(map[string]any)
+	require.Equal(t, map[string]any{"maxSizeKB": float64(128)}, tel,
+		"telemetry keeps ONLY the size bound -- no switch of either polarity exists")
+	require.Equal(t, map[string]any{"disabled": true}, search["priors"].(map[string]any))
+	require.Equal(t, map[string]any{"disabled": false}, search["arbiter"].(map[string]any))
+
+	again, err := Load()
+	require.NoError(t, err)
+	require.Empty(t, again.MigrationNotes, "the second load has nothing left to migrate")
+	require.True(t, again.Search.Priors.Disabled)
+}
+
+func TestMigrateV6Idempotent(t *testing.T) {
+	raw := v6Raw("priors", `{"enabled": false}`)
+	var c Config
+	require.NoError(t, json.Unmarshal(raw, &c))
+	require.True(t, c.migrateRootsFor("linux", raw))
+	require.False(t, c.migrateRootsFor("linux", raw), "stamped 6 = nothing left to do")
 }

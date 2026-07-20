@@ -50,7 +50,14 @@ func TestStartFrecencyWiresBlend(t *testing.T) {
 
 func TestStartFrecencyDisabled(t *testing.T) {
 	m := index.NewManager([]string{t.TempDir()}, nil, 10)
-	a, _ := newTestApp(t, m, Options{Frecency: config.FrecencyConfig{Disabled: true}})
+	// The learned layers are on by default and would install their
+	// own blend resolvers; their escape hatches keep this pin about
+	// the frecency layer alone.
+	a, _ := newTestApp(t, m, Options{
+		Frecency: config.FrecencyConfig{Disabled: true},
+		Priors:   config.PriorsConfig{Disabled: true},
+		Arbiter:  config.ArbiterConfig{Disabled: true},
+	})
 	a.plat.procTree = func() frecency.ProcTree {
 		t.Fatal("the process tree must never be consulted when frecency is disabled")
 		return nil

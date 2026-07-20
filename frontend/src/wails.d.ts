@@ -187,14 +187,16 @@ interface PreviewPayload {
 
 // One delivered row's identity in a RecordPick report (internal/
 // telemetry ShownRef): the slice index is the rank. File rows carry
-// only the path; plugin rows carry the provider id and the engine
-// wire score. Feature values are NEVER sent from the frontend -- the
-// Go side joins them from its own query ring.
+// only the path; plugin rows carry the provider id, the engine wire
+// score, and the rendered title (the one display field only the
+// frontend knows). Ranking FEATURE values are NEVER sent from the
+// frontend -- the Go side joins them from its own query ring.
 interface TelemetryShownRef {
   kind: "file" | "plugin";
   path?: string; // file rows
   plugin?: string; // plugin rows
   score?: number; // plugin rows: the engine wire score
+  title?: string; // plugin rows: the rendered title
 }
 
 // The activated row of a RecordPick report (internal/telemetry
@@ -208,8 +210,8 @@ interface TelemetryPickedRef {
 
 // A RecordPick report (internal/telemetry PickReport): the query, the
 // delivered flat row list, and the pick. Sent fire-and-forget after
-// an activation actually ran; a no-op Go-side unless
-// search.telemetry.enabled opted in.
+// an activation actually ran; a Go-side no-op when the local ranking
+// log is off (search.telemetry.disabled, the debug escape hatch).
 interface TelemetryPickReport {
   query: string;
   shown: TelemetryShownRef[];
