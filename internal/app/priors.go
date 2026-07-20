@@ -12,10 +12,10 @@ import (
 // The pick-memory priors wiring: internal/priors' lookup tables built
 // from the LOCAL data files and injected into the ranking blend as
 // the index.Blend.Prior resolver (the blend itself is internal/index
-// blend.go; the knob config search.priors -- ON by default, zero
-// value = on per the tray.disabled convention; the off switch is a
-// debug escape hatch for a deterministic ranking baseline, not a
-// privacy option).
+// blend.go; the knob config search.priors -- ON by default, absent =
+// on per the tray.enabled convention; enabled = false is a debug
+// escape hatch for a deterministic ranking baseline, not a privacy
+// option).
 //
 //   - Data sources, both read-only: <configDir>/telemetry.jsonl (+
 //     .jsonl.1), the local search.telemetry pick log, and
@@ -34,13 +34,13 @@ import (
 const priorsTelemetryLog = "telemetry.jsonl"
 
 // startPriors builds the priors store once at Startup (unless config
-// search.priors.disabled opted out), installs its resolver on the
+// search.priors.enabled = false opted out), installs its resolver on the
 // blend (piggybacking on the frecency blend when that layer is
 // enabled; a prior-only blend otherwise), and kicks the initial
 // asynchronous table build. Best-effort throughout: an unresolvable
 // config dir logs one line and leaves the feature off.
 func (a *App) startPriors() {
-	if a.opt.Priors.Disabled {
+	if !config.Enabled(a.opt.Priors.Enabled) {
 		log.Printf("priors: pick-memory priors disabled in config (debug escape hatch)")
 		return
 	}
@@ -79,7 +79,7 @@ func (a *App) startPriors() {
 // for the feature, so the save/apply report should say why it
 // stayed off.
 func (a *App) applyPriors(next *config.Config) error {
-	if next.Search.Priors.Disabled {
+	if !config.Enabled(next.Search.Priors.Enabled) {
 		a.priorsMu.Lock()
 		was := a.priorsStore != nil
 		a.priorsStore = nil

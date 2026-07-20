@@ -21,10 +21,11 @@ type Options struct {
 	// watcher.sweepMinutes here, as a Duration); 0 selects the watch
 	// layer's default (20 minutes).
 	SweepInterval time.Duration
-	// SweepDisabled turns the sweep tier off entirely (wire config's
-	// watcher.sweepDisabled here). startWatch then logs a loud
-	// warning: without sweeps, directories without a live watch
-	// converge only at full rescans.
+	// SweepDisabled turns the sweep tier off entirely (wire the
+	// INVERSE of config's watcher.sweepEnabled here, via
+	// !config.Enabled). startWatch then logs a loud warning: without
+	// sweeps, directories without a live watch converge only at full
+	// rescans.
 	SweepDisabled bool
 	// WatchExcludes are exclude patterns applied to live watching
 	// only (wire config's watcher.watchExcludes here): matching
@@ -52,12 +53,14 @@ type Options struct {
 	// config editor once the frontend is ready (set when the CLI
 	// config subcommand started the app); it implies ShowOnStartup.
 	OpenConfigOnStartup bool
-	// TrayDisabled turns the tray icon off (wire config's
-	// tray.disabled here); the default zero value keeps it on.
+	// TrayDisabled turns the tray icon off (wire the INVERSE of
+	// config's tray.enabled here, via !config.Enabled); the default
+	// zero value keeps it on.
 	TrayDisabled bool
 	// HistoryPersistDisabled keeps the query history in memory only
-	// (wire config's history.persistDisabled here); the default zero
-	// value persists it to <configDir>/history.json. See history.go.
+	// (wire the INVERSE of config's history.persistEnabled here, via
+	// !config.Enabled); the default zero value persists it to
+	// <configDir>/history.json. See history.go.
 	HistoryPersistDisabled bool
 	// ConfigNotes are the human-readable migration notes config.Load
 	// produced (wire cfg.MigrationNotes here); Startup logs each one
@@ -65,13 +68,14 @@ type Options struct {
 	ConfigNotes []string
 	// Frecency configures the frecency ranking blend (wire config's
 	// search.frecency here; see frecency.go). Weights arrive
-	// Normalize-repaired; Disabled leaves the whole layer unwired.
+	// Normalize-repaired; Enabled = false leaves the whole layer
+	// unwired (absent means on, the tray.enabled convention).
 	Frecency config.FrecencyConfig
 	// Priors configures the pick-memory ranking priors (wire config's
 	// search.priors here; see priors.go in this package). ON by
-	// default: the zero value wires the layer; Disabled (the debug
-	// escape hatch) keeps it entirely unwired -- no file reads, no
-	// goroutines, no blend term.
+	// default: the zero value (nil Enabled) wires the layer; Enabled
+	// = false (the debug escape hatch) keeps it entirely unwired --
+	// no file reads, no goroutines, no blend term.
 	Priors config.PriorsConfig
 	// Telemetry bounds the always-on local ranking log (wire config's
 	// search.telemetry here; see telemetry.go in this package). There
@@ -80,11 +84,11 @@ type Options struct {
 	Telemetry config.TelemetryConfig
 	// Arbiter configures the learned composition arbitration layer
 	// (wire config's search.arbiter here; see arbiter.go in this
-	// package). ON by default: the zero value wires the layer (inert
-	// until its activation gate passes); Disabled (the debug escape
-	// hatch / kill switch) keeps it entirely unwired -- no file
-	// reads, no goroutines, no model term, and plugin emissions pass
-	// through untouched.
+	// package). ON by default: the zero value (nil Enabled) wires the
+	// layer (inert until its activation gate passes); Enabled = false
+	// (the debug escape hatch / kill switch) keeps it entirely
+	// unwired -- no file reads, no goroutines, no model term, and
+	// plugin emissions pass through untouched.
 	Arbiter config.ArbiterConfig
 	// Preview is the preview pane configuration (wire config's
 	// preview section here); the zero value keeps the pane off and

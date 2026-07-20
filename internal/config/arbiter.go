@@ -5,7 +5,7 @@ package config
 // local model, trained on the local ranking log (search.telemetry),
 // that learns which SOURCE a query means -- file, browser tab, or app
 // -- and re-orders/places only what the deterministic engine already
-// delivered. ON by default (the tray.disabled zero-value-on
+// delivered. ON by default (the tray.enabled absent-means-on
 // convention): everything is local-only, and the switch being on
 // changes nothing user-visible until the model also passes its
 // ACTIVATION GATE -- at least 200 recorded picks in the ranking log
@@ -18,10 +18,10 @@ package config
 // option. Lives in its own file: config.go sits at the repo's hard
 // line cap.
 type ArbiterConfig struct {
-	// Disabled turns the learned arbitration layer off -- a debug
-	// escape hatch for a deterministic ranking baseline, or a kill
-	// switch if the learned layer misbehaves. The zero value -- the
-	// default -- keeps it on (inert until its activation gate
-	// passes).
-	Disabled bool `json:"disabled"`
+	// Enabled false turns the learned arbitration layer off -- a
+	// debug escape hatch for a deterministic ranking baseline, or a
+	// kill switch if the learned layer misbehaves. Absent (nil) means
+	// enabled -- the default (inert until its activation gate
+	// passes); Normalize repairs nil to explicit true.
+	Enabled *bool `json:"enabled"`
 }

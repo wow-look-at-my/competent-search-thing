@@ -116,7 +116,7 @@ func TestStartupHonorsStatsDisabledConfig(t *testing.T) {
 
 	a, _ := newTestApp(t, nil, Options{})
 	dir := os.Getenv(config.EnvConfigDir) // newTestApp pointed this at a temp dir
-	writeConfigJSON(t, dir, `{"stats":{"disabled":true}}`)
+	writeConfigJSON(t, dir, `{"stats":{"enabled":false}}`)
 	a.newStats = a.buildStats // the real builder
 	a.Startup(context.Background())
 

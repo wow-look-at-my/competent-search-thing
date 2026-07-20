@@ -195,8 +195,10 @@ type Config struct {
 // PluginsConfig configures the plugin system. The zero value means
 // "plugins enabled, nothing overridden".
 type PluginsConfig struct {
-	// Disabled turns the whole plugin system off.
-	Disabled bool `json:"disabled"`
+	// Enabled false turns the whole plugin system off. Absent (nil)
+	// means enabled -- the default (the tray.enabled convention);
+	// Normalize repairs nil to explicit true.
+	Enabled *bool `json:"enabled"`
 	// Entries holds per-plugin overrides keyed by plugin id (builtin
 	// provider ids work here too).
 	Entries map[string]PluginEntry `json:"entries"`
@@ -204,8 +206,9 @@ type PluginsConfig struct {
 
 // PluginEntry is one plugin's configuration.
 type PluginEntry struct {
-	// Disabled turns this one plugin off.
-	Disabled bool `json:"disabled"`
+	// Enabled false turns this one plugin off. Absent (nil) means
+	// enabled; Normalize repairs nil to explicit true.
+	Enabled *bool `json:"enabled"`
 	// Settings is an opaque JSON object forwarded verbatim to the
 	// plugin in every request.
 	Settings json.RawMessage `json:"settings,omitempty"`
@@ -229,20 +232,25 @@ type RewriteRule struct {
 	Title string `json:"title,omitempty"`
 	// Icon optionally overrides the "link" icon.
 	Icon string `json:"icon,omitempty"`
-	// Disabled turns the rule off without deleting it.
-	Disabled bool `json:"disabled,omitempty"`
+	// Enabled false turns the rule off without deleting it. Absent
+	// (nil) means enabled -- rules are on unless switched off, and
+	// Normalize deliberately leaves the pointer alone so user-authored
+	// rule objects are never rewritten with an extra key (the field
+	// keeps the old disabled key's omitempty behavior).
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // SearchConfig configures the search engine. The zero value means the
 // default behavior: fuzzy matching on, frecency ranking on, the
 // always-on ranking log at its default bound, both learned layers on.
 type SearchConfig struct {
-	// FuzzyDisabled true turns the fuzzy (subsequence) name-match tier
-	// off, leaving exact/prefix/substring matching only. The zero
-	// value -- the default -- keeps fuzzy matching on (matching the
-	// tray.disabled convention). Exact, prefix, and substring matches
-	// always rank above fuzzy ones either way.
-	FuzzyDisabled bool `json:"fuzzyDisabled"`
+	// FuzzyEnabled false turns the fuzzy (subsequence) name-match
+	// tier off, leaving exact/prefix/substring matching only. Absent
+	// (nil) means enabled -- the default (the tray.enabled
+	// convention); Normalize repairs nil to explicit true. Exact,
+	// prefix, and substring matches always rank above fuzzy ones
+	// either way.
+	FuzzyEnabled *bool `json:"fuzzyEnabled"`
 	// Frecency configures the frecency/recency/noise ranking blend.
 	Frecency FrecencyConfig `json:"frecency"`
 	// Priors configures the pick-memory ranking priors (see
@@ -260,16 +268,17 @@ type SearchConfig struct {
 // ranking log (search.telemetry) and bootstrapped from frecency.json,
 // folded into result ordering as one additive blend term (see
 // internal/priors and the README's "Pick-memory priors"). ON by
-// default (the tray.disabled zero-value-on convention): everything
+// default (the tray.enabled absent-means-on convention): everything
 // is local-only, so there is no default worth losing the learning
 // over. The half-life, smoothing, and table caps are internal
 // defaults; the switch is a debug escape hatch, not a privacy option.
 type PriorsConfig struct {
-	// Disabled turns the priors layer off -- a debug escape hatch for
-	// diagnosing ranking with a deterministic baseline, or a kill
-	// switch if the learned layer misbehaves. The zero value -- the
-	// default -- keeps it on.
-	Disabled bool `json:"disabled"`
+	// Enabled false turns the priors layer off -- a debug escape
+	// hatch for diagnosing ranking with a deterministic baseline, or
+	// a kill switch if the learned layer misbehaves. Absent (nil)
+	// means enabled -- the default; Normalize repairs nil to explicit
+	// true.
+	Enabled *bool `json:"enabled"`
 }
 
 // TelemetryConfig configures the local ranking log (see
@@ -301,10 +310,11 @@ type TelemetryConfig struct {
 // jumping off. HalfLifeDays has no disable meaning, so any
 // non-positive value is repaired to the default.
 type FrecencyConfig struct {
-	// Disabled true turns the whole blend off: no open counts are
+	// Enabled false turns the whole blend off: no open counts are
 	// recorded or loaded, no recency stats run, and result ordering
-	// is exactly the pre-blend engine's.
-	Disabled bool `json:"disabled"`
+	// is exactly the pre-blend engine's. Absent (nil) means enabled
+	// -- the default; Normalize repairs nil to explicit true.
+	Enabled *bool `json:"enabled"`
 	// HalfLifeDays is how long a recorded open takes to count half as
 	// much (default 14).
 	HalfLifeDays float64 `json:"halfLifeDays"`
@@ -345,12 +355,13 @@ type WatcherConfig struct {
 	// 0 (the default) selects the built-in 20-minute cadence;
 	// negative values are repaired to 0 by Normalize.
 	SweepMinutes int `json:"sweepMinutes"`
-	// SweepDisabled true turns the sweep tier off entirely. The zero
-	// value -- the default -- keeps sweeps on (the tray.disabled
-	// convention). With sweeps off, directories without a live watch
-	// converge only at full rescans (!rescan or
-	// rescanIntervalMinutes); the app logs a loud warning saying so.
-	SweepDisabled bool `json:"sweepDisabled"`
+	// SweepEnabled false turns the sweep tier off entirely. Absent
+	// (nil) means enabled -- the default (the tray.enabled
+	// convention); Normalize repairs nil to explicit true. With
+	// sweeps off, directories without a live watch converge only at
+	// full rescans (!rescan or rescanIntervalMinutes); the app logs a
+	// loud warning saying so.
+	SweepEnabled *bool `json:"sweepEnabled"`
 	// WatchExcludes are exclude patterns (the excludes syntax, see
 	// internal/index.Excluder) applied ONLY to live watching: matching
 	// directories never get a per-directory watch, but they are still
@@ -384,13 +395,16 @@ type BangsConfig struct {
 	Aliases map[string]string `json:"aliases"`
 }
 
-// TrayConfig configures the tray icon (StatusNotifierItem). The zero
-// value -- the default -- means enabled: the icon degrades away by
+// TrayConfig configures the tray icon (StatusNotifierItem). An absent
+// switch means enabled -- the default: the icon degrades away by
 // itself on sessions without a StatusNotifierItem host, so only users
-// who actively dislike it need the switch.
+// who actively dislike it need the switch. (This absent-means-on rule
+// is "the tray.enabled convention" the other default-on switches
+// reference.)
 type TrayConfig struct {
-	// Disabled turns the tray icon off.
-	Disabled bool `json:"disabled"`
+	// Enabled false turns the tray icon off. Absent (nil) means
+	// enabled; Normalize repairs nil to explicit true.
+	Enabled *bool `json:"enabled"`
 }
 
 // WindowConfig configures the native window layer.
@@ -413,35 +427,37 @@ type WindowConfig struct {
 }
 
 // StatsConfig configures the system-stats row (see internal/sysstats
-// and internal/app's stats wiring). The zero value -- the default --
-// means enabled, matching the tray.disabled convention: the sampler
+// and internal/app's stats wiring). An absent switch means enabled --
+// the default, matching the tray.enabled convention: the sampler
 // only ever runs while the bar is visible and degrades missing
 // sources to placeholders by itself, so only users who actively
 // dislike the row need the switch.
 type StatsConfig struct {
-	// Disabled turns the system-stats sampler (and with it the
-	// frontend's stats row data) off.
-	Disabled bool `json:"disabled"`
+	// Enabled false turns the system-stats sampler (and with it the
+	// frontend's stats row data) off. Absent (nil) means enabled;
+	// Normalize repairs nil to explicit true.
+	Enabled *bool `json:"enabled"`
 }
 
 // HistoryConfig configures the query history (see internal/history).
 type HistoryConfig struct {
-	// PersistDisabled true keeps the history in memory only: nothing
+	// PersistEnabled false keeps the history in memory only: nothing
 	// is read from or written to <configDir>/history.json, while
-	// in-session Up/Down recall keeps working. The zero value keeps
-	// persistence on (matching the tray.disabled convention).
-	PersistDisabled bool `json:"persistDisabled"`
+	// in-session Up/Down recall keeps working. Absent (nil) means
+	// enabled -- persistence on, the default (the tray.enabled
+	// convention); Normalize repairs nil to explicit true.
+	PersistEnabled *bool `json:"persistEnabled"`
 }
 
 // FirefoxConfig configures the Firefox integrations.
 type FirefoxConfig struct {
 	// FrequentSites configures the frequently-visited-sites result
-	// section (the builtin firefox-frequent provider; disable it via
-	// plugins.entries["firefox-frequent"].disabled).
+	// section (the builtin firefox-frequent provider; turn it off via
+	// plugins.entries["firefox-frequent"].enabled = false).
 	FrequentSites FrequentSitesConfig `json:"frequentSites"`
 	// OpenTabs configures the open-tabs result section (the builtin
-	// firefox-tabs provider; disable it via
-	// plugins.entries["firefox-tabs"].disabled).
+	// firefox-tabs provider; turn it off via
+	// plugins.entries["firefox-tabs"].enabled = false).
 	OpenTabs OpenTabsConfig `json:"openTabs"`
 }
 
@@ -588,6 +604,24 @@ func DefaultTelemetry() TelemetryConfig {
 // fresh slice on every call so callers may modify it safely.
 func DefaultBangSigils() []string { return []string{"!", "/", "@"} }
 
+// Bool returns a pointer to v -- the constructor for the affirmative
+// *bool switches (tray.enabled and friends), whose pointer shape
+// exists so an absent key stays distinguishable from an explicit
+// false. A fresh pointer per call; callers may write through it.
+func Bool(v bool) *bool { return &v }
+
+// Enabled reports the effective value of an affirmative *bool config
+// switch: nil -- the key absent from config.json -- means the
+// default, which is ON for every pointer-shaped switch in this
+// package (the tray.enabled convention; preview.enabled, the one
+// default-OFF switch, stays a plain bool where absent = false = the
+// default already). Normalize repairs the always-written switches'
+// nil pointers to explicit true, so loaded configs carry explicit
+// values; this helper keeps directly built configs (tests, zero
+// values) and the never-repaired rewrites[].enabled on the same
+// absent-means-on semantics.
+func Enabled(p *bool) bool { return p == nil || *p }
+
 // Default returns the default configuration: index the whole
 // filesystem, Everything-style ("/" on Linux/macOS, the system drive
 // on Windows), skip the virtual/volatile system trees plus the usual
@@ -595,6 +629,7 @@ func DefaultBangSigils() []string { return []string{"!", "/", "@"} }
 // DefaultFrecency returns the default frecency ranking config.
 func DefaultFrecency() FrecencyConfig {
 	return FrecencyConfig{
+		Enabled:        Bool(true),
 		HalfLifeDays:   DefaultFrecencyHalfLifeDays,
 		WeightFrecency: DefaultFrecencyWeight,
 		WeightRecency:  DefaultFrecencyWeight,
@@ -613,13 +648,23 @@ func Default() Config {
 		Hotkey:                DefaultHotkey,
 		RescanIntervalMinutes: 0,
 		MaxResults:            DefaultMaxResults,
-		Search:                SearchConfig{Frecency: DefaultFrecency(), Telemetry: DefaultTelemetry()},
-		Theme:                 DefaultTheme,
-		Plugins:               PluginsConfig{Entries: map[string]PluginEntry{}},
-		Bangs:                 BangsConfig{Sigils: DefaultBangSigils(), Aliases: map[string]string{}},
-		Window:                WindowConfig{Width: DefaultWindowWidth, Height: DefaultWindowHeight},
-		Firefox:               DefaultFirefox(),
-		Preview:               DefaultPreview(),
+		Search: SearchConfig{
+			FuzzyEnabled: Bool(true),
+			Frecency:     DefaultFrecency(),
+			Priors:       PriorsConfig{Enabled: Bool(true)},
+			Telemetry:    DefaultTelemetry(),
+			Arbiter:      ArbiterConfig{Enabled: Bool(true)},
+		},
+		Watcher: WatcherConfig{SweepEnabled: Bool(true)},
+		Theme:   DefaultTheme,
+		Plugins: PluginsConfig{Enabled: Bool(true), Entries: map[string]PluginEntry{}},
+		Bangs:   BangsConfig{Sigils: DefaultBangSigils(), Aliases: map[string]string{}},
+		Tray:    TrayConfig{Enabled: Bool(true)},
+		History: HistoryConfig{PersistEnabled: Bool(true)},
+		Stats:   StatsConfig{Enabled: Bool(true)},
+		Window:  WindowConfig{Width: DefaultWindowWidth, Height: DefaultWindowHeight},
+		Firefox: DefaultFirefox(),
+		Preview: DefaultPreview(),
 	}
 }
 

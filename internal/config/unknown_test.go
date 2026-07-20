@@ -23,7 +23,7 @@ func TestUnknownKeysReportsDottedPaths(t *testing.T) {
 		"frobnicate": true,
 		"watcher": {"maxWatches": 5, "frobnicate": 1},
 		"search": {"frecency": {"halfLifeDays": 7, "bogus": 2}},
-		"plugins": {"entries": {"calc": {"disabled": true, "extra": 1}}},
+		"plugins": {"entries": {"calc": {"enabled": false, "extra": 1}}},
 		"rewrites": [{"name": "n", "pattern": "p", "replacement": "r", "wat": 1}]
 	}`)
 	got := UnknownKeys(raw)

@@ -54,7 +54,7 @@ func runGUI(opts cli.RunOptions) error {
 		log.Printf("config: %v (continuing with the returned config)", err)
 	}
 	mgr := index.NewManager(cfg.Roots, cfg.Excludes, cfg.MaxResults)
-	mgr.SetFuzzyDisabled(cfg.Search.FuzzyDisabled)
+	mgr.SetFuzzyDisabled(!config.Enabled(cfg.Search.FuzzyEnabled))
 	// The window size is fixed at construction (DisableResize), so it
 	// is read up front and the SAME two values feed Wails and the
 	// App's positioning math. The base size is config window.width/
@@ -67,15 +67,15 @@ func runGUI(opts cli.RunOptions) error {
 		RescanEvery:            time.Duration(cfg.RescanIntervalMinutes) * time.Minute,
 		WatchMaxWatches:        cfg.Watcher.MaxWatches,
 		SweepInterval:          time.Duration(cfg.Watcher.SweepMinutes) * time.Minute,
-		SweepDisabled:          cfg.Watcher.SweepDisabled,
+		SweepDisabled:          !config.Enabled(cfg.Watcher.SweepEnabled),
 		WatchExcludes:          cfg.Watcher.WatchExcludes,
 		WatchBackend:           cfg.Watcher.Backend,
 		Hotkey:                 cfg.Hotkey,
 		IPC:                    opts.Server,
 		ShowOnStartup:          opts.ShowOnStartup,
 		OpenConfigOnStartup:    opts.OpenConfig,
-		TrayDisabled:           cfg.Tray.Disabled,
-		HistoryPersistDisabled: cfg.History.PersistDisabled,
+		TrayDisabled:           !config.Enabled(cfg.Tray.Enabled),
+		HistoryPersistDisabled: !config.Enabled(cfg.History.PersistEnabled),
 		ConfigNotes:            cfg.MigrationNotes,
 		Frecency:               cfg.Search.Frecency,
 		Priors:                 cfg.Search.Priors,

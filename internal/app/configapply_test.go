@@ -51,7 +51,7 @@ func TestApplyConfigRegistryGroupRunsOnce(t *testing.T) {
 	seedBaseline(a, config.Default())
 
 	next := config.Default()
-	next.Plugins.Disabled = true
+	next.Plugins.Enabled = config.Bool(false)
 	next.Bangs.Aliases = map[string]string{"cfg": "config"}
 	next.Firefox.OpenTabs.MaxResults = 9
 	next.Rewrites = []config.RewriteRule{{Name: "n", Pattern: "p", Replacement: "https://x.test"}}
@@ -70,11 +70,11 @@ func TestApplyConfigFuzzyTouchesManagerAndRegistry(t *testing.T) {
 	seedBaseline(a, config.Default())
 
 	next := config.Default()
-	next.Search.FuzzyDisabled = true
+	next.Search.FuzzyEnabled = config.Bool(false)
 	res := a.applyConfig(&next, "test")
 	require.True(t, mgr.FuzzyDisabled(), "the index engine switch flips")
 	require.Equal(t, 1, reloads, "the plugin engine re-reads the switch via the registry reload")
-	require.Equal(t, []string{"search.fuzzyDisabled"}, res.Applied)
+	require.Equal(t, []string{"search.fuzzyEnabled"}, res.Applied)
 }
 
 func TestApplyConfigTableIsTotal(t *testing.T) {
@@ -88,7 +88,7 @@ func TestApplyConfigTableIsTotal(t *testing.T) {
 	next.Roots = []string{"/data"}
 	next.Hotkey = "ctrl+space"
 	next.Watcher.MaxWatches = 5
-	next.Stats.Disabled = true
+	next.Stats.Enabled = config.Bool(false)
 	res := a.applyConfig(&next, "test")
 	require.Empty(t, res.Pending, "the applier table is total; nothing awaits a restart")
 	require.Empty(t, res.Errors)

@@ -22,7 +22,17 @@ import (
 // gets the default theme, watcher.backend is lowercased and repaired
 // to "auto" when empty or unknown, nil plugin entries and bang
 // aliases become empty maps, and an empty sigil list gets the default
-// sigils. The preview API keys are passed through verbatim, untouched.
+// sigils. The affirmative *bool switches (search.fuzzyEnabled,
+// search.frecency/priors/arbiter.enabled, watcher.sweepEnabled,
+// plugins.enabled, plugins.entries.<id>.enabled, tray.enabled,
+// history.persistEnabled, stats.enabled) repair a nil pointer -- the
+// key absent from config.json -- to explicit true, their default, so
+// saved configs always carry the value the app runs with; an
+// explicit false always passes through. rewrites[].enabled is the
+// deliberate exception (nil = enabled, left as written -- user rule
+// objects are never grown), and preview.enabled is a plain bool
+// whose absent-means-off zero value already IS its default. The
+// preview API keys are passed through verbatim, untouched.
 // Excludes are left as the user wrote them (an explicitly empty list
 // means "exclude nothing"), and so are watcher.watchExcludes and
 // watcher.maxWatches (negative = explicitly unlimited).
@@ -76,8 +86,33 @@ func (c *Config) Normalize() {
 	if c.Theme == "" {
 		c.Theme = DefaultTheme
 	}
+	// The affirmative switches: absent (nil) = the default, ON.
+	// Repaired to explicit true so the on-disk file always states the
+	// effective value; rewrites[].enabled deliberately stays nil-able
+	// (see the method comment).
+	for _, p := range []**bool{
+		&c.Search.FuzzyEnabled,
+		&c.Search.Frecency.Enabled,
+		&c.Search.Priors.Enabled,
+		&c.Search.Arbiter.Enabled,
+		&c.Watcher.SweepEnabled,
+		&c.Plugins.Enabled,
+		&c.Tray.Enabled,
+		&c.History.PersistEnabled,
+		&c.Stats.Enabled,
+	} {
+		if *p == nil {
+			*p = Bool(true)
+		}
+	}
 	if c.Plugins.Entries == nil {
 		c.Plugins.Entries = map[string]PluginEntry{}
+	}
+	for id, e := range c.Plugins.Entries {
+		if e.Enabled == nil {
+			e.Enabled = Bool(true)
+			c.Plugins.Entries[id] = e
+		}
 	}
 	if len(c.Bangs.Sigils) == 0 {
 		c.Bangs.Sigils = DefaultBangSigils()

@@ -116,7 +116,7 @@ func watchConfigFrom(cfg *config.Config) watchConfig {
 		rescanEvery:   time.Duration(cfg.RescanIntervalMinutes) * time.Minute,
 		maxWatches:    cfg.Watcher.MaxWatches,
 		sweepInterval: time.Duration(cfg.Watcher.SweepMinutes) * time.Minute,
-		sweepDisabled: cfg.Watcher.SweepDisabled,
+		sweepDisabled: !config.Enabled(cfg.Watcher.SweepEnabled),
 		watchExcludes: cfg.Watcher.WatchExcludes,
 		backend:       cfg.Watcher.Backend,
 	}
@@ -131,7 +131,7 @@ func watchConfigFrom(cfg *config.Config) watchConfig {
 // rebuilds, and the Sweeper whose passes converge everything the hot
 // set does not cover (its watermark starts at this call's entry time
 // -- the just-finished initial build vouches for everything older).
-// watcher.sweepDisabled skips the Sweeper and logs a LOUD warning
+// watcher.sweepEnabled = false skips the Sweeper and logs a LOUD warning
 // instead: the coverage invariant (tiers differ only in latency) then
 // holds only through full rescans. After everything is up it waits
 // for the watcher's initial registration (ctx-abortable, so Shutdown

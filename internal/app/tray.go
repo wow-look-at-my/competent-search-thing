@@ -61,7 +61,7 @@ func (a *App) startTrayIcon() {
 	}()
 }
 
-// applyTray is the config live-apply path for tray.disabled: close the
+// applyTray is the config live-apply path for tray.enabled: close the
 // running icon either way (Shutdown's teardown pair: cancel a Start
 // still waiting on the bus, then the nil-safe idempotent Close), then
 // rebuild it when the section is enabled. The tooltip getter reads
@@ -82,7 +82,7 @@ func (a *App) applyTray(next *config.Config) error {
 			log.Printf("tray: close: %v", err)
 		}
 	}
-	if next.Tray.Disabled {
+	if !config.Enabled(next.Tray.Enabled) {
 		log.Printf("tray: disabled in config")
 		return nil
 	}

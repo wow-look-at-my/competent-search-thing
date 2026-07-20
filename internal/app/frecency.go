@@ -34,9 +34,9 @@ import (
 //     where no PID or no meaningful cwd surfaces, the boost is
 //     cleared rather than left stale.
 //
-// config search.frecency.disabled leaves everything here nil: no
-// store, no recording, no stats, and the Manager never gets a blend
-// (the pre-blend ranking, byte-identical).
+// config search.frecency.enabled = false leaves everything here nil:
+// no store, no recording, no stats, and the Manager never gets a
+// blend (the pre-blend ranking, byte-identical).
 const frecencyFileName = "frecency.json"
 
 // startFrecency builds the store, probe, and initial blend once at
@@ -57,7 +57,7 @@ func (a *App) startFrecency() {
 // logs ONE line and starts empty. Idempotent; a re-apply of the same
 // values just rebuilds the same state.
 func (a *App) applyFrecencyConfig(fc config.FrecencyConfig) {
-	if fc.Disabled {
+	if !config.Enabled(fc.Enabled) {
 		// Preserve the pick-memory Prior across frecency rebuilds: the
 		// priors layer (priors.go) installs its resolver on this SAME
 		// blend, and wiping it here would silently kill an enabled

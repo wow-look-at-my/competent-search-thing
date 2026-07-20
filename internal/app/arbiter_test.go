@@ -90,7 +90,7 @@ func TestStartArbiterDisabledIsInert(t *testing.T) {
 	m, _, _ := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{
 		Frecency: config.DefaultFrecency(),
-		Arbiter:  config.ArbiterConfig{Disabled: true},
+		Arbiter:  config.ArbiterConfig{Enabled: config.Bool(false)},
 	})
 	a.Startup(context.Background())
 	require.False(t, a.arbiterConfigured())
@@ -200,13 +200,13 @@ func TestApplyArbiterLiveToggle(t *testing.T) {
 	m, one, _ := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{
 		Frecency: config.DefaultFrecency(),
-		Arbiter:  config.ArbiterConfig{Disabled: true},
+		Arbiter:  config.ArbiterConfig{Enabled: config.Bool(false)},
 	})
 	seedArbLog(t, repeatLines(10, func() string { return arbTabPickLine(nowTS(), one) }), false)
 	a.Startup(context.Background())
 	require.False(t, a.arbiterConfigured())
 	off := config.Default()
-	off.Search.Arbiter.Disabled = true
+	off.Search.Arbiter.Enabled = config.Bool(false)
 	seedBaseline(a, off)
 
 	next := config.Default()

@@ -16,9 +16,9 @@ import (
 
 // The learned-arbitration wiring: internal/arbiter's pairwise pick
 // model, trained from the LOCAL ranking log and applied at the two
-// composition seams (config search.arbiter -- ON by default, zero
-// value = on per the tray.disabled convention; the off switch is a
-// debug escape hatch / kill switch, not a privacy option):
+// composition seams (config search.arbiter -- ON by default, absent
+// = on per the tray.enabled convention; enabled = false is a debug
+// escape hatch / kill switch, not a privacy option):
 //
 //   - Within the file list: the blend's Model resolver
 //     (index.Blend.Model, riding the SAME frecBlend the priors and
@@ -100,7 +100,7 @@ func (l *arbiterLayer) lookup(query string) *arbImpression {
 // an unresolvable config dir logs one line and leaves the feature
 // off.
 func (a *App) startArbiter() {
-	if a.opt.Arbiter.Disabled {
+	if !config.Enabled(a.opt.Arbiter.Enabled) {
 		log.Printf("arbiter: learned arbitration disabled in config (debug escape hatch)")
 		return
 	}
@@ -122,7 +122,7 @@ func (a *App) startArbiter() {
 // startArbiter's quiet degrade -- the user just asked for the
 // feature, so the save/apply report should say why it stayed off.
 func (a *App) applyArbiter(next *config.Config) error {
-	if next.Search.Arbiter.Disabled {
+	if !config.Enabled(next.Search.Arbiter.Enabled) {
 		a.arbMu.Lock()
 		was := a.arb != nil
 		a.arb = nil
