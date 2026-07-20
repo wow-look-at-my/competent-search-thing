@@ -266,7 +266,8 @@ func TestPriorsBootstrapIgnoresAppKeys(t *testing.T) {
 	m, _, _ := priorsFixture(t)
 	a, _ := newTestApp(t, m, Options{
 		Frecency: config.DefaultFrecency(),
-		Priors:   config.PriorsConfig{Enabled: true},
+		// Priors ride the zero value: ON by default since the ranking
+		// learning defaults flip (search.priors.disabled opts out).
 	})
 	dir, err := config.Dir()
 	require.NoError(t, err)
