@@ -7,7 +7,9 @@ permissions:
   # id-token lets the buildhost actions (the deb steps and the publish job)
   # mint the OIDC token they authenticate to pazer.build with.
   id-token: write
-  contents: read
+  # contents: write is required by go-toolchain's dependency-graph
+  # submission (a 403 from the Dependency Submission API fails the build).
+  contents: write
   actions: read
 
 jobs:
