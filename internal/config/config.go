@@ -85,11 +85,13 @@ const (
 	DefaultFrecencyTierJump     = 3.0
 )
 
-// DefaultTelemetryMaxSizeKB is the ranking telemetry log's rotation
-// threshold (see TelemetryConfig.MaxSizeKB): an append crossing it
-// rotates telemetry.jsonl to telemetry.jsonl.1, so the disk cap is two
-// generations of this size.
-const DefaultTelemetryMaxSizeKB = 4096
+// DefaultTelemetryMaxSizeKB is the ranking log's rotation threshold
+// (see TelemetryConfig.MaxSizeKB): an append crossing it rotates
+// telemetry.jsonl to telemetry.jsonl.1, so the disk cap is two
+// generations of this size. Deliberately generous (64 MiB live + one
+// rotated generation): "reasonable levels" means don't fill the disk,
+// not don't record.
+const DefaultTelemetryMaxSizeKB = 65536
 
 // Window size defaults and floors (see WindowConfig). The defaults are
 // ~15% larger than the original fixed 680x460 bar; the floors keep a
@@ -217,8 +219,8 @@ type RewriteRule struct {
 }
 
 // SearchConfig configures the search engine. The zero value means the
-// default behavior: fuzzy matching on, frecency ranking on, priors
-// off.
+// default behavior: fuzzy matching on, frecency ranking on, the
+// always-on ranking log at its default bound, both learned layers on.
 type SearchConfig struct {
 	// FuzzyDisabled true turns the fuzzy (subsequence) name-match tier
 	// off, leaving exact/prefix/substring matching only. The zero
@@ -231,7 +233,7 @@ type SearchConfig struct {
 	// Priors configures the pick-memory ranking priors (see
 	// internal/priors).
 	Priors PriorsConfig `json:"priors"`
-	// Telemetry configures the opt-in local ranking telemetry log.
+	// Telemetry bounds the always-on local ranking log.
 	Telemetry TelemetryConfig `json:"telemetry"`
 	// Arbiter configures the learned composition arbitration layer.
 	Arbiter ArbiterConfig `json:"arbiter"`
@@ -239,46 +241,40 @@ type SearchConfig struct {
 
 // PriorsConfig configures the pick-memory ranking priors: small
 // local lookup tables -- exact-query pick memory plus per-extension
-// and per-directory-prefix pick rates -- learned from the opt-in
-// ranking telemetry log (search.telemetry) and bootstrapped from
-// frecency.json, folded into result ordering as one additive blend
-// term (see internal/priors and the README's "Pick-memory priors").
-// OPT-IN: the zero value keeps the feature entirely off (no file
-// reads, no goroutines) -- the preview.enabled privacy precedent,
-// deliberately NOT the tray.disabled convention, because the feature
-// consumes behavioral data. The half-life, smoothing, and table caps
-// are internal defaults; the switch is the whole knob.
+// and per-directory-prefix pick rates -- learned from the local
+// ranking log (search.telemetry) and bootstrapped from frecency.json,
+// folded into result ordering as one additive blend term (see
+// internal/priors and the README's "Pick-memory priors"). ON by
+// default (the tray.disabled zero-value-on convention): everything
+// is local-only, so there is no default worth losing the learning
+// over. The half-life, smoothing, and table caps are internal
+// defaults; the switch is a debug escape hatch, not a privacy option.
 type PriorsConfig struct {
-	// Enabled turns the priors layer on.
-	Enabled bool `json:"enabled"`
+	// Disabled turns the priors layer off -- a debug escape hatch for
+	// diagnosing ranking with a deterministic baseline, or a kill
+	// switch if the learned layer misbehaves. The zero value -- the
+	// default -- keeps it on.
+	Disabled bool `json:"disabled"`
 }
 
-// TelemetryConfig configures the opt-in ranking telemetry log (see
-// internal/telemetry and the README's "Ranking telemetry"): one local,
-// size-capped JSONL record per activated result, carrying the query,
-// the delivered result list with its ranking signals, and which row
-// was picked. Behavioral data is privacy-sensitive, so the zero value
-// keeps the WHOLE feature off -- the preview.enabled opt-IN precedent,
-// deliberately NOT the tray.disabled zero-value-on convention. Nothing
-// is ever uploaded; the log exists so future ranking work can learn
-// from the user's own picks, offline.
+// TelemetryConfig configures the local ranking log (see
+// internal/telemetry and the README's "Ranking log"): one size-capped
+// JSONL record per activated result, carrying the query, the
+// delivered result list with its ranking signals, and which row was
+// picked. It is a LOG, not telemetry in the phone-home sense: it
+// never leaves this machine -- the only place it goes is a debugging
+// chat if the user pastes it. ALWAYS ON, by design: there is
+// deliberately no off switch -- the log is private by staying on the
+// machine, and deleting the file is always safe (recording just
+// starts fresh). The only knob is the disk bound.
 type TelemetryConfig struct {
-	// Enabled turns the telemetry log on. The zero value -- the
-	// default -- records nothing at all.
-	Enabled bool `json:"enabled"`
-	// MaxSizeKB is the log rotation threshold in KiB (default 4096):
-	// an append that would cross it first rotates telemetry.jsonl to
-	// telemetry.jsonl.1 (replacing the previous .1), so at most two
-	// generations exist. Zero or negative values are repaired to the
-	// default by Normalize.
+	// MaxSizeKB is the log rotation threshold in KiB (default 65536 =
+	// 64 MiB): an append that would cross it first rotates
+	// telemetry.jsonl to telemetry.jsonl.1 (replacing the previous
+	// .1), so at most two generations exist. Bounded disk is
+	// engineering, not redaction. Zero or negative values are
+	// repaired to the default by Normalize.
 	MaxSizeKB int `json:"maxSizeKB"`
-	// RetainQueries false logs every record's query text as "" while
-	// keeping result paths and ranking signals -- for users who want
-	// ranking to learn without their query strings on disk. The
-	// default config writes true; note the bare zero value (a
-	// hand-added telemetry section omitting the key) is false, i.e.
-	// the privacy-conservative direction.
-	RetainQueries bool `json:"retainQueries"`
 }
 
 // FrecencyConfig tunes the frecency ranking blend (see the README's
@@ -565,13 +561,11 @@ func DefaultFirefox() FirefoxConfig {
 	}
 }
 
-// DefaultTelemetry returns the default ranking telemetry config:
-// disabled (opt-in), with the size cap at its documented default and
-// query retention on, so enabling is a one-key edit.
+// DefaultTelemetry returns the default ranking log config: the size
+// cap at its documented default (the log itself is always on).
 func DefaultTelemetry() TelemetryConfig {
 	return TelemetryConfig{
-		MaxSizeKB:     DefaultTelemetryMaxSizeKB,
-		RetainQueries: true,
+		MaxSizeKB: DefaultTelemetryMaxSizeKB,
 	}
 }
 
@@ -665,7 +659,7 @@ func Load() (Config, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Default(), fmt.Errorf("config: parsing %s: %w", p, err)
 	}
-	migrated := c.migrateRoots()
+	migrated := c.migrateRoots(data)
 	c.Normalize()
 	if migrated {
 		if werr := Save(c); werr != nil {

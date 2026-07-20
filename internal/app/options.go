@@ -68,19 +68,23 @@ type Options struct {
 	// Normalize-repaired; Disabled leaves the whole layer unwired.
 	Frecency config.FrecencyConfig
 	// Priors configures the pick-memory ranking priors (wire config's
-	// search.priors here; see priors.go in this package). OPT-IN: the
-	// zero value keeps the layer entirely unwired -- no file reads,
-	// no goroutines, no blend term.
+	// search.priors here; see priors.go in this package). ON by
+	// default: the zero value wires the layer; Disabled (the debug
+	// escape hatch) keeps it entirely unwired -- no file reads, no
+	// goroutines, no blend term.
 	Priors config.PriorsConfig
-	// Telemetry configures the opt-in local ranking telemetry log
-	// (wire config's search.telemetry here; see telemetry.go in this
-	// package). The zero value keeps the whole feature off.
+	// Telemetry bounds the always-on local ranking log (wire config's
+	// search.telemetry here; see telemetry.go in this package). There
+	// is deliberately no off switch; the zero value records at the
+	// default size bound.
 	Telemetry config.TelemetryConfig
 	// Arbiter configures the learned composition arbitration layer
 	// (wire config's search.arbiter here; see arbiter.go in this
-	// package). OPT-IN: the zero value keeps the layer entirely
-	// unwired -- no file reads, no goroutines, no model term, and
-	// plugin emissions pass through untouched.
+	// package). ON by default: the zero value wires the layer (inert
+	// until its activation gate passes); Disabled (the debug escape
+	// hatch / kill switch) keeps it entirely unwired -- no file
+	// reads, no goroutines, no model term, and plugin emissions pass
+	// through untouched.
 	Arbiter config.ArbiterConfig
 	// Preview is the preview pane configuration (wire config's
 	// preview section here); the zero value keeps the pane off and

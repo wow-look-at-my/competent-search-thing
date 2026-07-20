@@ -314,8 +314,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   openConfigFile bypasses Open deliberately -- recording async, write
   errors logged once (frecErrOnce), never blocking or failing the
   action. Pick-memory priors wiring (priors.go in this package):
-  Startup's startPriors (config search.priors, OPT-IN -- zero value =
-  OFF: no store, no file reads, no goroutines) builds the
+  Startup's startPriors (config search.priors, ON by default -- the
+  tray.disabled convention; search.priors.disabled is a debug escape
+  hatch: no store, no file reads, no goroutines) builds the
   internal/priors Store, installs store.PriorFunc as frecBlend.Prior
   (riding the SAME blend the cwd stash re-swaps, so the resolver
   survives those swaps; with frecency disabled the Manager gets a
@@ -327,14 +328,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   frecWG) -- by reading <configDir>/telemetry.jsonl(.1) oldest-first
   plus frecency.json for the bootstrap; read errors log once
   (priorsErrOnce) and degrade to whatever parsed, and ONE startup log
-  line reports the table sizes. Ranking telemetry wiring
+  line reports the table sizes. Ranking-log wiring
   (telemetry.go in this package): Startup's startTelemetry (config
-  search.telemetry, OPT-IN -- zero value = OFF, the preview.enabled
-  privacy precedent; unresolvable config dir = one log line +
-  disabled) builds the telemetryLayer -- an internal/telemetry Store
+  search.telemetry, ALWAYS ON -- deliberately no off switch, the log
+  is private by staying on the machine; the unresolvable-config-dir
+  degrade (one log line + nil layer) is the only off path) builds
+  the telemetryLayer -- an internal/telemetry Store
   at <configDir>/telemetry.jsonl plus an 8-slot query->signals
   impression ring; Search routes through queryWithTelemetry (nil
-  layer = exactly Manager.Query; enabled = Manager.QueryTraced
+  layer = exactly Manager.Query; normally Manager.QueryTraced
   capturing index.ResultSignals + a ring stash keyed by the TRIMMED
   query, blendActive from Blend.Active()); `RecordPick(rep
   telemetry.PickReport) error` is the frontend's activation-success
@@ -342,16 +344,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   silent no-op, everything echoed back RE-validated
   (telemetry.ValidatePickReport -- the RunPluginAction defense-in-
   depth stance), file-row features joined EXCLUSIVELY from the ring
-  (the report carries row identities only, so the frontend can never
-  forge signal values; a missing ring entry = Joined false, features
-  zero), and the append runs async (telWG + telErrOnce, the
+  (the report carries row identities plus plugin-row titles -- the
+  one display field only the frontend knows -- so the frontend can
+  never forge signal values; a missing ring entry = Joined false,
+  features zero), and the append runs async (telWG + telErrOnce, the
   recordOpen pattern) with Shutdown draining telWG beside frecWG;
-  config changes to search.telemetry hot-apply through
-  applyTelemetry (the sectionAppliers row in configapply.go).
+  search.telemetry.maxSizeKB (the section's only knob) hot-applies
+  through applyTelemetry (the sectionAppliers row in
+  configapply.go).
   Learned-arbitration wiring (arbiter.go in this package): Startup's
-  startArbiter (config search.arbiter, OPT-IN -- zero value = OFF:
-  no store, no file reads, no goroutines, emissions untouched)
-  builds the arbiterLayer -- an internal/arbiter Store plus its OWN
+  startArbiter (config search.arbiter, ON by default -- the
+  tray.disabled convention; search.arbiter.disabled is the debug
+  escape hatch / kill switch: no store, no file reads, no
+  goroutines, emissions untouched) builds the arbiterLayer -- an internal/arbiter Store plus its OWN
   8-slot query->ResultSignals impression ring -- and applies the
   model at BOTH composition seams: (1) frecBlend.Model =
   arbBlendModel (the startPriors riding pattern; the resolver
@@ -470,14 +475,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Prior-only blend when priors ride it else nil -- frecBlend.Prior is
   PRESERVED across both rebuild paths, so a live frecency change can
   never drop an enabled priors layer), search.priors (applyPriors:
-  the applyTelemetry shape over the priors store + blend resolver;
+  the teardown-plus-rebuild shape over the priors store + blend
+  resolver;
   disable detaches Prior and re-installs the blend only if it stays
   Active, enable rebuilds the layer and kicks a table build, an
   unresolvable config dir is a reported apply error),
-  search.telemetry (applyTelemetry: drop + rebuild the telemetry
-  layer -- the impression ring restarts empty, in-flight appends
-  drain via telWG, and an unresolvable config dir is a reported
-  apply error, unlike startTelemetry's quiet degrade),
+  search.telemetry (applyTelemetry: rebuild the always-on layer at
+  the incoming maxSizeKB -- the impression ring restarts empty,
+  in-flight appends drain via telWG, and an unresolvable config dir
+  is a reported apply error, unlike startTelemetry's quiet degrade),
   search.arbiter (applyArbiter: the applyPriors shape over the
   arbiter layer + blend Model resolver; disable detaches Model and
   re-installs the blend only if it stays Active, enable rebuilds the
@@ -942,21 +948,20 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   UNIQUE HERE: Normalize repairs only the EXACT zero to the default
   (halfLifeDays repairs <= 0), a NEGATIVE value is the documented
   per-signal off switch and passes through, and the schema rejects
-  the ambiguous literal 0 -- and priors {enabled}, the OPT-IN
-  pick-memory priors knob (zero value = OFF, the preview.enabled
-  privacy precedent; a single bool, so Normalize has nothing to
-  repair) main.go wires to app.Options.Priors -- and telemetry
-  {enabled, maxSizeKB 4096, retainQueries}, the OPT-IN ranking
-  telemetry knob main.go wires to app.Options.Telemetry: zero value
-  = the whole feature OFF (the preview.enabled privacy precedent,
-  deliberately NOT tray.disabled), Normalize repairs maxSizeKB <= 0
-  while the schema rejects it, and retainQueries false logs query
-  text as "" -- and arbiter {enabled}, the OPT-IN learned
+  the ambiguous literal 0 -- and priors {disabled}, the
+  pick-memory priors knob (ON by default, the tray.disabled
+  convention; disabled is a debug escape hatch, a single bool, so
+  Normalize has nothing to repair) main.go wires to
+  app.Options.Priors -- and telemetry {maxSizeKB 65536}, the
+  ALWAYS-ON local ranking log's one knob (deliberately NO off
+  switch: the log is private by staying on the machine; query text
+  and plugin titles recorded in full) main.go wires to
+  app.Options.Telemetry, Normalize repairs maxSizeKB <= 0 while the
+  schema rejects it -- and arbiter {disabled}, the learned
   composition arbitration knob main.go wires to app.Options.Arbiter
-  (zero value = OFF, the preview.enabled privacy precedent; a
-  single bool, so Normalize has nothing to repair) (note
-  retainQueries' bare zero value is false = the
-  privacy-conservative direction; Default() writes true)},
+  (ON by default, the tray.disabled convention; disabled is a debug
+  escape hatch / kill switch, a single bool, so Normalize has
+  nothing to repair)},
   watcher {maxWatches 0 = auto-budget / negative = unlimited,
   sweepMinutes 0 = the 20m default, sweepDisabled (zero value = sweeps
   ON, the tray.disabled convention), watchExcludes
@@ -1028,8 +1033,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   DELIBERATELY not excluded -- they change search semantics and
   await an owner decision).
   rootsVersion (0 = legacy, current
-  5) drives the one-shot Load migration (migrateRootsFor; goos is a
-  parameter so tests cover the darwin shape headlessly), each missing
+  6) drives the one-shot Load migration (migrateRootsFor; goos and
+  the RAW file bytes are parameters so tests cover the darwin shape
+  and the old-key reads headlessly), each missing
   step applied in
   order: the v2 step moves configs whose roots are exactly the legacy
   home default (or empty) to the new default roots + appends the
@@ -1042,9 +1048,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   stamp, nothing added or announced); the v5 step applies it AGAIN to
   darwinNoiseExcludesFor -- a NEW version rather than an extension of
   v4, so configs a v4-era build already stamped still receive it --
-  and each step is gated on its
+  the v6 step (migrateRankingDefaults, reads the RAW bytes because
+  the old keys left the struct) makes search.telemetry always-on
+  (every old enabled/retainQueries key dropped outright, an explicit
+  enabled:false included -- overruled by design and announced) and
+  flips search.priors/arbiter to on-by-default (absent old key = on;
+  enabled:false preserved as disabled:true; enabled:true = on, key
+  dropped) -- and each step is gated on its
   own version so already-fired informational notes never repeat.
-  Either way version 5 is
+  Either way version 6 is
   Saved back, and every user-visible change lands in the
   non-serialized MigrationNotes (json:"-") that internal/app logs
   loudly at startup -- the scope never changes silently. `Load` never crashes: missing file -> defaults
@@ -1149,8 +1161,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Exhaustively unit-tested, headless, table-driven: fake clocks,
   counting/blocking lstat fakes, scripted ProcTree fakes, real
   tempdir files (os.Chtimes) for the atime/mtime max path.
-- `internal/priors` -- the PURE half of the opt-in pick-memory
-  ranking priors (config search.priors, zero value = OFF; consumed by
+- `internal/priors` -- the PURE half of the pick-memory ranking
+  priors (config search.priors, ON by default -- disabled is a debug
+  escape hatch; consumed by
   internal/index's Blend.Prior seam, wired by internal/app
   priors.go), pure stdlib and headless-tested on the
   internal/frecency conventions (RWMutex, injectable clock,
@@ -1167,7 +1180,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   entries skipped, oversized files ignored): the telemetry.jsonl(.1)
   JSONL FORMAT as a data contract (ReadTelemetryFile parses only
   v/ts/query/shown file paths/picked kind+path; non-file picks =
-  impressions only; deliberately NO internal/telemetry import) and
+  impressions only; unknown fields -- the plugin-row titles included
+  -- are ignored; deliberately NO internal/telemetry import) and
   frecency.json (ReadFrecencyWeights, the {v:1,entries:{path:{c,t}}}
   shape re-declared) whose decayed-count distributions BOOTSTRAP the
   two rate tables while the log holds < 20 file picks -- the
@@ -1177,8 +1191,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (most-seen kept). Store.PriorFunc(query) resolves ONCE per query
   (table-generation snapshot, no locks or allocation on the
   per-candidate path) and returns nil when nothing applies.
-- `internal/arbiter` -- the PURE half of opt-in learned composition
-  arbitration (config search.arbiter, zero value = OFF; applied at
+- `internal/arbiter` -- the PURE half of learned composition
+  arbitration (config search.arbiter, ON by default -- disabled is a
+  debug escape hatch / kill switch; applied at
   the index Blend.Model seam AND the app layer's plugin-emission
   path, both wired by internal/app arbiter.go), pure stdlib and
   headless-tested on the internal/priors conventions (RWMutex
@@ -1223,33 +1238,37 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   one-class-band equivalence, the 3.0 tier-jump threshold, and the
   exact-prior's 6.0 saturation; class inversion is additionally
   impossible structurally, effClass being the primary sort key).
-- `internal/telemetry` -- the opt-in ranking telemetry log (config
-  search.telemetry, zero value = OFF; wired by internal/app's
+- `internal/telemetry` -- the ALWAYS-ON local ranking log (config
+  search.telemetry carries only maxSizeKB -- deliberately no off
+  switch, the log is private by staying on the machine; wired by
+  internal/app's
   telemetry.go, fed by internal/index's signalstrace.go seam), pure
   (stdlib only) and exhaustively unit-tested. One JSON line per PICK
   at <configDir>/telemetry.jsonl: Record {v 1, ts RFC3339 (both
-  stamped by the store when unset, injectable clock), query ("" under
-  retainQueries false), blendActive, joined (impression found in the
+  stamped by the store when unset, injectable clock), query (always
+  recorded in full), blendActive, joined (impression found in the
   app's ring), refined (reserved, always false), shown, picked}.
   ShownRow marshals KIND-SHAPED (custom MarshalJSON): file rows carry
   path + the full feature vector explicitly -- class/effClass/align/
   boost/recency/cwd/penalty/isDir/depth/ext, zeros included so class
   0 = exact is never ambiguous with omitted -- while plugin rows
-  carry exactly rank/kind/plugin/score (titles deliberately never
-  logged). Store: append-only JSONL (deliberate divergence from
+  carry exactly rank/kind/plugin/score/title (full-fidelity capture;
+  the title is the rendered row title the frontend reports). Store: append-only JSONL (deliberate divergence from
   history.json's whole-file rewrite -- immutable append-heavy
   records), O_APPEND single-write() lines so appends never interleave
   mid-record, mutex-guarded, 0600 (re-tightened best-effort per
   open), MkdirAll parent, nil-receiver-safe no-ops; rotation = an
-  append that would cross MaxSizeKB (New repairs <= 0 to 4096)
+  append that would cross MaxSizeKB (New repairs <= 0 to 65536)
   renames the live file over telemetry.jsonl.1 first, so the disk cap
   is two generations, an empty live file never rotates, and a torn
   final line is reader-skipped (loss-tolerant log, not a ledger; no
   Load step, only offline tooling reads). The wire half:
-  PickReport{query, shown []ShownRef{kind, path|plugin+score},
-  picked PickedRef{rank, action, revealed}} -- deliberately row
-  IDENTITIES only, so a frontend can never forge feature values --
-  and ValidatePickReport (bounded sizes 256 rows/4096-byte strings,
+  PickReport{query, shown []ShownRef{kind, path|plugin+score+title},
+  picked PickedRef{rank, action, revealed}} -- row IDENTITIES plus
+  the plugin-row titles (the one display field only the frontend
+  knows), so a frontend can never forge feature values --
+  and ValidatePickReport (bounded sizes 256 rows/4096-byte strings
+  incl. titles -- wire-abuse defense, never redaction --
   per-kind field consistency incl. abs paths + plugin-id shape +
   score 0..100, in-range rank, open/reveal + revealed-flag
   consistency for file picks, charset-gated action kind for plugin
@@ -2529,11 +2548,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   without error, or RunPluginAction resolved without error --
   set_query and blank queries never commit; the SAME two success
   sites also fire reportPick (RecordPick, fire-and-forget, errors to
-  console.warn only -- telemetry must never break an activation) with
+  console.warn only -- the ranking log must never break an
+  activation) with
   a report SNAPSHOTTED at activation time via pickReport (the flat
-  state.items as {kind, path | plugin+score} identity rows, the
-  picked rank, the action kind + revealed flag), a Go-side no-op
-  unless search.telemetry opted in;
+  state.items as {kind, path | plugin+score+title} identity rows,
+  the picked rank, the action kind + revealed flag), appended to the
+  always-on local ranking log Go-side;
   "plugin:results" emissions are dropped unless gen === seq, else
   upsert that plugin's section (keyed by id; priority = e.priority ??
   0) and renderPluginArea re-renders BOTH plugin zones
