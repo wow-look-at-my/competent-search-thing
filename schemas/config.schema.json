@@ -7,6 +7,7 @@
   "properties": {
     "$schema": {
       "type": "string",
+      "x-editor-hidden": true,
       "description": "Optional editor hint pointing at this schema. Ignored by the app."
     },
     "roots": {
@@ -24,6 +25,7 @@
       "type": "integer",
       "minimum": 0,
       "default": 6,
+      "x-editor-hidden": true,
       "description": "Config-defaults version stamp, written by the app. 0 (or absent) marks a config from before whole-filesystem indexing: on load the app upgrades roots still set to the old default (the home directory) to the whole-filesystem default and appends the missing system excludes. Configs stamped below 3 additionally get the high-churn noise exclude patterns (.hg, .svn, __pycache__, ...) appended; on macOS configs stamped below 4 get the firmlink-dedup exclude /System/Volumes/Data (the same files macOS also shows at /Users, /Applications, ...), and below 5 the macOS noise set (Caches, DerivedData, _CodeSignature, CodeResources, /private/var/folders) -- each addition only when the exclude list still carries all three base patterns (.git, node_modules, .cache); curated or emptied lists are stamped only. Below 6 the ranking sections flip to their new shape: search.telemetry becomes always-on (its old 'enabled' switch and 'retainQueries' are removed outright, an explicit enabled:false included -- the log is private by staying on the machine), while the search.priors/arbiter opt-in 'enabled' switches become opt-out 'disabled' debug escape hatches (an explicit enabled:false is preserved as disabled:true). Every change is logged loudly, the stamp advances to 6, and the file is rewritten once. Customized roots are never touched by the migration. Do not edit by hand unless you want the migration to run again."
     },
     "excludes": {
@@ -444,19 +446,21 @@
         "enabled": {
           "type": "boolean",
           "default": false,
-          "description": "true turns the preview pane on and widens the window to windowWidth x windowHeight. Read once at startup; the window size cannot change while the app runs."
+          "description": "true turns the preview pane on and widens the window to windowWidth x windowHeight (applied live; the shown window is always clamped to the screen's usable area)."
         },
         "windowWidth": {
           "type": "integer",
           "minimum": 1,
           "default": 1600,
-          "description": "Window width in pixels while the pane is enabled (default 1600). Ignored when enabled is false."
+          "x-editor-hidden": true,
+          "description": "Window width in pixels while the pane is enabled (default 1600). Ignored when enabled is false. Normally set by DRAGGING the bar's edges while the pane is mounted (the drag persists the size here), which is why the settings editor hides the field; the shown window is always clamped to the screen's usable area."
         },
         "windowHeight": {
           "type": "integer",
           "minimum": 1,
           "default": 800,
-          "description": "Window height in pixels while the pane is enabled (default 800). Ignored when enabled is false."
+          "x-editor-hidden": true,
+          "description": "Window height in pixels while the pane is enabled (default 800). Ignored when enabled is false. Same drag-to-resize and clamp rules as windowWidth."
         },
         "textMaxKB": {
           "type": "integer",
@@ -546,13 +550,15 @@
           "type": "integer",
           "minimum": 320,
           "default": 780,
-          "description": "The bar window's width in pixels (default 780). The window size is fixed at startup (the bar is not resizable); changes take effect on the next launch. Zero, negative, or missing values get the default and positive values below 320 are raised to that floor by the app; this schema rejects them."
+          "x-editor-hidden": true,
+          "description": "The bar window's width in pixels (default 780). Normally set by DRAGGING the bar's edges (the drag persists the size here), which is why the settings editor hides the field; hand edits apply live too. The shown window is always clamped to the screen's usable area, while this value keeps what was set. Zero, negative, or missing values get the default and positive values below 320 are raised to that floor by the app; this schema rejects them."
         },
         "height": {
           "type": "integer",
           "minimum": 240,
           "default": 550,
-          "description": "The bar window's height in pixels (default 550). Same repair rules as width, with a 240 floor. A taller window shows more result rows before scrolling; how many results a query returns stays governed by the top-level maxResults."
+          "x-editor-hidden": true,
+          "description": "The bar window's height in pixels (default 550). Same drag-to-resize, clamp, and repair rules as width, with a 240 floor. A taller window shows more result rows before scrolling; how many results a query returns stays governed by the top-level maxResults."
         }
       },
       "additionalProperties": false

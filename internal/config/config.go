@@ -117,8 +117,23 @@ const (
 	DefaultPreviewOpenAITokens = 1024
 )
 
+// SchemaRef is the value stamped into Config.Schema: a relative
+// reference to the schema sidecar the app writes next to config.json
+// at every startup (see internal/app's schema sidecar), so editors
+// pick up validation and completion without any configuration.
+const SchemaRef = "./config.schema.json"
+
 // Config is the on-disk configuration.
 type Config struct {
+	// Schema is the "$schema" editor hint pointing at the JSON Schema
+	// for this file -- the FIRST struct field, so Save/Encode emit it
+	// as the document's first key. It is a RESERVED key, never a
+	// setting: Normalize stamps SchemaRef when it is empty (existing
+	// configs pick it up on their next save), a hand-set value passes
+	// through verbatim, the loader never validates it, UnknownKeys
+	// knows it, and the GUI editor hides it (x-editor-hidden in the
+	// schema). The app ignores the value entirely.
+	Schema string `json:"$schema,omitempty"`
 	// Roots are the directories to index. The default is the whole
 	// filesystem ("/" on Linux/macOS, the system drive on Windows).
 	Roots []string `json:"roots"`
@@ -591,6 +606,7 @@ func DefaultFrecency() FrecencyConfig {
 
 func Default() Config {
 	return Config{
+		Schema:                SchemaRef,
 		Roots:                 defaultRoots(),
 		RootsVersion:          currentRootsVersion,
 		Excludes:              defaultExcludes(),

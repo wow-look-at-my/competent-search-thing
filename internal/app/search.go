@@ -1,10 +1,11 @@
 package app
 
-import "strings"
+// The bound query/activation surface: Search plus the Open/Reveal
+// activations (moved verbatim from app.go for the file-length cap,
+// the options.go precedent). The credentialed launch path they call
+// lives in launch.go, the telemetry-traced query in telemetry.go.
 
-// The frontend's query + file-activation entry points, split out of
-// app.go (which holds the App struct and lifecycle) for the file-size
-// budget.
+import "strings"
 
 // Search returns index entries whose name contains query,
 // case-insensitively, best matches first (limit: the configured

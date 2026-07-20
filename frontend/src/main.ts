@@ -16,6 +16,7 @@
 // GetPreviewConfig + the selection/query hooks).
 
 import { configModeActive, initConfig } from "./config";
+import { initResize } from "./resize";
 import {
   initPreview,
   previewOnQueryChange,
@@ -700,10 +701,17 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
     // The bar always summons empty: the pre-hide text is deliberately
     // dropped (press Up to get past searches back), and any history
     // browsing is reset. The pipeline re-run renders the empty-query
-    // cheat sheet and doubles as the plugin cancel signal.
+    // cheat sheet and doubles as the plugin cancel signal. This reset
+    // runs even when the config editor is being RESTORED (the bar hid
+    // while the editor was up -- config.ts keeps the mode; see its
+    // app:shown handler): it keeps the search layer underneath fresh
+    // for the eventual Esc-out. Only the focus steal is skipped --
+    // the restored editor re-asserts its own focused control.
     inputEl.value = "";
     state.histCursor = -1;
-    inputEl.focus();
+    if (!configModeActive()) {
+      inputEl.focus();
+    }
     scheduleSearch(app);
     // Instant cached snapshot (the summon's fresh samples follow as
     // stats:update events moments later).
@@ -790,6 +798,10 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   // The config editor mode (config.ts): wiring only -- the schema and
   // config document load lazily on the first "config:open".
   initConfig(app, rt);
+  // Drag-edge window resizing (resize.ts): element-free document
+  // listeners, so nothing here can interfere with wheel/hover/
+  // selection handling above.
+  initResize(app);
   inputEl.addEventListener("input", () => {
     state.histCursor = -1; // typing exits history browse mode
     scheduleSearch(app);

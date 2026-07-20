@@ -30,20 +30,22 @@ func TestGetConfigForEdit(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(config.EnvConfigDir, dir) // after newTestApp, which re-points it
 
-	// A hand-edited file with an editor hint and a typo'd key: both
-	// must surface as unknown keys, and the returned document is the
-	// normalized load (no unknown keys inside it).
+	// A hand-edited file with an editor hint and a typo'd key: the
+	// typo surfaces as an unknown key, the "$schema" hint is a known
+	// reserved field (kept, hand-set value verbatim), and the returned
+	// document is the normalized load (no unknown keys inside it).
 	raw := `{"$schema": "x", "maxResults": 33, "frobnicate": 1}`
 	cfgPath := filepath.Join(dir, "config.json")
 	require.NoError(t, os.WriteFile(cfgPath, []byte(raw), 0o644))
 
 	out := a.GetConfigForEdit()
 	require.Equal(t, cfgPath, out.Path)
-	require.Equal(t, []string{"$schema", "frobnicate"}, out.UnknownKeys)
+	require.Equal(t, []string{"frobnicate"}, out.UnknownKeys)
 	require.Empty(t, out.LoadWarning)
 	var got config.Config
 	require.NoError(t, json.Unmarshal([]byte(out.ConfigJSON), &got))
 	require.Equal(t, 33, got.MaxResults)
+	require.Equal(t, "x", got.Schema, "a hand-set $schema value round-trips verbatim")
 	require.Equal(t, config.DefaultTheme, got.Theme, "the document is normalized")
 }
 
@@ -106,6 +108,25 @@ func TestSaveConfigForcesRootsVersionAndNormalizes(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &onDisk))
 	require.EqualValues(t, config.CurrentRootsVersion(), onDisk["rootsVersion"])
 	require.EqualValues(t, "dark", onDisk["theme"], "the save normalizes (empty theme -> dark)")
+	require.EqualValues(t, config.SchemaRef, onDisk["$schema"],
+		"a GUI save stamps the $schema sidecar reference (Normalize)")
+}
+
+func TestSaveConfigKeepsSchemaKey(t *testing.T) {
+	a, _ := newTestApp(t, nil, Options{})
+	dir := t.TempDir()
+	t.Setenv(config.EnvConfigDir, dir)
+
+	// The GUI round-trip: GetConfigForEdit's document carries the
+	// stamped "$schema"; SaveConfig's strict decode must accept it as
+	// a known field (never "unknown field") and write it back.
+	doc := a.GetConfigForEdit()
+	require.Contains(t, doc.ConfigJSON, `"$schema"`)
+	res := a.SaveConfig(doc.ConfigJSON)
+	require.True(t, res.OK, "error: %s", res.Error)
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"$schema": "`+config.SchemaRef+`"`)
 }
 
 func TestSaveConfigAppliesLive(t *testing.T) {

@@ -60,7 +60,7 @@ type App struct {
 	// (see logFanotifyGrant).
 	grantOnce sync.Once
 
-	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, hkGen, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, pendingConfig, history, launchCtx, launchCancel, progress, winW, winH, resultsW
+	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, hkGen, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, pendingConfig, history, launchCtx, launchCancel, progress, winW, winH, resultsW, appliedW, appliedH, placedX, placedY, placedOK, dragDisp, dragY, dragPosOK, dragActive
 	ctx        context.Context
 	visible    bool
 	lastToggle time.Time
@@ -88,14 +88,36 @@ type App struct {
 	portalHK     portalHandle
 	hotkeyDesc   string
 	hkGen        int
-	// winW/winH are the LIVE effective bar window size the positioning
-	// math uses (seeded from Options.WindowWidth/Height, swapped by the
-	// config window-size applier); resultsW is the live window.width
+	// winW/winH are the LIVE DESIRED bar window size (seeded from
+	// Options.WindowWidth/Height, swapped by the config window-size
+	// applier and the drag commit); resultsW is the live window.width
 	// GetPreviewConfig reports as the preview pane's results-column
 	// width. Zero values fall back to the config defaults in the
-	// accessors, keeping bare-Options tests wiring-free.
-	winW, winH int
-	resultsW   int
+	// accessors, keeping bare-Options tests wiring-free. appliedW/H
+	// track the size the NATIVE window actually has right now: the
+	// desired size clamped to the hosting display's usable area
+	// (clamp-to-screen, re-evaluated per summon -- see
+	// applySizeIfChanged in size.go), seeded from the construction
+	// size in New so a no-change summon issues no resize call.
+	winW, winH         int
+	resultsW           int
+	appliedW, appliedH int
+	// placedX/placedY remember the last ABSOLUTE top-left position the
+	// app gave the window (positionOnCursorDisplay; placedOK false
+	// until the first successful placement) -- the drag-resize anchor,
+	// which must work on darwin too, where reading the position back
+	// is not an option (see resize.go).
+	placedX, placedY int
+	placedOK         bool
+	// Drag-resize state (resize.go): the latched anchor for one
+	// pointer drag -- the display hosting the window (dragDispOK) and
+	// the window's anchored top y (dragPosOK) -- cleared by
+	// ResizeCommit and Hide.
+	dragDisp   platform.Display
+	dragY      int
+	dragDispOK bool
+	dragPosOK  bool
+	dragActive bool
 	// Tray icon (see tray.go in this package): the running handle and
 	// the cancel func aborting a Start still waiting on the bus.
 	// newTray is a seam over buildTray so unit tests never dial a
@@ -246,7 +268,11 @@ type App struct {
 	// config-dir watcher skips re-applying the app's own writes). A
 	// nil cfgCurrent (pre-Startup) makes an apply pass treat every
 	// section as changed -- appliers are idempotent, so that is safe.
-	cfgOnce      sync.Once
+	cfgOnce sync.Once
+	// sidecarOnce guards the one-time config schema sidecar refresh
+	// (schemasidecar.go); it runs before the config-dir watcher so the
+	// write predates any watching.
+	sidecarOnce  sync.Once
 	cfgMu        sync.Mutex // guards cfgCurrent, lastSavedSum
 	cfgCurrent   *config.Config
 	lastSavedSum [32]byte
@@ -354,6 +380,10 @@ func New(m *index.Manager, opt Options) *App {
 	}
 	a.winW, a.winH = opt.WindowWidth, opt.WindowHeight
 	a.resultsW = opt.ResultsWidth
+	// The native window is built at the Options size (main.go feeds
+	// both from one read); seeding the applied-size tracker with it
+	// means a summon that needs no clamp issues no resize call.
+	a.appliedW, a.appliedH = a.windowSize()
 	a.previewCfg = opt.Preview
 	a.newRegistry = a.buildRegistry
 	a.newTray = a.buildTray
@@ -431,6 +461,10 @@ func (a *App) Startup(ctx context.Context) {
 	// (startThemeWatch also feeds config.json hot-apply), so an
 	// external edit always diffs against a real baseline.
 	a.cfgOnce.Do(a.startConfigState)
+	// The schema sidecar refresh also precedes the watcher: the write
+	// lands before the config dir is watched at all (and its file name
+	// can never match the config.json hot-apply path anyway).
+	a.sidecarOnce.Do(a.startSchemaSidecar)
 	a.priorsOnce.Do(a.startPriors)
 	a.telOnce.Do(a.startTelemetry)
 	a.arbOnce.Do(a.startArbiter)
