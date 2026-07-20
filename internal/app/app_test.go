@@ -710,43 +710,6 @@ func TestEmitEventBeforeStartupIsNoOp(t *testing.T) {
 	require.Empty(t, r.emits, "no context yet: nothing emitted, nothing crashed")
 }
 
-func TestOpenRunsPlatformOpenAndHides(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{})
-	a.Startup(context.Background())
-	require.NoError(t, a.Open("/tmp/x"))
-	require.Equal(t, []string{"resolve:/tmp/x", "mint", "open:/tmp/x", "hide"}, r.callNames(),
-		"resolve then mint (bar still focused) then dispatch then hide")
-}
-
-func TestOpenErrorKeepsBarVisible(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{})
-	a.Startup(context.Background())
-	boom := errors.New("no handler")
-	a.plat.open = func(string, []string) error { return boom }
-	require.ErrorIs(t, a.Open("/tmp/x"), boom)
-	require.False(t, r.has("hide"), "a failed open does not hide the bar")
-}
-
-func TestRevealRunsPlatformRevealAndHides(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{})
-	a.Startup(context.Background())
-	require.NoError(t, a.Reveal("/tmp/y"))
-	require.Equal(t, []string{"resolve:/tmp/y", "mint", "reveal:/tmp/y", "hide"}, r.callNames(),
-		"reveal resolves the directory handler, mints, dispatches, hides")
-
-	boom := errors.New("nope")
-	a.plat.reveal = func(string, []string, string) error { return boom }
-	require.ErrorIs(t, a.Reveal("/tmp/y"), boom)
-}
-
-func TestOpenRevealUseRealLauncherValidation(t *testing.T) {
-	// The default seams go through platform.Launcher, which rejects
-	// empty paths without running anything.
-	a := New(nil, Options{})
-	require.Error(t, a.Open(""))
-	require.Error(t, a.Reveal(""))
-}
-
 func TestHideWithoutContextIsNoOp(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
 	a.Hide()

@@ -90,6 +90,8 @@ const fakeApp: WailsAppBindings = {
   SaveConfig: () =>
     Promise.resolve({ ok: true, applied: null, pending: null }),
   OpenConfigFile: () => Promise.resolve(),
+  ResizeDrag: () => Promise.resolve(),
+  ResizeCommit: () => Promise.resolve(),
 };
 
 const fakeRuntime: WailsRuntime = {
