@@ -140,6 +140,43 @@ cs_set_window_size(int w, int h)
 	return 1;
 }
 
+/* cs_get_workarea reports the workarea of the monitor the bar window
+ * currently sits on, via gdk_monitor_get_workarea. This is the ONE
+ * probe that answers on Wayland (the app's X-based display list is
+ * unavailable there; the compositor owns placement but the toolkit
+ * still knows the monitor geometry), and it also works on X11. GTK
+ * main thread only (the Go wrapper dispatches). Returns 1 when a
+ * realized toplevel with a resolvable monitor was found. */
+int
+cs_get_workarea(int *x, int *y, int *w, int *h)
+{
+	GtkWindow *top = cs_find_toplevel();
+	GdkWindow *gw;
+	GdkDisplay *dpy;
+	GdkMonitor *mon;
+	GdkRectangle r;
+
+	if (top == NULL)
+		return 0;
+	gw = gtk_widget_get_window(GTK_WIDGET(top));
+	if (gw == NULL)
+		return 0; /* not realized yet */
+	dpy = gdk_window_get_display(gw);
+	if (dpy == NULL)
+		return 0;
+	mon = gdk_display_get_monitor_at_window(dpy, gw);
+	if (mon == NULL)
+		return 0;
+	gdk_monitor_get_workarea(mon, &r);
+	if (r.width <= 0 || r.height <= 0)
+		return 0;
+	*x = r.x;
+	*y = r.y;
+	*w = r.width;
+	*h = r.height;
+	return 1;
+}
+
 /* cs_mint_app_info builds the GAppInfo the mint describes the launch
  * with: the resolved handler's desktop entry when we have one, else a
  * synthesized commandline entry flagged SUPPORTS_STARTUP_NOTIFICATION.

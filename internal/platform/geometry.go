@@ -32,6 +32,42 @@ type Display struct {
 	Primary bool
 }
 
+// UsableRect returns the display's usable area for window sizing: the
+// Work rect when it has any area, else the full Rect. On platforms
+// that report no work area (linux Xinerama fills Work with the full
+// geometry; a zero-valued Work can only come from hand-built values)
+// the full display is the usable area, so the clamp never collapses
+// to zero.
+func (d Display) UsableRect() Rect {
+	if d.Work.W > 0 && d.Work.H > 0 {
+		return d.Work
+	}
+	return d.Rect
+}
+
+// ClampSize limits a window size to fit inside area -- the
+// clamp-to-screen rule every path that sizes the bar window applies
+// (summons, the config window-size applier, the preview-pane mount,
+// drag resizing). The floors win over a pathologically small area: a
+// window is never sized below minW x minH, even when the display is
+// smaller (it then overflows, and BarPosition's clamp pins it to the
+// display origin). A zero-area dimension leaves that axis unclamped.
+func ClampSize(area Rect, w, h, minW, minH int) (int, int) {
+	if area.W > 0 && w > area.W {
+		w = area.W
+	}
+	if area.H > 0 && h > area.H {
+		h = area.H
+	}
+	if w < minW {
+		w = minW
+	}
+	if h < minH {
+		h = minH
+	}
+	return w, h
+}
+
 // PickDisplay returns the display that should host the searchbar: the
 // one containing the cursor, else the primary, else the first. ok is
 // false only for an empty display list.

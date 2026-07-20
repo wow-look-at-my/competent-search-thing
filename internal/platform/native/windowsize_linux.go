@@ -8,7 +8,11 @@ package native
 */
 import "C"
 
-import "time"
+import (
+	"time"
+
+	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
+)
 
 // windowSizeTimeout bounds the GTK-thread dispatch that applies a live
 // window resize: the loop services idle callbacks between frames, so
@@ -34,4 +38,24 @@ func SetWindowSize(w, h int) bool {
 		ok = C.cs_set_window_size(C.int(w), C.int(h)) != 0
 	}, windowSizeTimeout)
 	return done && ok
+}
+
+// WindowWorkArea reports the usable area of the monitor the bar
+// window currently sits on, straight from the toolkit
+// (gdk_monitor_get_workarea on the GTK main thread; see
+// cs_get_workarea). It is the clamp-to-screen source of last resort:
+// the ONLY probe that answers on Wayland, where the app's X-based
+// display list is unavailable. ok=false when the GTK loop, the
+// toplevel, or its monitor is unreachable (headless, not yet
+// realized) -- the caller then skips clamping.
+func WindowWorkArea() (platform.Rect, bool) {
+	var x, y, w, h C.int
+	ok := false
+	done := runOnGTKThread(func() {
+		ok = C.cs_get_workarea(&x, &y, &w, &h) != 0
+	}, windowSizeTimeout)
+	if !done || !ok {
+		return platform.Rect{}, false
+	}
+	return platform.Rect{X: int(x), Y: int(y), W: int(w), H: int(h)}, true
 }

@@ -28,13 +28,14 @@ func TestUnknownKeysReportsDottedPaths(t *testing.T) {
 	}`)
 	got := UnknownKeys(raw)
 	require.Equal(t, []string{
-		"$schema",
 		"frobnicate",
 		"plugins.entries.calc.extra",
 		"rewrites[0].wat",
 		"search.frecency.bogus",
 		"watcher.frobnicate",
 	}, got, "sorted dotted paths, maps by key, arrays by index")
+	require.NotContains(t, got, "$schema",
+		"the $schema editor hint is a known reserved Config field, never an unknown key")
 }
 
 func TestUnknownKeysSkipsOpaqueSettings(t *testing.T) {
