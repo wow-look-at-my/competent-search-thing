@@ -122,28 +122,12 @@ func watchConfigFrom(cfg *config.Config) watchConfig {
 	}
 }
 
-// startWatch starts the live-update layer: the Watcher over the
-// manager's roots (a whole-filesystem backend -- fanotify on linux,
-// fsevents on macOS -- or the bounded per-directory hot set;
-// filtering events through the same Excluder semantics the walks use,
-// honoring the watcher.* budget and watch-only excludes, reporting
-// degradation to the frontend), the Rescanner for periodic and requested full
-// rebuilds, and the Sweeper whose passes converge everything the hot
-// set does not cover (its watermark starts at this call's entry time
-// -- the just-finished initial build vouches for everything older).
-// watcher.sweepDisabled skips the Sweeper and logs a LOUD warning
-// instead: the coverage invariant (tiers differ only in latency) then
-// holds only through full rescans. After everything is up it waits
-// for the watcher's initial registration (ctx-abortable, so Shutdown
-// cuts the wait), logs one loud behavior-contract summary including
-// the sweep state, and emits the one-time eventWatchBackend notice --
-// with the setcap grant command logged whenever coverage is not full.
-// It is skipped when Shutdown already ran.
-func (a *App) startWatch() {
-	a.watchMu.Lock()
-	cfg := a.watchCfg
-	a.watchMu.Unlock()
-	watermark := time.Now()
+// newWatchLayer builds the Watcher over the manager's current
+// roots/excludes and the given watch configuration -- the one
+// construction shared by the pre-build deferred start
+// (startEarlyWatch) and the ordinary startWatch path, so both always
+// agree on excluder semantics and options.
+func (a *App) newWatchLayer(cfg watchConfig) *watch.Watcher {
 	ex, err := index.NewExcluder(a.manager.Excludes())
 	if err != nil {
 		// The initial build would have failed on the same patterns and
@@ -159,12 +143,97 @@ func (a *App) startWatch() {
 		log.Printf("watch: bad watcher.watchExcludes patterns: %v", err)
 		watchEx = nil
 	}
-	w := watch.New(a.manager, a.manager.Roots(), ex, watch.Options{
+	return watch.New(a.manager, a.manager.Roots(), ex, watch.Options{
 		MaxWatches: cfg.maxWatches,
 		WatchEx:    watchEx,
 		OnDegraded: a.emitDegraded,
 		Backend:    cfg.backend,
 	})
+}
+
+// startEarlyWatch arms the live-watch backend BEFORE the initial index
+// build (watch.StartDeferred: fanotify/fsevents marks are live
+// immediately, the per-directory model watches the configured roots,
+// and every event is queued instead of applied). buildIndex calls it
+// right before BuildFromDisk, and the completion path's startWatch
+// adopts and releases the held watcher -- closing the startup blind
+// window where changes landing during a long first walk were invisible
+// until the next sweep. Failure to start degrades to the old
+// watch-after-build ordering with one log line; a build that ends
+// without reaching startWatch (cancelled or failed) stops the early
+// watcher instead of leaking its marks.
+func (a *App) startEarlyWatch() {
+	a.watchMu.Lock()
+	if a.shuttingDown || a.earlyWatcher != nil || a.manager == nil {
+		a.watchMu.Unlock()
+		return
+	}
+	cfg := a.watchCfg
+	a.watchMu.Unlock()
+	w := a.newWatchLayer(cfg)
+	if err := w.StartDeferred(); err != nil {
+		log.Printf("watch: pre-build registration unavailable (%v); live watching starts after the initial build", err)
+		return
+	}
+	a.watchMu.Lock()
+	if a.shuttingDown {
+		a.watchMu.Unlock()
+		w.Stop()
+		return
+	}
+	a.earlyWatcher = w
+	a.watchMu.Unlock()
+	// The "none" backend (a strict watcher.backend whose required
+	// backend is unavailable) delivers nothing, and its refusal was
+	// already logged loudly -- an "armed" line would be a lie.
+	if b := w.Stats().Backend; b != "none" {
+		log.Printf("watch: backend %s armed before the initial index build; changes during indexing are queued and applied when it completes", b)
+	}
+}
+
+// takeEarlyWatcher detaches and returns the pre-build watcher, if any.
+// Callers either adopt it (startWatch) or Stop it (the build's
+// cancel/failure paths, Shutdown, and the config live-apply while a
+// build is in flight).
+func (a *App) takeEarlyWatcher() *watch.Watcher {
+	a.watchMu.Lock()
+	w := a.earlyWatcher
+	a.earlyWatcher = nil
+	a.watchMu.Unlock()
+	return w
+}
+
+// startWatch starts the live-update layer: the Watcher over the
+// manager's roots (a whole-filesystem backend -- fanotify on linux,
+// fsevents on macOS -- or the bounded per-directory hot set;
+// filtering events through the same Excluder semantics the walks use,
+// honoring the watcher.* budget and watch-only excludes, reporting
+// degradation to the frontend), the Rescanner for periodic and requested full
+// rebuilds, and the Sweeper whose passes converge everything the hot
+// set does not cover (its watermark starts at this call's entry time
+// -- the just-finished initial build vouches for everything older).
+// When buildIndex armed a pre-build watcher (startEarlyWatch), that
+// watcher is ADOPTED instead of building a fresh one: the trio is
+// wired around it and Release applies everything queued during the
+// build against the just-swapped index.
+// watcher.sweepDisabled skips the Sweeper and logs a LOUD warning
+// instead: the coverage invariant (tiers differ only in latency) then
+// holds only through full rescans. After everything is up it waits
+// for the watcher's initial registration (ctx-abortable, so Shutdown
+// cuts the wait), logs one loud behavior-contract summary including
+// the sweep state, and emits the one-time eventWatchBackend notice --
+// with the setcap grant command logged whenever coverage is not full.
+// It is skipped when Shutdown already ran.
+func (a *App) startWatch() {
+	a.watchMu.Lock()
+	cfg := a.watchCfg
+	a.watchMu.Unlock()
+	watermark := time.Now()
+	ew := a.takeEarlyWatcher()
+	w := ew
+	if w == nil {
+		w = a.newWatchLayer(cfg)
+	}
 	r := watch.NewRescanner(a.manager, w, watch.RescanOptions{Interval: cfg.rescanEvery})
 	sweepEvery := cfg.sweepInterval
 	if sweepEvery <= 0 {
@@ -183,10 +252,18 @@ func (a *App) startWatch() {
 	a.watchMu.Lock()
 	if a.shuttingDown {
 		a.watchMu.Unlock()
+		if ew != nil {
+			ew.Stop() // the deferred watcher is live; never leak its marks
+		}
 		return
 	}
-	wErr := w.Start()
-	if wErr != nil {
+	var wErr error
+	if ew != nil {
+		// Already running and holding: the requesters above are wired,
+		// so release -- the initial fill runs against the fresh index
+		// and the held paths apply through the normal reconcile.
+		w.Release()
+	} else if wErr = w.Start(); wErr != nil {
 		log.Printf("watch: live updates unavailable (sweeps and rescans still work): %v", wErr)
 	}
 	if err := r.Start(); err != nil {
@@ -246,12 +323,19 @@ func (a *App) startWatch() {
 
 // logFanotifyGrant logs -- once, linux only (fanotify does not exist
 // elsewhere) -- the exact command that grants the running binary
-// full-filesystem watching. The path prefers the STABLE spelling of
-// the binary (the PATH shim or the argv[0] symlink proven to be this
-// very binary) over the fully resolved os.Executable, exactly like
-// the GNOME keybinding command in hotkey.go: a versioned install dir
-// (Homebrew Cellar, Nix, stow) dies on the next upgrade, and file
-// capabilities are re-granted per installed path.
+// full-filesystem watching, plus one caveat line about re-running it
+// after upgrades. The printed path is the RESOLVED real file
+// (platform.ResolvedExecutable): setcap refuses symlinks, and
+// symlinked install layouts (Homebrew's linked bin/, Nix, stow) hand
+// the process a symlink spelling -- a user who pasted the old
+// stable-spelling command got "not a regular (non-symlink) file"
+// back. This is the opposite preference from the GNOME keybinding
+// command in hotkey.go, deliberately: a keybinding must survive
+// upgrades (stable spelling), while file capabilities can only live
+// on the real versioned file -- which is exactly why the caveat line
+// says to re-run the command after upgrades replace it. Only when
+// resolution fails (the path vanished mid-flight) does the hint fall
+// back to the previous behavior, the StableExecutable spelling.
 func (a *App) logFanotifyGrant() {
 	a.grantOnce.Do(func() {
 		if a.plat.goos != "linux" || a.plat.executable == nil {
@@ -261,17 +345,30 @@ func (a *App) logFanotifyGrant() {
 		if err != nil || exe == "" {
 			return // no path to print; the README documents the command
 		}
-		if !filepath.IsAbs(exe) {
-			if abs, aerr := filepath.Abs(exe); aerr == nil {
-				exe = abs
+		if resolved, ok := platform.ResolvedExecutable(exe); ok {
+			exe = resolved
+		} else {
+			if !filepath.IsAbs(exe) {
+				if abs, aerr := filepath.Abs(exe); aerr == nil {
+					exe = abs
+				}
 			}
+			args0 := ""
+			if a.plat.args0 != nil {
+				args0 = a.plat.args0()
+			}
+			exe = platform.StableExecutable(exe, args0)
 		}
-		args0 := ""
-		if a.plat.args0 != nil {
-			args0 = a.plat.args0()
-		}
-		exe = platform.StableExecutable(exe, args0)
 		log.Printf("watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep %s", exe)
+		log.Printf("watch: file capabilities stick to that exact file -- re-run the setcap command after any upgrade that replaces the binary (e.g. brew upgrade)")
+		// The crash-visibility tradeoff (issue #58, "secure-exec
+		// facts", verified): file caps set AT_SECURE, under which the
+		// Go runtime forces GOTRACEBACK=none (not overridable) and the
+		// process is non-dumpable -- a caps-on crash reports one line
+		// with no traceback and no core. Ambient caps are the
+		// verified full-visibility alternative; the README carries
+		// the exact capsh command.
+		log.Printf("watch: note: file capabilities force secure-exec (GOTRACEBACK=none, non-dumpable) -- crashes report as one line; ambient caps keep full crash reports (see README / issue #58)")
 	})
 }
 
@@ -324,8 +421,18 @@ func (a *App) restartIndexLayer(next *config.Config) error {
 			// The initial walk is in flight with the previous scope:
 			// its completion path starts the watch layer (reading the
 			// new configuration) and then converges via one rescan.
+			// A pre-build watcher runs the PREVIOUS configuration
+			// (backend, budget, excludes), so it is stopped here and
+			// the completion path builds a fresh one from the new
+			// values; the queued rescan covers what it would have
+			// held.
 			a.rescanOnWatchUp = true
+			ew := a.earlyWatcher
+			a.earlyWatcher = nil
 			a.watchMu.Unlock()
+			if ew != nil {
+				ew.Stop()
+			}
 			log.Printf("config: index scope updated; the running initial build finishes first, then a rescan converges the index")
 		case a.buildFinished:
 			// The initial build ended WITHOUT bringing the trio up: it

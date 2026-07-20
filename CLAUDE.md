@@ -243,7 +243,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   printer too), and kicks the initial disk walk in a
   goroutine (under a cancellable context) whose ticks render through
   the printer (Done clears the line before the completion/error
-  logs); the BuildFromDisk window runs under a lowered GOGC
+  logs); buildIndex FIRST arms the live-watch backend
+  (startEarlyWatch in watch.go: newWatchLayer -- the construction
+  shared with startWatch -- then watch.StartDeferred, stored in
+  a.earlyWatcher + ONE "watch: backend %s armed before the initial
+  index build ..." line, suppressed for the "none" backend; failure
+  = one log line + the old watch-after-build ordering) so changes
+  landing during the walk are queued instead of lost -- the
+  cancel/failure paths Stop-and-detach it (takeEarlyWatcher; Shutdown
+  and restartIndexLayer's in-flight branch do the same, the latter
+  because the early watcher runs the PREVIOUS config), never leaking
+  its marks; the BuildFromDisk window runs under a lowered GOGC
   (gcbound.go: boundBuildGC over the plat.setGCPercent seam,
   production debug.SetGCPercent, buildGCPercent 40, restored
   immediately after BuildFromDisk returns on every path -- walk churn
@@ -257,7 +267,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (WatchMaxWatches, WatchExcludes -> a second watch-only Excluder,
   WatchBackend -> watch.Options.Backend, SweepInterval,
   SweepDisabled = no Sweeper + one loud warning; see the
-  internal/watch bullet), then announces the effective backend ONCE:
+  internal/watch bullet) -- ADOPTING the armed pre-build watcher when
+  one exists (wire the trio around it, then watch.Release: the fill
+  runs against the just-swapped index and the held events apply;
+  no early watcher = the old New+Start path) -- then announces the
+  effective backend ONCE:
   `watchBackendFor(st.Backend)` builds the "watch:backend" payload
   {backend "fanotify"|"fsevents"|"inotify"|"kqueue"|"windows"|
   "none", full bool (fanotify AND fsevents), hint string (empty when
@@ -267,11 +281,24 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   unavailable") texts otherwise, hintWatchFailed when the watcher
   itself failed to start -> backend forced to "none")}, and when NOT
   full `logFanotifyGrant()` first logs -- once per App, linux only
-  (plat.goos), the grant line BEFORE the emit (tests synchronize on
+  (plat.goos), the grant lines BEFORE the emit (tests synchronize on
   the recorded event, then read the log) -- "watch: enable
   full-filesystem watching with: sudo setcap
   cap_sys_admin,cap_dac_read_search+ep <path>" with the path through
-  platform.StableExecutable(exe, args0), mirroring hotkey.go; after
+  platform.ResolvedExecutable (the REAL file: setcap refuses
+  symlinks, and the brew bin/ shim IS one -- the field failure; only
+  when resolution fails does it fall back to the old
+  platform.StableExecutable(exe, args0) spelling), followed by ONE
+  persistence-caveat line ("file capabilities stick to that exact
+  file -- re-run the setcap command after any upgrade that replaces
+  the binary (e.g. brew upgrade)") -- deliberately the OPPOSITE
+  path preference from hotkey.go's keybinding command, which must
+  survive upgrades -- and ONE secure-exec tradeoff line (file caps
+  set AT_SECURE: GOTRACEBACK forced to none + non-dumpable, so
+  caps-on crashes report one line; ambient caps are the verified
+  full-visibility alternative -- issue #58 "secure-exec facts",
+  README "Crash-visibility tradeoff" carries the capsh command);
+  after
   startWatch returns (it waits for the watcher's initial
   registration), buildIndex logs ONE "index: startup complete: N
   entries in D, R ram" summary -- after watch establishment, so the
@@ -293,7 +320,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   initial build (its walk aborts promptly, logs "index: initial
   build cancelled", discards the partial store, and never starts the
   watch layer), and stops rescanner+sweeper+watcher (in that order;
-  sweeper nil-tolerated when disabled) plus the theme watcher
+  sweeper nil-tolerated when disabled) plus a still-armed pre-build
+  early watcher (idempotent with the build goroutine's own stop) and
+  the theme watcher
   cleanly -- every step bounded, so quit never waits out a disk
   walk. Summons that arrive before
   the frontend can render are deferred: `DomReady` (wired to Wails
@@ -2345,7 +2374,26 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   live watching, sweeps only), Budget, WatchedDirs,
   IndexedDirs, DroppedWatches, Evictions, Overflows, Degraded};
   `InitialRegistration()` closes when the first fill finished (the
-  app waits on it before its summary log). `Sweeper` (sweep.go): the
+  app waits on it before its summary log). DEFERRED START
+  (StartDeferred/Release, the app's register-before-index ordering):
+  StartDeferred = Start with the fill and ALL application HELD --
+  the notifier is live immediately (wide marks cover everything, the
+  per-directory model watches just the configured roots), the run
+  loop's hold phase (collectUntilRelease in events.go) drains events
+  into the debouncer's dirty set WITHOUT applying (deduped, bounded
+  by the unexported holdCap, default 65536; new paths beyond it are
+  dropped + latched), and Release (idempotent; wire the
+  Sweeper/Rescanner first) lets the loop run the normal fill (against
+  the CURRENT index -- the app releases after the fresh-store swap)
+  then flush the held set through the ordinary reconcile;
+  reportHoldLoss converges any hold loss (cap drops count+log+degrade
+  as an overflow; overflows that fired while requesters were unwired
+  re-kick) via one sweep request. Stop works held or released
+  (the hold phase exits on ctx cancel and the fill/flush no-op);
+  deferred_test.go pins mid-build-events-reach-final-index,
+  roots-watched-immediately, cap-loss-degrades-and-sweeps,
+  overflow-resweep-at-release, stop-without-release, and
+  Release-as-no-op-on-plain-Start. `Sweeper` (sweep.go): the
   always-on convergence tier -- NewSweeper(m, w != nil, SweepOptions
   {Interval 20m default, MinGap 1m, InitialWatermark (zero = first
   pass re-lists EVERY dir; the app passes build-completion time),
@@ -2571,6 +2619,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   every candidate same-binary-guarded via os.Stat+os.SameFile so a
   foreign same-named binary never wins; tested with real tempdir
   trees, symlinks and t.Setenv(PATH), no seams);
+  `ResolvedExecutable(path)` (resolvedpath.go: the COUNTERPART --
+  Abs + EvalSymlinks to the real regular file, ok=false on any
+  failure; consumed ONLY by the app's setcap grant hint, because
+  setcap refuses symlinks while StableExecutable deliberately
+  prefers them; same real-tempdir test style);
   geometry (`Rect`, `Display{Rect,Work,Primary}`, `PickDisplay`,
   `BarPosition` = centered, top at H/3 - winH/3, clamped;
   `DisplayForWindow` by window center; `WailsPosition` translating

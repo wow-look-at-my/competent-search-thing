@@ -3,8 +3,10 @@ package ffext
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -196,12 +198,29 @@ func TestHostCompactsMultilineJSON(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
 
+	// The host DROPS stdin frames until its socket connection is
+	// stored (by design: "app not connected"), and ln.Accept returning
+	// only proves the DIAL completed -- the relay's setConn runs
+	// moments later on its own goroutine. Writing the first frame on
+	// Accept alone therefore races the drop path (observed as a flaky
+	// 2s read timeout under load), so gate the first write on the
+	// host's own connected log line, which is emitted strictly after
+	// setConn.
+	connected := make(chan struct{})
+	var connOnce sync.Once
+	logf := func(format string, args ...any) {
+		if strings.Contains(fmt.Sprintf(format, args...), "connected to the app") {
+			connOnce.Do(func() { close(connected) })
+		}
+		t.Logf(format, args...)
+	}
+
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	done := make(chan error, 1)
 	go func() {
 		done <- RunHost(HostOptions{
-			In: inR, Out: outW, SocketPath: path, Logf: t.Logf,
+			In: inR, Out: outW, SocketPath: path, Logf: logf,
 			reconnectMin: 5 * time.Millisecond, reconnectMax: 20 * time.Millisecond,
 		})
 	}()
@@ -214,6 +233,11 @@ func TestHostCompactsMultilineJSON(t *testing.T) {
 	conn, err := ln.Accept()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
+	select {
+	case <-connected:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the host never reported its connection")
+	}
 
 	pretty := "{\n  \"type\": \"tabsChanged\",\n  \"tabs\": []\n}"
 	require.NoError(t, WriteFrame(inW, []byte(pretty), MaxOutFrame))

@@ -14,10 +14,26 @@ import (
 // run is the watcher's single event loop: it registers the initial
 // watch set, then feeds dirty paths through the debouncer and
 // reconciles each flushed path against the on-disk truth until the
-// context is cancelled or the notifier closes.
+// context is cancelled or the notifier closes. A deferred start
+// (StartDeferred) prepends the hold phase: events are collected
+// without being applied until Release, the registration pass runs
+// only then (against the index the initial build just swapped in),
+// and the collected paths are applied right after it.
 func (w *Watcher) run(ctx context.Context) {
 	defer close(w.lc.done)
+	if w.releaseCh != nil {
+		w.collectUntilRelease(ctx)
+	}
 	w.addInitialWatches(ctx)
+	if w.releaseCh != nil {
+		// Everything held during the initial build applies now, through
+		// the ordinary reconcile path against the freshly built index;
+		// paths lost to the hold cap degrade like an overflow and are
+		// converged by the sweep requested here (the requesters are
+		// wired by the time Release runs).
+		w.flush(ctx)
+		w.reportHoldLoss(ctx)
+	}
 
 	// The timer tracks the debouncer's deadline. go.mod requires a Go
 	// version with the >=1.23 timer semantics, so Reset/Stop need no
@@ -58,6 +74,88 @@ func (w *Watcher) run(ctx context.Context) {
 				timer.Reset(time.Until(dl))
 			}
 		}
+	}
+}
+
+// collectUntilRelease is the deferred start's hold phase: notifier
+// events are drained into the debouncer's dirty-path set -- deduped,
+// never applied, bounded by holdCap -- until Release closes releaseCh
+// (or Stop cancels, or the notifier dies). Draining continuously keeps
+// the notifier's event channel from backing up, so a long initial
+// build never pushes the backend itself into overflow just because
+// application is held. Notifier errors (kernel-queue overflows
+// included) go through the ordinary handleError; a requester that is
+// not wired yet costs nothing, because reportHoldLoss re-kicks the
+// sweep at release whenever anything was lost while held.
+func (w *Watcher) collectUntilRelease(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-w.releaseCh:
+			return
+		case ev, ok := <-w.n.Events():
+			if !ok {
+				return
+			}
+			if path, ok := w.wantEvent(ev); ok {
+				w.holdAdd(path)
+			}
+		case err, ok := <-w.n.Errors():
+			if !ok {
+				return
+			}
+			w.handleError(err)
+		}
+	}
+}
+
+// holdAdd records one dirty path while held. Re-marking a pending path
+// is free at any size; a NEW path beyond holdCap is dropped and the
+// loss latched (heldDropped), to be reported and swept at release.
+func (w *Watcher) holdAdd(path string) {
+	if w.deb.size() >= w.holdCap && !w.deb.has(path) {
+		w.heldDropped = true
+		return
+	}
+	w.deb.add(path, time.Now())
+}
+
+// reportHoldLoss converges anything lost during the hold phase: paths
+// dropped beyond holdCap, and kernel-queue overflows that fired while
+// no sweeper/rescanner was wired yet (they are wired between the
+// hold and Release). Any loss means the index is stale in unknown
+// ways, so one reconcile sweep is requested -- exactly the overflow
+// recovery path -- and a cap loss additionally counts and logs as an
+// overflow of its own.
+func (w *Watcher) reportHoldLoss(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	var notify func()
+	w.mu.Lock()
+	kick := w.stats.Overflows > 0
+	if w.heldDropped {
+		kick = true
+		notify = w.degradeLocked()
+		w.stats.Overflows++
+	}
+	sweep, rescan := w.requestSweep, w.requestRescan
+	w.mu.Unlock()
+	if w.heldDropped {
+		log.Printf("watch: more than %d paths changed during the initial index build; extras were dropped (degraded), requesting reconcile sweep", w.holdCap)
+		w.heldDropped = false
+	}
+	if notify != nil {
+		notify()
+	}
+	if !kick {
+		return
+	}
+	if sweep != nil {
+		sweep()
+	} else if rescan != nil {
+		rescan()
 	}
 }
 
