@@ -18,6 +18,18 @@ const defaultFrequentSitesMax = 6
 // shorter than this (in runes, trimmed) never reach the provider.
 const firefoxMinQueryLen = 2
 
+// sourcePriorityWeb places a Firefox section (frequent sites or open
+// tabs) ABOVE the file results -- the apps-search promotion extended
+// to the two web sources -- but ONLY when the section's best row
+// matched STRONG (word-start tier or better; see strongTier in
+// engine.go). An open tab or frequent site whose title or host
+// strongly matches the query is what the user is reaching for (the
+// "tampermonkey" field report: an exact-title open-tab row rendered
+// below every file result, weak fuzzy matches included); a weak
+// (substring/fuzzy) best keeps the section below the file results,
+// byte-identical to the old placement.
+const sourcePriorityWeb = 1
+
 // faviconKeyPrefix builds the internal-only IconKey both Firefox
 // sources stamp: "favicon:<pageURL>", the internal/icons key kind the
 // frontend hands to ResolveIcons for the site's real favicon (the
@@ -76,6 +88,19 @@ func (p *firefoxProvider) match(query string, _ *AppInfo) (string, int, bool) {
 }
 
 func (p *firefoxProvider) limit() int { return p.max }
+
+// priority implements the optional prioritized extension exactly like
+// apps-search (sourcePriorityApps): the section earns the above-files
+// zone only when its best row matched at the word-start tier or
+// better; a weak (substring/fuzzy) best keeps it below the file
+// results. The threshold is the engine TIER, never the wire score
+// bands.
+func (p *firefoxProvider) priority(best match.Tier) int {
+	if best <= strongTier {
+		return sourcePriorityWeb
+	}
+	return 0
+}
 
 // candidates hands the sites snapshot to the shared engine: match
 // fields [host (leading "www." stripped), title, URL] -- host hits
