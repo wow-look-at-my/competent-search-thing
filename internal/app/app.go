@@ -241,6 +241,14 @@ type App struct {
 	stats       statsSource
 	statsCancel context.CancelFunc
 
+	// Automatic login-service registration (see service.go in this
+	// package): the Ensure goroutine's cancel func (svcCancel, under
+	// mu). newService is a seam over buildService so unit tests never
+	// stat the real home or exec launchctl/systemctl.
+	svcOnce    sync.Once
+	newService func() serviceRegistrar
+	svcCancel  context.CancelFunc
+
 	// Startup progress printer (see progress.go in this package): the
 	// initial index build's "indexing..." line -- in-place on a TTY
 	// (where it also intercepts the standard logger until Shutdown
@@ -402,6 +410,7 @@ func New(m *index.Manager, opt Options) *App {
 	a.newProgress = a.buildProgress
 	a.newIcons = a.buildIcons
 	a.newFfext = a.buildFfext
+	a.newService = a.buildService
 	return a
 }
 
@@ -460,6 +469,9 @@ func (a *App) Startup(ctx context.Context) {
 	a.spaceOnce.Do(a.startSpaceWatch)
 	a.trayOnce.Do(a.startTray)
 	a.statsOnce.Do(a.startStats)
+	// The automatic login-service registration (service.go in this
+	// package): async, env-gated, yield-aware; see the file comment.
+	a.svcOnce.Do(a.startService)
 	a.fpsOnce.Do(a.startFPSInfo)
 	// Early WebKit near-60 uncap attempt (fps.go; darwin only --
 	// before first render when possible; DomReady retries and logs).

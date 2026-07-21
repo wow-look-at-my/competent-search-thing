@@ -142,6 +142,49 @@ package-manager (APT, Homebrew, npm, OCI) reference. Avoid the
 debs are generated server-side without `Depends`, which is exactly the
 missing-libraries trap the CI-built `.deb` exists to fix.
 
+## Runs as a login service
+
+The app registers itself as a per-user login service the first time
+you run it -- automatically, whatever the install method. No
+`brew services start`, no systemctl incantation.
+
+- **What it does**: on GUI startup the app writes a launchd
+  LaunchAgent (macOS) or a systemd user unit (Linux), enables it for
+  login, and stops there -- it never starts a second copy of itself.
+  The service takes over from your next login.
+- **Crash-only restart**: a crash is restarted; a clean exit (quit,
+  the single-instance handoff) is never respawned.
+- **Survives upgrades**: if an upgrade moves the binary (brew keg
+  paths), the next launch self-heals the recorded path with one loud
+  `service: repaired ...` log line.
+- **Polite**: if something else already owns login startup, the app
+  yields with one log line and touches nothing.
+
+Who owns login startup, per install method:
+
+| Install method | Owner |
+|---|---|
+| Debian/Ubuntu `.deb` (recommended, from `/deb`) | The app self-registers (this deb ships no unit). |
+| APT repo / `fmt=deb` (unrecommended here) | The deb's packaged unit; the app yields to it. |
+| Homebrew (macOS) | Self-registration -- or run `brew services start pazer/build/competent-search-thing` once and brew services owns it (the app yields). |
+| Homebrew (Linux) | The app self-registers. If you had used `brew services start`, brew owns it until one `brew services stop pazer/build/competent-search-thing`. |
+| Raw binary | The app self-registers. |
+| Windows | Not supported yet; use any autostart mechanism. |
+
+Opting out and manual control (`competent-search-thing service ...`):
+
+- `service uninstall` removes the service AND writes
+  `<configDir>/service.optout`, so the app never re-registers against
+  your wish; `service install` clears the marker and re-installs.
+- `service status` reports the real observed state; `service restart`
+  kills and relaunches the service instance.
+- `COMPETENT_SEARCH_NO_SERVICE=1` disables auto-registration for one
+  process (CI runners, scripting) without persisting anything.
+
+Logs: macOS
+`~/Library/Logs/competent-search-thing/competent-search-thing.log`;
+Linux `journalctl --user -u competent-search-thing`.
+
 ## Indexing scope
 
 By default the app indexes your **whole filesystem**, Everything-style:
@@ -3007,6 +3050,9 @@ For debugging and unusual setups:
   [Frame pacing on macOS](#frame-pacing-on-macos)). Off = zero cost.
 - `COMPETENT_SEARCH_KEEP_NEAR60=1` -- macOS: skip the WebKit near-60
   uncap (keep WebKit's default 60fps cap on >60Hz panels).
+- `COMPETENT_SEARCH_NO_SERVICE=1` -- skip the automatic login-service
+  registration for this process (see
+  [Runs as a login service](#runs-as-a-login-service)).
 
 ### What Wayland does not allow
 
