@@ -12,9 +12,9 @@
 //
 // fileIcon(name, isDir) itself stays SYNCHRONOUS and pure: render.ts
 // asks per row and gets the glyph character, its icon-font CSS class
-// ("fi" | "fa" | "mf" | "oct" -- fileicons.css's @font-face classes
-// over the committed woff2 files), and the pack's dark/light colour
-// pair back immediately. installFileIcons clears the memo cache, so
+// ("fi" | "fa" | "mf" | "oct" | "di" -- fileicons.css's @font-face
+// classes over the committed woff2 files), and the pack's dark/light
+// colour pair back immediately. installFileIcons clears the memo cache, so
 // rows resolved before the table landed self-correct on their next
 // render.
 //

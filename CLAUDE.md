@@ -2267,11 +2267,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   font/cp/suffix/regex/flags/dark/light) feeds internal/app's
   GetFileIcons bound method (fileicons.go there), fetched once by
   the frontend at wire-up. Tests: the retargeted committed-data
-  integrity gate (counts 2158/42, shapes, pack-content pins,
+  integrity gate (counts 2363/51, shapes, pack-content pins incl.
+  the recovered Devicons-face and icon-class rules,
   corruption/hardening over first-party-writer-built containers) +
   woff2cmap_test.go, the Go port of tools/woff2cmap.mjs (test-only;
   github.com/andybalholm/brotli) cross-checking every rule codepoint
-  against the four committed woff2 cmaps -- the tofu-glyph drift
+  against the five committed woff2 cmaps -- the tofu-glyph drift
   gate, reading the fonts from frontend/src/fileicons/fonts/.
 - `internal/appctx` -- app-context collection for the plugin system,
   pure and headless-tested: the data types (AppInfo / InstalledApp
@@ -3218,9 +3219,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   layer's frontend half -- the mapping artifact is Go-side now:
   internal/fileicons/data.bin, a compact binpazer container
   (wow-look-at-my/bin-file-fmt) holding the generated rule set from
-  the vendored file-icons/atom pack (2,158 file + 42 dir rules;
-  pinned pack commit, per-font licenses and the devopicons exclusion
-  in LICENSES.md; regeneration via tools/convert.mjs -> the
+  the vendored file-icons/atom pack (2,363 file + 51 dir rules --
+  incl. the Devicons-face rules over the vendored
+  file-icons/DevOpicons font and the Atom-builtin octicon classes
+  resolved from the octicons checkout's codepoints.json; pinned
+  pack commit, per-font licenses and the devopicons provenance
+  receipts in LICENSES.md; regeneration via tools/convert.mjs -> the
   tools/emitbin.mjs payload encoder -> the first-party `binpazer`
   CLI pack+validate -- see its README.md), decoded by
   internal/fileicons and fetched ONCE at wire-up over the
@@ -3228,9 +3232,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   fire-and-forget pattern; installFileIcons compiles the wire table,
   refuses malformed defaults whole, and clears the memo cache so
   pre-install resolutions self-correct; until the answer lands the
-  matcher serves the pack's octicon defaults). fonts/ = the four
+  matcher serves the pack's octicon defaults). fonts/ = the five
   committed woff2 icon fonts (file-icons ISC, FontAwesome 4.7 OFL
-  1.1, MFixx MIT, Octicons v4.4.0 MIT), fileicons.ts = the matcher
+  1.1, MFixx MIT, Octicons v4.4.0 MIT, DevOpicons -- see LICENSES.md
+  for its provenance receipts), fileicons.ts = the matcher
   (`fileIcon(name, isDir)`: pack-order first-match -- rules
   pre-sorted priority-desc so special filenames/compound suffixes
   beat generic extensions; string rule = case-insensitive basename
@@ -3239,7 +3244,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   throws, no match = the pack's octicons file-text/file-directory
   defaults, uncolored -> fg-dim) + the pure `isLightBackground`
   (the pack's own HSL-lightness >= 0.5 motif rule over
-  hex/rgb()/hsl(); unparseable = dark), fileicons.css = the four
+  hex/rgb()/hsl(); unparseable = dark), fileicons.css = the five
   @font-face decls (vite emits the woff2 assets; wails serves them
   from the embedded dist) + .file-glyph slot styling (16px column,
   per-font pack sizings) consuming --fi-dark/--fi-light with the

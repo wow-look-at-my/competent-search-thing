@@ -49,7 +49,7 @@ export const ICON_RULES_GUID = "ea78f6bb-edf3-4b73-b114-a607c767ce0f";
 // FONT_ORDER is the fontIdx space written into the payload header.
 // The payload self-describes it, so the reader never hardcodes this
 // list -- but the encoder pins it for deterministic output.
-export const FONT_ORDER = ["fi", "fa", "mf", "oct"];
+export const FONT_ORDER = ["fi", "fa", "mf", "oct", "di"];
 
 class ByteWriter {
   constructor() {

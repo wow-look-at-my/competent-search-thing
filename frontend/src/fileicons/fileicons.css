@@ -41,6 +41,13 @@
   font-style: normal;
 }
 
+@font-face {
+  font-family: "Devicons";
+  src: url("./fonts/devopicons.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+}
+
 /* Base glyph slot: the same 16px footprint as the old template svg,
    centered so every font's glyph sits in a uniform column. Specificity
    (.result .icon.file-glyph) deliberately outranks style.css's
@@ -58,7 +65,7 @@ html.icons-light .result .icon.file-glyph {
 }
 
 /* Per-font family + size classes -- the pack's own icons.less sizings
-   (.fi 15px, .fa 13px, .mf 14px, .octicons 16px). */
+   (.fi 15px, .fa 13px, .mf 14px, .octicons 16px, .devicons 16px). */
 .file-glyph.fi {
   font-family: "file-icons";
   font-size: 15px;
@@ -76,5 +83,10 @@ html.icons-light .result .icon.file-glyph {
 
 .file-glyph.oct {
   font-family: "Octicons Regular";
+  font-size: 16px;
+}
+
+.file-glyph.di {
+  font-family: "Devicons";
   font-size: 16px;
 }

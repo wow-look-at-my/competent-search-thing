@@ -499,7 +499,11 @@ buildhost (see [Install](#install)):
 - [x] File-type icons: recognizable coloured glyphs per extension and
       special filename from the
       [file-icons](https://github.com/file-icons/atom) pack (fonts
-      vendored under ISC / OFL 1.1 / MIT, receipts in
+      vendored under ISC / OFL 1.1 / MIT, plus the
+      [DevOpicons](https://github.com/file-icons/DevOpicons) face --
+      a derivative of the MIT
+      [Devicons](https://github.com/vorillaz/devicons); provenance
+      and trademark receipts in
       `frontend/src/fileicons/LICENSES.md`; the mapping ships as a
       compact [binpazer](https://github.com/wow-look-at-my/bin-file-fmt)
       binary artifact); variants follow the theme's light/dark
