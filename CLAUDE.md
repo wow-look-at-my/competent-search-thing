@@ -717,8 +717,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   or failed to load; nextLaunch lists only the ruled
   window.translucent),
   "plugin:results" (payload plugin.Emission
-  {plugin,name,gen,results,priority} -- priority omitempty, > 0 =
-  the frontend's above-files zone), "stats:update" (payload
+  {plugin,name,gen,results,priority} -- priority omitempty,
+  section-ORDERING metadata: the frontend renders every section
+  above the file results (files last), priority ordering sections
+  among themselves), "stats:update" (payload
   sysstats.Snapshot {enabled,cpuPct,cpuOk,gpuPct,gpuOk,memUsed,
   memTotal,memOk,swapUsed,swapTotal,swapOk,netRxBps,netTxBps,netOk};
   enabled always true on the event -- it only ever fires from a live
@@ -2036,14 +2038,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   exact-title open-tab row rendered below every file result, weak
   fuzzy matches included) -- each = 1 when best <= strongTier =
   TierWordStart -- a STRONG match (triggered/exact/prefix/word-start)
-  earns the above-file-results placement, a weak best (substring/
-  fuzzy) emits at 0 and renders below the files: the macOS "test"
-  field report, where scattered-subsequence app hits outranked a
-  directory literally named "test" -- and a PROMOTED emission is cut
+  earns priority 1, a weak best (substring/fuzzy) emits at 0
+  (originally the below-files placement -- the macOS "test" field
+  report, where scattered-subsequence app hits outranked a directory
+  literally named "test"; since the 2026-07-21 files-last frontend
+  default every section renders above the file results and the
+  priority ORDERS sections, strong ones first) -- and a PROMOTED
+  emission is cut
   to its strong rows inside sourceResults (generic for every
   prioritized source: weak rows must never ride
-  the promoted zone; they render below the files whenever no strong
-  match exists, the whole section then being priority 0); the
+  the promoted zone; they render in the whole-section-at-priority-0
+  shape whenever no strong match exists, all rows kept); the
   targeted apps provider stays 0
   (bang queries have no files to outrank), and external plugins can
   NEVER set it -- the wire Response has no priority field and
@@ -2103,10 +2108,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   engine's canonical bands over the app name (words = letter/digit
   runs, so spaces, hyphens, dots split), cap 6, same run_command
   launch, and a prioritized source (priority(best) = 1 only at
-  word-start tier or better -> its Emission renders above the file
-  results with only its strong rows; weak bests emit at 0, below the
-  files -- the tier-gated promotion the two Firefox web sources
-  share); bang routing keeps it
+  word-start tier or better -> its Emission carries only its strong
+  rows and orders ahead of priority-0 sections; weak bests emit at 0
+  with all rows -- the tier-gated promotion the two Firefox web
+  sources share); bang routing keeps it
   exclusive with the targeted !app
   path, and a nil/empty snapshot emits nothing;
   builtin_openwindows.go "windows"/Open Windows -- also in the normal
@@ -2131,9 +2136,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   resolves it to the site's real favicon, the glyph standing until
   then; the sanitizer strips IconKey from external results, favicon
   kind pinned) / open_url action; a prioritized source
-  (sourcePriorityWeb: a word-start-or-better best promotes the section
-  above the file results cut to its strong rows, weak bests emit at 0
-  below the files -- the apps-search tier gate);
+  (sourcePriorityWeb: a word-start-or-better best promotes the
+  section to priority 1 cut to its strong rows, weak bests emit at 0
+  with all rows -- the apps-search tier gate);
   builtin_tabs.go "firefox-tabs"/Open Tabs -- same NO-bangs
   all-queries semantics, registered ONLY when Options.OpenTabs (the
   getter yielding []TabInfo, mirror of internal/firefox.Tab) is
@@ -3267,7 +3272,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   src/test-setup.ts, which loads the REAL index.html body into jsdom
   before render.ts's module-load template grabs, so the DOM-order
   tests fail if the zones/templates change shape; src/priority.test.ts
-  pins priority-above-files rendering, the flat traversal order, and
+  pins the files-last rendering (all sections above the file rows,
+  the sectionAboveFiles predicate, the empty below zone), the flat
+  traversal order, and
   the reconcileSelection rules, src/stats.test.ts pins the stats
   formatters + renderStats' dash-vs-value rules + the stats-row WIDTH
   CONTRACT (formatter-maxima sweeps and the style.css ch-reservation
@@ -3282,9 +3289,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   push debounce -- all run in the CI linux job's frontend step).
   `index.html`
   (query row with inline SVG magnifier + hidden bang chip; #results
-  split into #priority-results (plugin sections with priority > 0,
-  ABOVE the files) / #file-results / static #empty ("No matches") /
-  #plugin-results zones; status bar + degraded chip + backend chip;
+  split into #priority-results (ALL plugin sections, ABOVE the files
+  -- file results default to LAST, the 2026-07-21 ruling) /
+  #file-results / static #empty ("No matches") / #plugin-results
+  (renders EMPTY by default; retained as the home of the
+  weak-sections-below veto variant) zones; status bar + degraded
+  chip + backend chip;
   the #stats row
   BELOW the status bar -- the bottom-most chrome, five STATIC
   label/value span pairs (CPU GPU RAM SWP NET, value ids
@@ -3345,11 +3355,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   "plugin:results" emissions are dropped unless gen === seq, else
   upsert that plugin's section (keyed by id; priority = e.priority ??
   0) and renderPluginArea re-renders BOTH plugin zones
-  (render.ts splitByPriority: priority > 0 -> #priority-results above
-  the file rows -- the apps section -- everything else below;
-  compareSections = priority desc, max score desc, plugin id);
-  selection is one flat list in DOM order -- priority rows, then file
-  rows, then below-zone plugin rows: ArrowUp/Down wrap, Home/End.
+  (render.ts splitByPriority over the ONE sectionAboveFiles
+  predicate: EVERY section -> #priority-results above the file rows
+  -- file results default to LAST -- and #plugin-results renders
+  empty, retained as the veto variant's home (the variant = the
+  predicate returning s.priority > 0 again + the priority.test.ts
+  zone pins); compareSections is UNCHANGED = priority desc, max
+  score desc, plugin id, so strong priority-1 sections still order
+  ahead of weak ones);
+  selection is one flat list in DOM order -- plugin section rows,
+  then file rows, then the empty-by-default below zone: ArrowUp/Down
+  wrap, Home/End, and with any section present the auto-selected row
+  0 is the first plugin row.
   TWO DISTINCT POINTER STATES (the hover-steals-selection field
   report): the ACTIVE selection (state.selected) moves ONLY through
   keyboard navigation and the auto-select/reconcile paths and is the
@@ -3369,7 +3386,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   IDENTITY at its shifted index, while an un-navigated bar re-runs
   auto-select on row 0 so a late apps section takes the selection
   Spotlight-style (never at a blank query -- the cheat sheet stays
-  unselected, and its section is always priority 0/below);
+  unselected, an ordinary priority-0 section rendered above the
+  EMPTY file list, pixel-identical to its old below-zone painting);
   selection scrollIntoView fires ONLY for keyboard/auto-
   select navigation (applySelection/select carry a scroll flag;
   the plugin-area re-render selects without scrolling, so

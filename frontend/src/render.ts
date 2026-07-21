@@ -195,16 +195,34 @@ export interface PluginSection {
   name: string; // section header display name
   results: PluginResult[];
   // Source priority (Emission.priority; 0 when absent on the wire).
-  // priority > 0 = the section renders in #priority-results ABOVE
-  // the file rows; the value is registry-stamped metadata for builtin
-  // sources -- external plugins can never carry one.
+  // Section-ORDERING metadata for builtin sources -- external
+  // plugins can never carry one. Every section renders above the
+  // file rows (sectionAboveFiles below; files default to last), the
+  // priority orders sections among themselves (compareSections),
+  // and a priority > 0 section arrives already cut to its strong
+  // rows by the Go side.
   priority: number;
 }
 
-// splitByPriority separates the sections for the two render zones:
-// priority > 0 renders above the file rows, everything else keeps
-// the classic below-files zone. Order within each group is left to
-// compareSections at render time.
+// sectionAboveFiles decides one section's render zone. File results
+// default to LAST (the 2026-07-21 ruling): EVERY section -- weak or
+// strong, whatever its priority -- renders in #priority-results
+// above the file rows, and the below zone (#plugin-results) renders
+// empty. THE VETO VARIANT lives here: restoring "weak sections back
+// below the files" is renaming `_s` to `s` and returning
+// `s.priority > 0` again, plus the zone pins in priority.test.ts --
+// the below zone and its render path are retained for exactly that.
+export function sectionAboveFiles(_s: PluginSection): boolean {
+  return true;
+}
+
+// splitByPriority separates the sections for the two render zones by
+// the sectionAboveFiles predicate: all sections land in the
+// above-files group by default, and the below-files `normal` group
+// stays empty until the veto variant. Order within each group is
+// left to compareSections at render time (priority desc, max score
+// desc, plugin id), so strong (priority > 0) sections still render
+// ahead of weak ones.
 export function splitByPriority(sections: PluginSection[]): {
   priority: PluginSection[];
   normal: PluginSection[];
@@ -212,7 +230,7 @@ export function splitByPriority(sections: PluginSection[]): {
   const priority: PluginSection[] = [];
   const normal: PluginSection[] = [];
   for (const s of sections) {
-    (s.priority > 0 ? priority : normal).push(s);
+    (sectionAboveFiles(s) ? priority : normal).push(s);
   }
   return { priority, normal };
 }
