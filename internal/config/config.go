@@ -105,16 +105,38 @@ const (
 
 // Preview pane defaults (see PreviewConfig). The window grows to
 // DefaultPreviewWindowWidth x DefaultPreviewWindowHeight when the pane
-// is enabled; the size knobs bound what one preview may cost.
+// is enabled -- a deliberately modest step up from the 780x550 base
+// bar (not the pre-v8 1600x800 doubling) now that the pane is on by
+// default; the size knobs bound what one preview may cost.
 const (
-	DefaultPreviewWindowWidth  = 1600
-	DefaultPreviewWindowHeight = 800
+	DefaultPreviewWindowWidth  = 1100
+	DefaultPreviewWindowHeight = 700
 	DefaultPreviewTextMaxKB    = 256
 	DefaultPreviewImageMaxEdge = 800
 	DefaultPreviewDirMax       = 200
 	DefaultPreviewKagiMax      = 8
 	DefaultPreviewOpenAIModel  = "gpt-5-mini"
 	DefaultPreviewOpenAITokens = 1024
+	// DefaultPreviewAnthropicModel is the Anthropic answer model:
+	// the cheapest current-generation model, the right default for
+	// short preview answers (the gpt-5-mini analogue).
+	DefaultPreviewAnthropicModel  = "claude-haiku-4-5"
+	DefaultPreviewAnthropicTokens = 1024
+	DefaultPreviewCustomTokens    = 1024
+)
+
+// AI answer provider selector values (preview.aiProvider). "openai"
+// and "anthropic" are the known providers; "custom" points the
+// OpenAI-compatible client at a user-typed base URL (Ollama, LM
+// Studio, vLLM, any /v1/responses-speaking server). Normalize repairs
+// empty/unknown values to the default, the schema enum stays in
+// lockstep (the watcher.backend convention).
+const (
+	AIProviderOpenAI    = "openai"
+	AIProviderAnthropic = "anthropic"
+	AIProviderCustom    = "custom"
+
+	DefaultPreviewAIProvider = AIProviderOpenAI
 )
 
 // SchemaRef is the value stamped into Config.Schema: a relative
@@ -483,12 +505,19 @@ type OpenTabsConfig struct {
 
 // PreviewConfig configures the preview pane: a right-hand pane inside
 // a widened window showing the selected result (file contents, image
-// thumbnails, directory listings, metadata). The zero value -- the
-// default -- keeps the pane off and the window at its classic size.
+// thumbnails, directory listings, metadata). ON by default since
+// rootsVersion 8 (preview.enabled=false is the opt-out); the
+// file/dir/image previews need no configuration, while the web/AI
+// strips stay disabled-with-a-hint until their provider is set up.
 type PreviewConfig struct {
-	// Enabled turns the preview pane on. It is read once at startup
-	// (the window size cannot change while the app runs).
-	Enabled bool `json:"enabled"`
+	// Enabled turns the preview pane on -- the DEFAULT since
+	// rootsVersion 8: the affirmative *bool convention (nil = absent
+	// = ON; Normalize repairs nil to explicit true, the tray.enabled
+	// pattern). An explicit false written after the flip is a
+	// respected opt-out; a machine-written pre-v8 false (the
+	// plain-bool era serialized false on every save) is reset to on
+	// by the v8 migration with a loud note (see migrate.go).
+	Enabled *bool `json:"enabled"`
 	// WindowWidth is the window width in pixels while the pane is
 	// enabled (default 1600). Ignored when Enabled is false.
 	WindowWidth int `json:"windowWidth"`
@@ -503,10 +532,25 @@ type PreviewConfig struct {
 	ImageMaxEdge int `json:"imageMaxEdge"`
 	// DirMaxEntries caps a directory listing preview (default 200).
 	DirMaxEntries int `json:"dirMaxEntries"`
+	// AIProvider picks which provider answers the explicit AI
+	// preview (Ctrl+I): "openai" (the default), "anthropic", or
+	// "custom" (an OpenAI-compatible endpoint named by
+	// preview.custom.baseUrl). Only the selected provider's section
+	// is consulted; the others keep their values for switching back.
+	// Normalize trims, lowercases, and repairs empty/unknown values
+	// to "openai".
+	AIProvider string `json:"aiProvider"`
 	// Kagi configures the explicit-trigger Kagi web-search preview.
 	Kagi PreviewKagiConfig `json:"kagi"`
-	// OpenAI configures the explicit-trigger OpenAI answer preview.
+	// OpenAI configures the OpenAI answer provider (aiProvider
+	// "openai").
 	OpenAI PreviewOpenAIConfig `json:"openai"`
+	// Anthropic configures the Anthropic answer provider (aiProvider
+	// "anthropic").
+	Anthropic PreviewAnthropicConfig `json:"anthropic"`
+	// Custom configures the user-typed OpenAI-compatible answer
+	// provider (aiProvider "custom").
+	Custom PreviewCustomConfig `json:"custom"`
 }
 
 // PreviewKagiConfig configures the Kagi web-search preview provider.
@@ -539,6 +583,48 @@ type PreviewOpenAIConfig struct {
 	// to <baseUrl>/v1/responses (the Responses API).
 	BaseURL string `json:"baseUrl"`
 	// Model names the model answering (default "gpt-5-mini").
+	Model string `json:"model"`
+	// MaxOutputTokens caps one answer (default 1024).
+	MaxOutputTokens int `json:"maxOutputTokens"`
+}
+
+// PreviewAnthropicConfig configures the Anthropic answer preview
+// provider (active when preview.aiProvider is "anthropic").
+type PreviewAnthropicConfig struct {
+	// APIKey is the Anthropic API key (secret; passed through
+	// verbatim, never logged). Empty means "use the
+	// ANTHROPIC_API_KEY environment variable, if set"; with neither,
+	// the answer preview stays unavailable.
+	APIKey string `json:"apiKey"`
+	// BaseURL is a custom API base URL; empty means "use the
+	// ANTHROPIC_BASE_URL environment variable, if set", else the
+	// official endpoint (https://api.anthropic.com). Passed through
+	// verbatim; requests go to <baseUrl>/v1/messages (the Messages
+	// API).
+	BaseURL string `json:"baseUrl"`
+	// Model names the model answering (default "claude-haiku-4-5").
+	Model string `json:"model"`
+	// MaxOutputTokens caps one answer (default 1024).
+	MaxOutputTokens int `json:"maxOutputTokens"`
+}
+
+// PreviewCustomConfig configures a user-typed OpenAI-compatible
+// answer endpoint (active when preview.aiProvider is "custom") --
+// Ollama, LM Studio, vLLM, or any server speaking the Responses API.
+type PreviewCustomConfig struct {
+	// APIKey is the endpoint's API key, when it needs one (secret;
+	// passed through verbatim, never logged). Local servers usually
+	// need none -- empty sends no Authorization header. No
+	// environment fallback.
+	APIKey string `json:"apiKey"`
+	// BaseURL is the endpoint's base URL -- REQUIRED for the custom
+	// provider to be usable; requests go to <baseUrl>/v1/responses
+	// (the OpenAI Responses API wire shape). No environment
+	// fallback.
+	BaseURL string `json:"baseUrl"`
+	// Model names the model answering -- required (there is no
+	// sensible default for an unknown server; the app never invents
+	// one).
 	Model string `json:"model"`
 	// MaxOutputTokens caps one answer (default 1024).
 	MaxOutputTokens int `json:"maxOutputTokens"`

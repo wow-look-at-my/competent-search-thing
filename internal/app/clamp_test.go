@@ -91,15 +91,18 @@ func TestApplierClampsPreviewMountGrowth(t *testing.T) {
 	r.cursorX, r.cursorY = 400, 300
 	r.displays = smallDisplay()
 	a.Startup(context.Background())
-	seedBaseline(a, config.Default())
+	baseOff := config.Default()
+	baseOff.Preview.Enabled = config.Bool(false) // the mount is the diff under the default-ON pane
+	seedBaseline(a, baseOff)
 
 	next := config.Default()
-	next.Preview.Enabled = true // 1600x800 preview defaults
+	next.Preview.Enabled = config.Bool(true) // 1100x700 preview defaults
 	res := a.applyConfig(&next, "test")
 	require.Contains(t, res.Applied, "preview")
 	require.True(t, r.has("setWindowSize:800x580"), "the preview growth renders clamped to the screen")
 	w, h := a.windowSize()
-	require.Equal(t, [2]int{1600, 800}, [2]int{w, h}, "the desired (configured) size is retained")
+	require.Equal(t, [2]int{config.DefaultPreviewWindowWidth, config.DefaultPreviewWindowHeight}, [2]int{w, h},
+		"the desired (configured) size is retained")
 }
 
 func TestWaylandShowClampsViaWorkAreaProbe(t *testing.T) {

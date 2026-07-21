@@ -20,7 +20,7 @@ const (
 	metaTimeout  = 2 * time.Second  // metadata, directory and text previews
 	imageTimeout = 4 * time.Second  // image decode + downscale
 	webTimeout   = 10 * time.Second // Kagi web search (network)
-	aiTimeout    = 90 * time.Second // OpenAI answer (network, slow models)
+	aiTimeout    = 90 * time.Second // AI answer (network, slow models)
 )
 
 // headSniffBytes is how much of a file the binary sniff reads.
@@ -59,8 +59,13 @@ type Options struct {
 	KagiBaseURL string
 	// KagiMaxResults caps one web search (non-positive = 8).
 	KagiMaxResults int
-	// OpenAIAPIKey enables the explicit AI answer provider; empty
-	// leaves it unconfigured (FetchAI answers with a no-key error).
+	// AIProvider picks which client answers FetchAI: "openai" (the
+	// default, incl. ""), "anthropic", or "custom" (see
+	// aiprovider.go). Only the selected provider's option group below
+	// is consulted.
+	AIProvider string
+	// OpenAIAPIKey enables the OpenAI answer provider; empty leaves
+	// it unconfigured (FetchAI answers with a no-key error).
 	// Never logged or emitted.
 	OpenAIAPIKey string
 	// OpenAIBaseURL overrides the answer API origin; empty = the
@@ -72,6 +77,30 @@ type Options struct {
 	OpenAIModel string
 	// OpenAIMaxOutputTokens caps one answer.
 	OpenAIMaxOutputTokens int
+	// AnthropicAPIKey enables the Anthropic answer provider (the app
+	// layer resolves config / ANTHROPIC_API_KEY first). Never logged
+	// or emitted.
+	AnthropicAPIKey string
+	// AnthropicBaseURL overrides the Anthropic API origin; empty =
+	// the official endpoint (the app layer resolves config /
+	// ANTHROPIC_BASE_URL first). Same normalization rules.
+	AnthropicBaseURL string
+	// AnthropicModel names the answering model.
+	AnthropicModel string
+	// AnthropicMaxOutputTokens caps one answer.
+	AnthropicMaxOutputTokens int
+	// CustomAPIKey is the custom endpoint's key -- OPTIONAL (local
+	// servers usually need none; empty sends no Authorization
+	// header). Never logged or emitted.
+	CustomAPIKey string
+	// CustomBaseURL names the custom OpenAI-compatible endpoint --
+	// REQUIRED for the custom provider (no official fallback exists).
+	CustomBaseURL string
+	// CustomModel names the answering model -- required (no default
+	// is invented for an unknown server).
+	CustomModel string
+	// CustomMaxOutputTokens caps one answer.
+	CustomMaxOutputTokens int
 	// AICachePath is the persistent AI answer cache file ("" =
 	// memory-only for this run).
 	AICachePath string
@@ -118,14 +147,13 @@ type Dispatcher struct {
 	aiFn     func(ctx context.Context, query string) (*AIPreview, error)
 }
 
-// Fetch-path messages for an unavailable provider. They name the
-// config knobs (and environment fallbacks) but never quote values:
-// the keys are secret and a base URL may carry userinfo.
+// Fetch-path messages for an unavailable web-search provider (the AI
+// provider messages live in aiprovider.go). They name the config
+// knobs (and environment fallbacks) but never quote values: the keys
+// are secret and a base URL may carry userinfo.
 const (
 	errWebNoKey   = "kagi: no API key (preview.kagi.apiKey or KAGI_API_KEY)"
 	errWebBadBase = "kagi: invalid baseUrl (preview.kagi.baseUrl)"
-	errAINoKey    = "openai: no API key (preview.openai.apiKey or OPENAI_API_KEY)"
-	errAIBadBase  = "openai: invalid baseUrl (preview.openai.baseUrl / OPENAI_BASE_URL)"
 )
 
 // normalizeBaseURL prepares a configured provider base URL: empty
@@ -203,33 +231,7 @@ func New(parent context.Context, opt Options) *Dispatcher {
 			}
 		}
 	}
-	d.aiErr = errAINoKey
-	if opt.OpenAIAPIKey != "" {
-		if base, err := normalizeBaseURL(opt.OpenAIBaseURL); err != nil {
-			d.aiErr = errAIBadBase
-		} else {
-			openai := NewOpenAIClient(opt.OpenAIAPIKey, opt.OpenAIModel, opt.OpenAIMaxOutputTokens)
-			openai.BaseURL = base
-			d.aiErr = ""
-			cache := NewAICache(opt.AICachePath)
-			cache.Logf = opt.Logf // one-shot corrupt-file note on the lazy load
-			d.aiFn = func(ctx context.Context, query string) (*AIPreview, error) {
-				// Cache lookups key on the CONFIGURED model, so a model
-				// change in config never serves another model's answer.
-				if answer, ok := cache.Get(openai.Model(), query); ok {
-					return &AIPreview{Query: query, Answer: answer, Model: openai.Model(), Cached: true}, nil
-				}
-				answer, model, err := openai.Ask(ctx, query)
-				if err != nil {
-					return nil, err
-				}
-				if err := cache.Put(openai.Model(), query, answer); err != nil {
-					d.logf("preview: AI cache: %v (answer not persisted)", err)
-				}
-				return &AIPreview{Query: query, Answer: answer, Model: model, Cached: false}, nil
-			}
-		}
-	}
+	d.wireAI(opt)
 	return d
 }
 

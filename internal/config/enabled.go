@@ -13,9 +13,9 @@ func Bool(v bool) *bool { return &v }
 // Enabled reports the effective value of an affirmative *bool config
 // switch: nil -- the key absent from config.json -- means the
 // default, which is ON for every pointer-shaped switch in this
-// package (the tray.enabled convention; preview.enabled, the one
-// default-OFF switch, stays a plain bool where absent = false = the
-// default already). Normalize repairs the always-written switches'
+// package (the tray.enabled convention; preview.enabled joined the
+// family at rootsVersion 8, when the pane turned on by default).
+// Normalize repairs the always-written switches'
 // nil pointers to explicit true, so loaded configs carry explicit
 // values; this helper keeps directly built configs (tests, zero
 // values) and the never-repaired rewrites[].enabled on the same

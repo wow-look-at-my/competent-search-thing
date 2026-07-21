@@ -243,15 +243,39 @@ interface FPSSample {
 
 // GetPreviewConfig answer (internal/app PreviewConfigInfo): whether
 // the pane is on, whether the web/AI providers have credentials
-// (config key or environment variable), and the pixel width the left
-// results column keeps while the pane is on (the flag-off bar width,
-// config window.width). The key values themselves never cross to the
-// frontend.
+// (config key or environment variable), which AI provider is selected
+// (preview.aiProvider -- the strip-button hint names its config keys
+// with it), and the pixel width the left results column keeps while
+// the pane is on (the flag-off bar width, config window.width). The
+// key values themselves never cross to the frontend.
 interface PreviewConfigInfo {
   enabled: boolean;
   kagiConfigured: boolean;
-  openaiConfigured: boolean;
+  aiProvider: string;
+  aiConfigured: boolean;
   resultsWidth: number;
+}
+
+// TestPreviewProvider request (internal/app PreviewProviderTest): the
+// config editor's CANDIDATE values for one provider probe -- the
+// working copy's current, possibly unsaved fields, so a key or
+// endpoint can be tested before saving. Go re-validates everything
+// and resolves empty fields through the same environment fallbacks
+// the live dispatcher uses.
+interface PreviewProviderTest {
+  provider: "kagi" | "openai" | "anthropic" | "custom";
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+}
+
+// TestPreviewProvider answer (internal/preview ProbeResult): honest
+// ok/error for one probe. message carries the success summary or the
+// terse provider error (incl. "HTTP <code>" when the endpoint
+// answered non-2xx) -- never key material.
+interface PreviewProbeResult {
+  ok: boolean;
+  message: string;
 }
 
 // GetConfigForEdit answer (internal/app ConfigForEdit): the current
@@ -367,6 +391,17 @@ interface WailsAppBindings {
   GetConfigForEdit(): Promise<ConfigForEdit>;
   SaveConfig(raw: string): Promise<ConfigSaveResult>;
   OpenConfigFile(): Promise<void>;
+  // One minimal REAL request against a provider's candidate settings
+  // (the editor's Test buttons; internal/app testpreview.go over
+  // internal/preview ProbeProvider). Synchronous from the frontend's
+  // view -- the promise resolves with the honest outcome (Go caps the
+  // probe at 15s). NOTE the kagi probe spends one search credit.
+  TestPreviewProvider(req: PreviewProviderTest): Promise<PreviewProbeResult>;
+  // Open an http(s) URL in the system browser WITHOUT hiding the bar
+  // -- the config editor's documentation links (internal/app
+  // openurl.go; open_url-grade validation, the webview never
+  // navigates).
+  OpenExternalURL(url: string): Promise<void>;
   // Drag-edge window resizing (internal/app resize.go, driven by
   // resize.ts). ResizeDrag applies one rAF-coalesced drag frame
   // (clamped, centered, never persisted); ResizeCommit applies the

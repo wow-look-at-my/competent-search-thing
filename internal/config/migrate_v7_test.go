@@ -347,6 +347,7 @@ func TestMigrateV7NoteOrderDeterministic(t *testing.T) {
 		"migrated plugins.entries.alpha.disabled=true -> plugins.entries.alpha.enabled=false",
 		"migrated plugins.entries.zeta.disabled=true -> plugins.entries.zeta.enabled=false",
 		"migrated stats.disabled=true -> stats.enabled=false",
+		"the preview pane is now ON by default; set preview.enabled=false (config editor or config.json) to turn it off",
 	}, c.MigrationNotes)
 }
 
@@ -355,7 +356,8 @@ func TestMigrateV7NoteOrderDeterministic(t *testing.T) {
 func TestMigrateV7DirectDriver(t *testing.T) {
 	c := Config{RootsVersion: 6, Roots: []string{"/"}}
 	require.True(t, c.migrateRootsFor("linux", nil))
-	require.Empty(t, c.MigrationNotes, "nil raw = no old keys present")
+	require.Len(t, c.MigrationNotes, 1, "nil raw = no old v7 keys present; only the v8 preview note fires")
+	require.Contains(t, c.MigrationNotes[0], "preview pane is now ON by default")
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.False(t, c.migrateRootsFor("linux", nil), "stamped current = nothing left to do")
 }

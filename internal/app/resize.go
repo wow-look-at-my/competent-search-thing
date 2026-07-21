@@ -205,7 +205,7 @@ func (a *App) persistDraggedSize(w, h int) error {
 		log.Printf("config: drag resize not persisted: %v", err)
 		return err
 	}
-	previewMounted := a.previewConfig().Enabled
+	previewMounted := config.Enabled(a.previewConfig().Enabled)
 	if previewMounted {
 		cfg.Preview.WindowWidth, cfg.Preview.WindowHeight = w, h
 	} else {
