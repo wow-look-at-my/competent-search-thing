@@ -76,12 +76,40 @@ func TestReadLogFileProjectsRecords(t *testing.T) {
 	require.Equal(t, "rep", f.Query)
 	require.Equal(t, want.Local().Hour(), f.Hour, "the pick hour feeds the time-of-day feature")
 
-	require.Equal(t, 1, imp.Rows[1].Priority, "apps-search derives the one production priority")
-	require.Equal(t, 0, imp.Rows[2].Priority)
+	require.Equal(t, 1, imp.Rows[1].Priority, "apps-search derives the promotable-source priority")
+	require.Equal(t, 1, imp.Rows[2].Priority, "firefox-tabs derives it too (promotable since the strong-match promotion)")
 	require.Equal(t, 0, imp.Rows[2].SourceRank, "first firefox-tabs row")
 	require.Equal(t, 1, imp.Rows[3].SourceRank, "second firefox-tabs row counts within its source")
 	require.Equal(t, "firefox-tabs", imp.Rows[3].Plugin)
 	require.Equal(t, 55, imp.Rows[3].Score)
+}
+
+// TestReadLogFilePriorityDerivation pins the training-side priority
+// labels: the three promotable production sources -- apps-search plus
+// the two Firefox web sources -- derive 1, DELIBERATELY always
+// (mirroring the serve-time capability rather than the per-emission
+// tier gate, the same over-approximation apps-search has always had;
+// the log records no priorities), and every other plugin id stays 0.
+func TestReadLogFilePriorityDerivation(t *testing.T) {
+	p := writeLog(t,
+		pickJSON("2026-07-21T10:00:00Z", "tamper", true, 0, "plugin",
+			pluginRowJSON(0, "apps-search", 63),
+			pluginRowJSON(1, "firefox-frequent", 73),
+			pluginRowJSON(2, "firefox-tabs", 73),
+			pluginRowJSON(3, "windows", 85),
+			pluginRowJSON(4, "calc", 90),
+		),
+	)
+	imps, err := ReadLogFile(p)
+	require.NoError(t, err)
+	require.Len(t, imps, 1)
+	rows := imps[0].Rows
+	require.Len(t, rows, 5)
+	require.Equal(t, 1, rows[0].Priority, "apps-search is a promotable source")
+	require.Equal(t, 1, rows[1].Priority, "firefox-frequent is a promotable source")
+	require.Equal(t, 1, rows[2].Priority, "firefox-tabs is a promotable source")
+	require.Equal(t, 0, rows[3].Priority, "windows never promotes")
+	require.Equal(t, 0, rows[4].Priority, "external plugin ids never promote")
 }
 
 func TestReadLogFileTolerance(t *testing.T) {
