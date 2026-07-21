@@ -13,7 +13,11 @@ import (
 // fall back to the default root, relative roots are absolutized,
 // zero/negative knobs get their defaults (the firefox.frequentSites,
 // firefox.openTabs and preview numbers included, plus an empty
-// preview.openai.model; a negative watcher.sweepMinutes becomes 0 =
+// preview.openai.model and an empty preview.anthropic.model --
+// preview.custom.model deliberately stays as written, there is no
+// sensible default for an unknown server -- while preview.aiProvider
+// is lowercased and repaired to "openai" when empty or unknown, the
+// watcher.backend convention; a negative watcher.sweepMinutes becomes 0 =
 // the built-in cadence; the search.frecency numbers repair only
 // exact zeros -- negatives are the documented per-signal off switch
 // there; a non-positive search.telemetry.maxSizeKB gets its
@@ -198,5 +202,30 @@ func (c *Config) Normalize() {
 	}
 	if pv.OpenAI.MaxOutputTokens <= 0 {
 		pv.OpenAI.MaxOutputTokens = DefaultPreviewOpenAITokens
+	}
+	pv.AIProvider = normalizeAIProvider(pv.AIProvider)
+	if pv.Anthropic.Model == "" {
+		pv.Anthropic.Model = DefaultPreviewAnthropicModel
+	}
+	if pv.Anthropic.MaxOutputTokens <= 0 {
+		pv.Anthropic.MaxOutputTokens = DefaultPreviewAnthropicTokens
+	}
+	if pv.Custom.MaxOutputTokens <= 0 {
+		pv.Custom.MaxOutputTokens = DefaultPreviewCustomTokens
+	}
+}
+
+// normalizeAIProvider trims and lowercases the preview.aiProvider
+// selector and repairs empty or unknown values to the default
+// ("openai") -- the watcher.backend convention: the schema enum
+// rejects unknowns for authoring, the app degrades gracefully.
+func normalizeAIProvider(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case AIProviderAnthropic:
+		return AIProviderAnthropic
+	case AIProviderCustom:
+		return AIProviderCustom
+	default:
+		return DefaultPreviewAIProvider
 	}
 }

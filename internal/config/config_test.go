@@ -598,8 +598,11 @@ func TestPreviewConfig(t *testing.T) {
 		TextMaxKB:     256,
 		ImageMaxEdge:  800,
 		DirMaxEntries: 200,
+		AIProvider:    "openai",
 		Kagi:          PreviewKagiConfig{MaxResults: 8},
 		OpenAI:        PreviewOpenAIConfig{Model: "gpt-5-mini", MaxOutputTokens: 1024},
+		Anthropic:     PreviewAnthropicConfig{Model: "claude-haiku-4-5", MaxOutputTokens: 1024},
+		Custom:        PreviewCustomConfig{MaxOutputTokens: 1024},
 	}, Default().Preview, "the preview pane defaults off with every knob populated")
 
 	// A config predating the preview block normalizes to the defaults
@@ -633,6 +636,17 @@ func TestPreviewConfig(t *testing.T) {
 			Model:           "",
 			MaxOutputTokens: -5,
 		},
+		AIProvider: "  Anthropic ",
+		Anthropic: PreviewAnthropicConfig{
+			APIKey:          "sk-ant-secret",
+			Model:           "",
+			MaxOutputTokens: 0,
+		},
+		Custom: PreviewCustomConfig{
+			BaseURL:         "http://localhost:11434",
+			Model:           "",
+			MaxOutputTokens: -2,
+		},
 	}}
 	c.Normalize()
 	require.True(t, c.Preview.Enabled)
@@ -648,6 +662,20 @@ func TestPreviewConfig(t *testing.T) {
 	require.Equal(t, "not even a url", c.Preview.OpenAI.BaseURL, "the base URL is never touched")
 	require.Equal(t, DefaultPreviewOpenAIModel, c.Preview.OpenAI.Model)
 	require.Equal(t, DefaultPreviewOpenAITokens, c.Preview.OpenAI.MaxOutputTokens)
+	require.Equal(t, AIProviderAnthropic, c.Preview.AIProvider,
+		"the provider selector trims and lowercases")
+	require.Equal(t, "sk-ant-secret", c.Preview.Anthropic.APIKey, "the key is never touched")
+	require.Equal(t, DefaultPreviewAnthropicModel, c.Preview.Anthropic.Model)
+	require.Equal(t, DefaultPreviewAnthropicTokens, c.Preview.Anthropic.MaxOutputTokens)
+	require.Equal(t, "http://localhost:11434", c.Preview.Custom.BaseURL, "the base URL is never touched")
+	require.Equal(t, "", c.Preview.Custom.Model,
+		"custom.model has no invented default -- an unknown server's models are unknowable")
+	require.Equal(t, DefaultPreviewCustomTokens, c.Preview.Custom.MaxOutputTokens)
+
+	// An unknown provider selector repairs to the default.
+	c = Config{Preview: PreviewConfig{AIProvider: "watson"}}
+	c.Normalize()
+	require.Equal(t, DefaultPreviewAIProvider, c.Preview.AIProvider)
 
 	// Real values survive Normalize untouched.
 	c = Config{Preview: PreviewConfig{
@@ -664,16 +692,21 @@ func TestPreviewConfig(t *testing.T) {
 	in := Default()
 	in.Preview.Enabled = true
 	in.Preview.WindowWidth = 1440
+	in.Preview.AIProvider = AIProviderAnthropic
 	in.Preview.Kagi.APIKey = "kagi-secret"
 	in.Preview.OpenAI.APIKey = "sk-secret"
+	in.Preview.Anthropic.APIKey = "sk-ant-secret"
 	require.NoError(t, Save(in))
 	got, err := Load()
 	require.NoError(t, err)
 	require.True(t, got.Preview.Enabled)
 	require.Equal(t, 1440, got.Preview.WindowWidth)
+	require.Equal(t, AIProviderAnthropic, got.Preview.AIProvider)
 	require.Equal(t, "kagi-secret", got.Preview.Kagi.APIKey)
 	require.Equal(t, "sk-secret", got.Preview.OpenAI.APIKey)
+	require.Equal(t, "sk-ant-secret", got.Preview.Anthropic.APIKey)
 	require.Equal(t, DefaultPreviewOpenAIModel, got.Preview.OpenAI.Model)
+	require.Equal(t, DefaultPreviewAnthropicModel, got.Preview.Anthropic.Model)
 }
 
 // The "$schema" reserved key: the sidecar reference is stamped as the

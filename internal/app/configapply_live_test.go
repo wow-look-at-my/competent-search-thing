@@ -333,7 +333,7 @@ func TestApplyPreviewRebuildsDispatcher(t *testing.T) {
 	info := a.GetPreviewConfig()
 	require.True(t, info.Enabled, "GetPreviewConfig answers from the live configuration")
 	require.True(t, info.KagiConfigured)
-	require.False(t, info.OpenAIConfigured)
+	require.False(t, info.AIConfigured)
 
 	next2 := config.Default()
 	res = a.applyConfig(&next2, "test")
