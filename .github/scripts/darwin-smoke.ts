@@ -263,6 +263,11 @@ function startApp(name: string, roots: string[], extraCfg: Record<string, unknow
     // this is an AC-powered VM with a virtual display and no Low
     // Power Mode; battery behavior is not reproducible in CI.
     COMPETENT_SEARCH_FPS: "1",
+    // Keep the automatic login-service registration (internal/app
+    // service.go) off the runner: the mac VM has a real gui domain,
+    // so without the gate every boot would write a LaunchAgent plist
+    // into the runner user's ~/Library/LaunchAgents.
+    COMPETENT_SEARCH_NO_SERVICE: "1",
   };
   const fd = fs.openSync(logFile, "a");
   // Zero args = the GUI path (internal/cli bare invocation).

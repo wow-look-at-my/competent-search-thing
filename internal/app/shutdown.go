@@ -55,6 +55,8 @@ func (a *App) Shutdown(_ context.Context) {
 	statsCancel := a.statsCancel
 	a.statsCancel = nil
 	a.stats = nil
+	svcCancel := a.svcCancel
+	a.svcCancel = nil
 	launchCancel := a.launchCancel
 	a.launchCancel = nil
 	if launchCancel == nil && a.launchCtx == nil {
@@ -81,6 +83,11 @@ func (a *App) Shutdown(_ context.Context) {
 	}
 	if statsCancel != nil {
 		statsCancel()
+	}
+	// An in-flight login-service registration aborts its bounded
+	// service-manager execs (see service.go in this package).
+	if svcCancel != nil {
+		svcCancel()
 	}
 
 	a.pluginMu.Lock()
