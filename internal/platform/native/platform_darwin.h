@@ -1,9 +1,9 @@
 // C interface of the small Cocoa/Carbon shim behind display_darwin.go,
-// movewindow_darwin.go, appsource_darwin.go, hotkey_darwin.go and
-// panel_darwin.go. All coordinates crossing this boundary are
-// top-left-origin virtual-desktop pixels (the Go side's convention);
-// the .m implementation converts from/to Cocoa's bottom-left-origin
-// global coordinates.
+// movewindow_darwin.go, appsource_darwin.go, hotkey_darwin.go,
+// panel_darwin.go and appicon_darwin.go. All coordinates crossing this
+// boundary are top-left-origin virtual-desktop pixels (the Go side's
+// convention); the .m implementation converts from/to Cocoa's
+// bottom-left-origin global coordinates.
 #ifndef CS_PLATFORM_DARWIN_H
 #define CS_PLATFORM_DARWIN_H
 
@@ -104,5 +104,20 @@ int csObservePowerChanges(void);
 // respondsToSelector-guarded; the return value reports exactly what
 // happened (CS_UNCAP_*). Synchronous (main-thread hop).
 int csWebViewUncapNear60(void);
+
+// csAppIconPNG renders the icon macOS itself displays for the file or
+// bundle at path -- [NSWorkspace iconForFile:], the same image
+// Launchpad/Finder/the Dock show, Assets.car asset catalogs included
+// -- into a size x size PNG. Returns a malloc'd buffer the caller
+// must free() and writes its length to *outLen; NULL on any failure
+// (missing path, no image, encode failure). Deliberately NO
+// main-thread hop, unlike the window/screen calls above: NSWorkspace
+// icon lookup and offscreen NSImage drawing are thread-safe (NSImage
+// since macOS 10.6 per the AppKit release notes), the caller is the
+// app's icon-resolution goroutine (bulk rasterization must never
+// serialize onto the UI thread), and the darwin unit-test binary that
+// exercises this has no pumped main queue -- a dispatch_sync there
+// would deadlock.
+void *csAppIconPNG(const char *path, int size, int *outLen);
 
 #endif

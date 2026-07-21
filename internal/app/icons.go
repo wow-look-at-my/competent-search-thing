@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/icons"
+	"github.com/wow-look-at-my/competent-search-thing/internal/platform/native"
 )
 
 // iconResolver is the slice of *icons.Service the App consumes -- a
@@ -13,11 +14,16 @@ type iconResolver interface {
 
 // buildIcons is the production newIcons value: the icon resolution
 // service over its own defaults (XDG dirs and gsettings on linux,
-// .app bundle extraction on darwin -- see internal/icons).
-// icons.NewService does no IO; the first Resolve pays the one-time
-// initialization, so building it on the startup path is free.
+// .app bundle extraction on darwin -- see internal/icons), with the
+// OS's own icon rendering wired as the darwin fallback: NativeAppIcon
+// = native.AppIconPNG (NSWorkspace iconForFile) serves every .app
+// whose icon the pure plist/icns path cannot read (Assets.car-only
+// apps), unconditionally -- the !darwin stub answers nil, so the one
+// wiring compiles and no-ops everywhere else. icons.NewService does
+// no IO; the first Resolve pays the one-time initialization, so
+// building it on the startup path is free.
 func (a *App) buildIcons() iconResolver {
-	return icons.NewService(icons.Options{})
+	return icons.NewService(icons.Options{NativeAppIcon: native.AppIconPNG})
 }
 
 // startIcons builds the resolver once, at Startup. A nil seam result

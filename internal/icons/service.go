@@ -1,6 +1,8 @@
 // Package icons resolves result-row icons to data URIs: app icons
 // named by .desktop Icon= values (or, on macOS, by .app bundle paths
-// resolved through Info.plist + .icns extraction -- see bundle.go)
+// resolved through Info.plist + .icns extraction with the OS's own
+// icon rendering -- the injectable NativeAppIcon seam -- covering
+// everything the pure path cannot read; see bundle.go)
 // and file-type icons derived from file names via the shared-mime-info
 // database, the themed shapes looked up through the freedesktop
 // icon-theme machinery (detected GTK theme + its Inherits chain +
@@ -86,18 +88,29 @@ type Options struct {
 	// CacheEntries bounds the (name,size) -> data URI LRU (default
 	// 512). The negative cache is bounded to the same count.
 	CacheEntries int
+	// NativeAppIcon, when non-nil, supplies the OS's OWN rendering of
+	// a macOS .app bundle's icon as a sizePx x sizePx PNG (nil = no
+	// icon). It is consulted ONLY after the pure plist/icns extraction
+	// misses, and BEFORE that miss is negative-cached, so an
+	// Assets.car-only app (CFBundleIconName without CFBundleIconFile)
+	// resolves to the same icon Launchpad shows instead of the glyph.
+	// Production wiring passes internal/platform/native.AppIconPNG
+	// (NSWorkspace iconForFile on darwin, a nil-returning stub
+	// elsewhere); nil keeps the pure path alone.
+	NativeAppIcon func(path string, sizePx int) []byte
 }
 
 // Service resolves icon keys to data URIs. Safe for concurrent use:
 // the Wails-bound caller runs on arbitrary goroutines.
 type Service struct {
-	getenv       func(string) string
-	runGsettings func(ctx context.Context) (string, error)
-	logf         func(format string, args ...any)
-	dataDirs     []string
-	iconBases    []string
-	pixmapDirs   []string
-	maxFileBytes int64
+	getenv        func(string) string
+	runGsettings  func(ctx context.Context) (string, error)
+	logf          func(format string, args ...any)
+	dataDirs      []string
+	iconBases     []string
+	pixmapDirs    []string
+	maxFileBytes  int64
+	nativeAppIcon func(path string, sizePx int) []byte
 
 	once sync.Once // initialize: mime db load + theme detection
 
@@ -112,13 +125,14 @@ type Service struct {
 // NewService builds a Service from o. No IO happens here.
 func NewService(o Options) *Service {
 	s := &Service{
-		getenv:       o.Getenv,
-		runGsettings: o.RunGsettings,
-		logf:         o.Logf,
-		dataDirs:     o.DataDirs,
-		pixmapDirs:   o.PixmapDirs,
-		maxFileBytes: o.MaxFileBytes,
-		themes:       map[string]*themeIndex{},
+		getenv:        o.Getenv,
+		runGsettings:  o.RunGsettings,
+		logf:          o.Logf,
+		dataDirs:      o.DataDirs,
+		pixmapDirs:    o.PixmapDirs,
+		maxFileBytes:  o.MaxFileBytes,
+		nativeAppIcon: o.NativeAppIcon,
+		themes:        map[string]*themeIndex{},
 	}
 	if s.getenv == nil {
 		s.getenv = os.Getenv
