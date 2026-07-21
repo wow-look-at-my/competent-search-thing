@@ -120,6 +120,7 @@ func (p *tabsProvider) candidates(_ context.Context, _ Request) ([]match.Candida
 			Title:    tabTitle(tb),
 			Subtitle: tb.URL,
 			Icon:     "link", // "globe" belongs to frequent-sites
+			IconKey:  faviconIconKey(tb.URL),
 			Action:   action,
 		}
 		if tb.Pinned {

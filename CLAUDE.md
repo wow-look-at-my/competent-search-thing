@@ -177,12 +177,25 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   hatch, default ON per the never-below-60 ruling),
   builds the icon resolver once (icons.go in this package:
   the `newIcons` builder seam, production buildIcons =
-  icons.NewService over its defaults -- zero IO at build, the first
+  icons.NewService over Options{NativeAppIcon: native.AppIconPNG} --
+  the OS-rendering darwin fallback wired unconditionally, the
+  !darwin stub answers nil -- plus, when faviconProfileDir() resolves
+  a Firefox profile (config profileDir overrides first, open-tabs
+  then frequent-sites via a fresh config.Load -- the translucent.go
+  pattern -- else FindProfile over plat.firefoxBases),
+  Options.FaviconLookup = a firefox.FaviconReader over that profile's
+  favicons.sqlite bounded by the app-lifetime firefox ctx; no
+  profile = no offline favicon tier, quietly. Zero IO at build, the
+  first
   Resolve pays initialization -- behind the bound
   `ResolveIcons(keys, size) map[string]string`, which the frontend
   calls with batched per-render icon keys; nil resolver (newTestApp)
   = empty non-nil maps, and resolution runs on the bound method's own
-  goroutine so the query path never waits on icon IO), wires the
+  goroutine so the query path never waits on icon IO. noteFavicon
+  (same file) feeds browser-reported favicon locations into the
+  resolver through the OPTIONAL faviconNoter interface assertion
+  (the `prioritized` extension pattern -- plain test fakes need not
+  implement it), nil-safe and IO-free), wires the
   single-instance IPC handlers when Options.IPC is set (Toggle =
   toggle, Show = showIfHidden, Hide = Hide, Config = showConfig,
   Quit = quitViaIPC -- the version-skew handshake's graceful half:
@@ -239,8 +252,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   ffext.Token(conn,tab,window) -- served only when Connected() AND
   fresh within ffextTabTTL (15s, the sessionstore TTL twin), rows
   http(s)-filtered like the sessionstore reader, fresh-but-empty
-  still wins; the openTabs getter (firefox.go) prefers it and falls
-  back to the TabCache byte-identically otherwise. activateTab()
+  still wins, and each kept row's bridge-reported FavIconURL is fed
+  to noteFavicon (the icons.go hint side-channel); the openTabs
+  getter (firefox.go) prefers it and falls
+  back to the TabCache byte-identically otherwise -- noting each
+  fallback row's sessionstore image attribute the same way.
+  activateTab()
   routes one activation through the bridge -- no bridge/no conn =
   ffext.ErrNotConnected after the ffextInactiveOnce quiet heads-up,
   other failures log per occurrence -- and RunPluginAction's
@@ -964,7 +981,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   bytes, both hops carry ONE message shape (requests
   {id,type:listTabs|activate,tabId,windowId}; replies {id,ok,tabs?|
   error}; unsolicited pushes {type:tabsChanged,tabs} -- unknown
-  fields ignored, the ipc tolerance contract). Constants HostName
+  fields ignored, the ipc tolerance contract; tab rows carry
+  favIconUrl -> Tab.FavIconURL, the browser-reported favicon
+  location riding that tolerance contract with NO protocol bump --
+  empty from older extensions -- consumed by the app layer's
+  NoteFavicon hint feed, with a sync_test pin keeping logic.mjs's
+  tabRow emitting it). Constants HostName
   "competent_search_thing" (Firefox's ^\w+(\.\w+)*$ rule),
   ExtensionID (the pinned gecko id), ProtocolVersion, Msg* -- all
   LOCKSTEP with webextension/logic.mjs via sync_test.go (the theme
@@ -2083,11 +2105,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   host prefix 95 (leading "www." ignored) > title word-start 80 >
   host substring 70 > title-or-URL substring 60, ties by visit count
   then title, cap Options.FrequentSitesMax (<=0 -> 6); result =
-  title-or-host / URL subtitle / icon "globe" / open_url action;
-  a prioritized source (sourcePriorityWeb: a word-start-or-better
-  best promotes the section above the file results cut to its strong
-  rows, weak bests emit at 0 below the files -- the apps-search
-  tier gate);
+  title-or-host / URL subtitle / icon "globe" / the internal-only
+  IconKey "favicon:<pageURL>" (faviconIconKey -- the icons service
+  resolves it to the site's real favicon, the glyph standing until
+  then; the sanitizer strips IconKey from external results, favicon
+  kind pinned) / open_url action; a prioritized source
+  (sourcePriorityWeb: a word-start-or-better best promotes the section
+  above the file results cut to its strong rows, weak bests emit at 0
+  below the files -- the apps-search tier gate);
   builtin_tabs.go "firefox-tabs"/Open Tabs -- same NO-bangs
   all-queries semantics, registered ONLY when Options.OpenTabs (the
   getter yielding []TabInfo, mirror of internal/firefox.Tab) is
@@ -2095,7 +2120,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   ignored) > title substring 65 > URL substring 55 (the TITLE outranks
   the host here, unlike frequent-sites), ties by lastAccessed DESC
   then title, cap Options.OpenTabsMax (<=0 -> 6); result =
-  title-or-host / URL subtitle / icon "link" (globe is taken) /
+  title-or-host / URL subtitle / icon "link" (globe is taken) / the
+  same internal-only IconKey "favicon:<pageURL>" /
   "pinned" badge on pinned tabs / the action: a TabInfo.Token-carrying
   row (the app's ffext live snapshot supplied it) gets the
   internal-only activate_tab {Tab: token, Value: URL} SWITCH, a
@@ -2305,7 +2331,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   the app's bound ResolveIcons, pure and headless-tested (every input
   dir and external command sits behind Options seams). Key protocol
   (the frontend wire contract): "dir", "file:<basename>",
-  "app:<ref>". NewService does NO IO; the first Resolve pays
+  "app:<ref>", "favicon:<pageURL>". NewService does NO IO; the first
+  Resolve pays
   initialization (mime-db load + gsettings/settings.ini theme
   detection), and everything is served through a positive + negative
   (name|size)->URI LRU (512 entries each) under one mutex.
@@ -2329,12 +2356,50 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   below, else unknown-size band; NO image decoding ever -- skipping
   legacy RLE/JPEG-2000 payloads and entries over 512KB
   (maxIcnsEntryBytes; plist capped 4 MiB, icns container 32 MiB via
-  stat-first readCapped). CFBundleIconName-only (Assets.car) apps
-  are a DELIBERATE miss (negative-cached -> glyph fallback; est.
-  5-15% of /Applications, measured by the darwin-only
-  real_darwin_test.go which runs un-gated on the mac job and fails
-  only when a POPULATED /Applications resolves nothing). Consumed by
-  internal/app icons.go (the newIcons seam).
+  stat-first readCapped). When the pure plist/icns walk misses --
+  CFBundleIconName-only (Assets.car) apps (est. 5-15% of
+  /Applications, the Little Snitch field report), legacy-only icns
+  payloads, any structural miss -- the injectable Options.
+  NativeAppIcon seam (func(path string, sizePx int) []byte) is asked
+  BEFORE the miss is negative-cached: production wiring passes
+  native.AppIconPNG (NSWorkspace iconForFile rasterized to a PNG --
+  what Launchpad/Finder show, asset catalogs included; the !darwin
+  stub answers nil), a native hit lands in the positive cache like
+  any other, a nil answer negative-caches into the glyph (the honest
+  only-when-macOS-has-none fallback), and non-PNG/oversized seam
+  bytes are rejected (defense in depth). The pure path stays primary
+  (seam never consulted on a pure hit; bundle_test.go pins the whole
+  order headlessly) and a nil seam keeps pre-seam behavior
+  byte-identical. The darwin-only real_darwin_test.go runs un-gated
+  on the mac job: the pure-path tally (fails only when a POPULATED
+  /Applications resolves nothing), the acceptance sweep (with the
+  production seam wired EVERY /Applications bundle must resolve --
+  any miss is a bug), and the Assets.car-only pin (skipped when the
+  runner has no such app). WEBSITE FAVICONS (favicon.go, the
+  "favicon:<pageURL>" kind on the two builtin Firefox result
+  sources): resolution runs in Resolve's SECOND phase, OUTSIDE the
+  service mutex (a slow favicon can never stall app/file icon
+  batches), single-flighted per cache key, three tiers in order --
+  (1) the NoteFavicon hint side-channel (the browser-reported
+  favicon location per page: bounded LRU beside the caches,
+  validated to http(s) or data:image/* -- Firefox-internal schemes
+  like fake-favicon-uri: dropped -- capped 64 KiB, and a CHANGED
+  hint un-pins that page's negative-cached misses via
+  lru.deletePrefix so late-arriving hints self-heal; a data: hint
+  decodes and serves with ZERO IO), (2) the Options.FaviconLookup
+  seam (production = firefox.FaviconReader.Lookup over the profile's
+  favicons.sqlite snapshot; answers stored bytes or a known icon
+  URL), (3) ONE bounded GET of a KNOWN favicon URL only -- the
+  tier-1 hint or the tier-2 icon_url, never a guessed /favicon.ico
+  -- via an internal client (3s total timeout, 256 KiB body cap, 3
+  redirect hops http(s)-only; unexported favTransport/favTimeout/
+  favMaxFetch Options seams for tests). EVERY tier's payload is
+  SNIFFED by magic bytes (imageMIME: PNG/GIF/JPEG/WebP/ICO/BMP + SVG
+  by content; declared types never trusted, junk misses into the
+  glyph), successes land in the positive LRU, misses
+  negative-cache -- the builtin glyph stays the honest fallback.
+  Consumed by internal/app icons.go (the
+  newIcons seam).
 - `internal/fileicons` -- the per-file-type icon MAPPING layer: the
   committed artifact data.bin (a binpazer container from
   wow-look-at-my/bin-file-fmt -- one IconRules user block, GUID
@@ -2448,7 +2513,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   corruption. sessionstore.go: `ReadOpenTabs(profileDir)` reads
   sessionstore-backups/recovery.jsonlz4 (rewritten ~15s by a RUNNING
   Firefox; private windows never persisted) -> []Tab{URL, Title,
-  Host, Pinned, LastAccessed(ms)}: hidden tabs skipped, entries[index-1]
+  Host, Pinned, LastAccessed(ms), FavIconURL (the tab's "image"
+  attribute -- the favicon URL SessionStore records -- passed through
+  VERBATIM, consumers validate; absent = "")}: hidden tabs skipped,
+  entries[index-1]
   is the current page (1-based index clamped into range, entry-less
   tabs skipped), http(s)-with-host only, raw cap 500; a MISSING file
   = (nil, nil) -- browser closed, deliberately NO
@@ -2462,12 +2530,34 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   cadence -- no config knob); success MAY legitimately store an
   empty list (closed browser), failure keeps old data with the same
   once-per-distinct-message logging and 1m retry gap, ctx bounds
-  every goroutine. Consumed by
+  every goroutine. favicons.go: `FaviconReader`
+  (NewFaviconReader(ctx, FaviconOptions{ProfileDir, TTL default 10m,
+  Logf; unexported mtime/now seams)) = the favicons.sqlite reader
+  behind the icon service's offline favicon tier, zero IO at
+  construction: `Lookup(pageURL, sizePx) (data, iconURL)` answers
+  from a PRIVATE snapshot (the places.go rule -- never the live db:
+  copy + -wal to a temp dir, opened read-only via the pure-Go
+  driver), the first Lookup paying the copy and later ones re-copying
+  ONLY when the source mtime changed AND the copy outlived the TTL
+  (probes spaced 1s, failures logged once per distinct message +
+  retried no sooner than 1m, everything degrades to "nothing known"
+  -- never an error); the exact-page query (moz_pages_w_icons x
+  moz_icons_to_pages x moz_icons; the *_hash columns are
+  Firefox-internal SQL functions, deliberately unused) runs first,
+  then the domain-root fallback (root=1 favicon.ico candidates for
+  the page's host incl. the www-toggle -- what serves
+  host-aggregated frequent-site rows); best-fit width = smallest >=
+  wanted else largest below (SVG's 65535 sentinel width needs no
+  special case), payloads over MaxFaviconBytes (1 MiB) or empty are
+  skipped but still surface their icon_url as the caller's fetch
+  hint; the first successful snapshot arms ONE ctx-bounded cleanup
+  goroutine (handle close + temp-dir removal when the app-lifetime
+  firefox ctx cancels). Consumed by
   internal/app's firefox.go + the plugin registry's firefox-frequent
   and firefox-tabs builtins -- where the open-tabs getter now serves
   the internal/ffext live bridge snapshot FIRST (connected + fresh
   within the same 15s bound) and this sessionstore layer is the
-  always-there fallback.
+  always-there fallback -- and (favicons.go) internal/app's icons.go.
 - `internal/watch` -- keeps the index live after the initial walk;
   three cooperating tiers whose CONTRACT is identical final index
   state, differing only in latency (pinned by TestTierEquivalence*).
@@ -2961,6 +3051,20 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   declared as a category so the (BOOL, id) calls compile), returning
   the honest CS_UNCAP_* status -- a WebKit that drops the SPI
   degrades to a status code, never a crash.
+  AppIconPNG (appicon_darwin.go + the !darwin nil stub; the icons
+  service's NativeAppIcon production seam): csAppIconPNG =
+  [NSWorkspace iconForFile:] -- the icon Launchpad/Finder/the Dock
+  show, Assets.car included -- drawn offscreen into an NSBitmapImageRep
+  (Copy op so the uninitialized buffer never shows through) and
+  returned as a malloc'd PNG the Go side copies+frees; deliberately
+  NO runOnMain hop (NSWorkspace lookup + NSImage drawing are
+  thread-safe, the caller is the ResolveIcons goroutine, and the
+  darwin unit-test binary pumps no main queue -- a dispatch_sync
+  there would deadlock), body under its own @autoreleasepool
+  (Go threads have none), missing paths refused (iconForFile answers
+  a generic icon for ANY string). The ONE shim entry point the mac CI
+  job actually EXERCISES (internal/icons real_darwin_test.go sweeps
+  the runner's real /Applications through it).
   display_darwin.go also carries `#cgo LDFLAGS: -framework
   UniformTypeIdentifiers` on Wails' behalf: the v2 darwin frontend
   references UTType without linking that framework, and newer Xcode
@@ -3598,7 +3702,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   connections are always extension-initiated; permissions exactly
   [nativeMessaging, tabs]; pinned gecko id = ffext.ExtensionID).
   logic.mjs is ALL the logic, pure and importable (constants +
-  tabRow/listTabs/handleMessage -- activate is tabs.update THEN
+  tabRow/listTabs/handleMessage -- tabRow projects favIconUrl onto
+  the wire (the "tabs" permission grants it; the sync_test-pinned
+  favicon hint the app feeds its icon resolver), activate is
+  tabs.update THEN
   windows.update, any rejection = {ok:false,error} -- +
   nextReconnectDelay + createController with injectable
   setTimeout/clearTimeout: one native port, capped-backoff reconnect,

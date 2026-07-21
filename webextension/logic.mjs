@@ -28,7 +28,11 @@ export const PUSH_DEBOUNCE_MS = 500;
 
 // tabRow projects one tabs.Tab onto the wire shape the Go bridge
 // parses (internal/ffext wireTab). lastAccessed is rounded to integer
-// milliseconds.
+// milliseconds. favIconUrl is the tab's favicon (the "tabs" permission
+// already grants it): an http(s) URL or a data: URI, "" when Firefox
+// reports none -- the app feeds it to its favicon resolver so tab rows
+// show the real site icon (unknown wire fields are ignored by older
+// apps, the tolerance contract).
 export function tabRow(tab) {
   return {
     id: tab.id,
@@ -38,6 +42,7 @@ export function tabRow(tab) {
     pinned: !!tab.pinned,
     lastAccessed: Math.round(tab.lastAccessed ?? 0),
     active: !!tab.active,
+    favIconUrl: tab.favIconUrl ?? "",
   };
 }
 

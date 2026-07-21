@@ -174,12 +174,19 @@ func TestSanitizeIconRules(t *testing.T) {
 func TestSanitizeClearsIconKey(t *testing.T) {
 	// IconKey is a trusted-builtin-source capability (the
 	// Action.DesktopID precedent): an external plugin smuggling one is
-	// silently cleared while the rest of the result survives.
-	r := Result{Title: "t", Icon: "app", IconKey: "app:/Applications/Evil.app"}
-	results, _ := SanitizeResponse(&Response{Results: []Result{r}}, false)
-	require.Len(t, results, 1)
-	require.Empty(t, results[0].IconKey)
-	require.Equal(t, "app", results[0].Icon)
+	// silently cleared while the rest of the result survives -- for
+	// EVERY key kind, the favicon kind (which would otherwise let a
+	// plugin trigger arbitrary favicon fetches) included.
+	for _, key := range []string{
+		"app:/Applications/Evil.app",
+		"favicon:https://evil.example/track?me=1",
+	} {
+		r := Result{Title: "t", Icon: "app", IconKey: key}
+		results, _ := SanitizeResponse(&Response{Results: []Result{r}}, false)
+		require.Len(t, results, 1)
+		require.Empty(t, results[0].IconKey, "IconKey %q must be cleared", key)
+		require.Equal(t, "app", results[0].Icon)
+	}
 }
 
 func TestSanitizeAccentColor(t *testing.T) {

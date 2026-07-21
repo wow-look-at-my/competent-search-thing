@@ -172,6 +172,54 @@ func TestLiveTabsGates(t *testing.T) {
 	require.Empty(t, tabs)
 }
 
+// fakeNotingResolver is a fakeIconResolver that also records favicon
+// hints (the production *icons.Service shape).
+type fakeNotingResolver struct {
+	fakeIconResolver
+	notes [][2]string
+}
+
+func (f *fakeNotingResolver) NoteFavicon(pageURL, favURL string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.notes = append(f.notes, [2]string{pageURL, favURL})
+}
+
+func (f *fakeNotingResolver) noted() [][2]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][2]string(nil), f.notes...)
+}
+
+func TestLiveTabsNotesFavicons(t *testing.T) {
+	a, _ := newTestApp(t, nil, Options{})
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	a.plat.now = func() time.Time { return now }
+	noter := &fakeNotingResolver{}
+	a.newIcons = func() iconResolver { return noter }
+	a.startIcons()
+
+	f := &fakeBridge{connected: true, at: now}
+	f.tabs = []ffext.Tab{
+		{Conn: 1, ID: 1, WindowID: 1, Title: "A", URL: "https://a.example/", FavIconURL: "https://a.example/favicon.ico"},
+		{Conn: 1, ID: 2, WindowID: 1, Title: "B", URL: "https://b.example/"}, // no favicon reported
+		{Conn: 1, ID: 3, WindowID: 1, Title: "C", URL: "about:blank", FavIconURL: "https://c.example/f.ico"},
+	}
+	installBridge(a, f)
+
+	tabs, ok := a.liveTabs()
+	require.True(t, ok)
+	require.Len(t, tabs, 2)
+	require.Equal(t, [][2]string{{"https://a.example/", "https://a.example/favicon.ico"}}, noter.noted(),
+		"every http(s) row with a reported favicon is noted; empty and filtered rows are not")
+
+	// A plain resolver without the noter surface degrades quietly.
+	a.newIcons = func() iconResolver { return &fakeIconResolver{} }
+	a.startIcons()
+	_, ok = a.liveTabs()
+	require.True(t, ok)
+}
+
 func TestOpenTabsGetterPrefersLiveAndFallsBack(t *testing.T) {
 	a, _ := newTestApp(t, nil, Options{})
 	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)

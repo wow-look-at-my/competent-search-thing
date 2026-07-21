@@ -30,6 +30,21 @@ const firefoxMinQueryLen = 2
 // byte-identical to the old placement.
 const sourcePriorityWeb = 1
 
+// faviconKeyPrefix builds the internal-only IconKey both Firefox
+// sources stamp: "favicon:<pageURL>", the internal/icons key kind the
+// frontend hands to ResolveIcons for the site's real favicon (the
+// row's builtin glyph stands until -- and unless -- it resolves).
+// Like every IconKey, the sanitizer strips it from external results.
+const faviconKeyPrefix = "favicon:"
+
+// faviconIconKey returns the IconKey for one page URL ("" stays "").
+func faviconIconKey(pageURL string) string {
+	if pageURL == "" {
+		return ""
+	}
+	return faviconKeyPrefix + pageURL
+}
+
 // Scoring lives in the shared engine (canonical tier bands); the
 // host-first field order below preserves the old ladder's preference.
 
@@ -108,6 +123,7 @@ func (p *firefoxProvider) candidates(_ context.Context, _ Request) ([]match.Cand
 				Title:    siteTitle(s),
 				Subtitle: s.URL,
 				Icon:     "globe",
+				IconKey:  faviconIconKey(s.URL),
 				Action:   &Action{Type: ActionOpenURL, Value: s.URL},
 			},
 		})
