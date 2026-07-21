@@ -253,7 +253,15 @@ async function capture(wid: string, theme: ThemeSpec, name: string): Promise<voi
 }
 
 async function launchApp(extraEnv: Record<string, string>): Promise<Proc> {
-  const app = spawnLogged("app", bin, [], { COMPETENT_SEARCH_CONFIG_DIR: cfgDir, ...extraEnv });
+  // COMPETENT_SEARCH_NO_SERVICE keeps the app's automatic
+  // login-service registration (internal/app service.go) off the
+  // runner: CI must never write systemd user units for a throwaway
+  // process.
+  const app = spawnLogged("app", bin, [], {
+    COMPETENT_SEARCH_CONFIG_DIR: cfgDir,
+    COMPETENT_SEARCH_NO_SERVICE: "1",
+    ...extraEnv,
+  });
   await pollFor("hotkey registration + initial index", 20000, 250, async () => {
     if (app.child.exitCode !== null) throw new Error(`app exited early (code ${app.child.exitCode}): ${app.log}`);
     if (/hotkey: registering .* failed/.test(app.log)) throw new Error(`hotkey grab refused: ${app.log}`);

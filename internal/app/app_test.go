@@ -272,6 +272,10 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	a.newIcons = func() iconResolver { return nil }
 	// No ffext bridge socket or manifest writes (ffext_test.go fakes).
 	a.newFfext = func() ffextBridge { return nil }
+	// No login-service registration: the production builder stats the
+	// real home and Ensure execs launchctl/systemctl. Service tests
+	// inject a recording fake registrar.
+	a.newService = func() serviceRegistrar { return nil }
 	// The progress printer is inert: non-TTY (never intercepts the
 	// global log output), io.Discard target, dropped non-TTY lines.
 	// Progress tests inject recording printers.
