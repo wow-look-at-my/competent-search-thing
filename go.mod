@@ -3,6 +3,7 @@ module github.com/wow-look-at-my/competent-search-thing
 go 1.25.0
 
 require (
+	github.com/andybalholm/brotli v1.2.2
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/jezek/xgb v1.3.1
@@ -10,6 +11,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/wailsapp/wails/v2 v2.13.0
+	github.com/wow-look-at-my/bin-file-fmt/go v0.0.0-20260709175544-18acffa53e3e
 	golang.design/x/hotkey v0.6.1
 	golang.org/x/image v0.41.0
 	golang.org/x/sys v0.46.0

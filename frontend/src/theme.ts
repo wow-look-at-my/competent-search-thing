@@ -8,6 +8,8 @@
 // themes/ directory changes, and everything is re-fetched and
 // re-applied -- theme edits show up live.
 
+import { isLightBackground } from "./fileicons/fileicons";
+
 const TOKEN_PREFIX = "--sb-";
 const CUSTOM_STYLE_ID = "sb-custom-css";
 
@@ -29,6 +31,15 @@ function applyTokens(tokens: Record<string, string>): void {
     }
   }
   appliedTokens = next;
+  // Select the file-icon colour variant from the background this
+  // theme carries (the file-icons pack's own light/dark motif rule);
+  // fileicons.css keys every glyph colour on this class, so a live
+  // theme switch recolors already-rendered rows with zero re-renders.
+  // Re-runs on every "theme:changed" refetch via fetchAndApply.
+  document.documentElement.classList.toggle(
+    "icons-light",
+    isLightBackground(tokens["bg"] ?? ""),
+  );
 }
 
 function applyCustomCSS(css: string): void {

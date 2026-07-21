@@ -494,8 +494,16 @@ buildhost (see [Install](#install)):
       application's window ends focused and raised (see
       [Focus and raise on launch](#focus-and-raise-on-launch))
 - [x] Search UI: as-you-type results with match highlighting, dimmed
-      parent paths, folder/file glyphs, keyboard + mouse selection,
+      parent paths, per-file-type icons, keyboard + mouse selection,
       live index status bar and a staleness warning chip
+- [x] File-type icons: recognizable coloured glyphs per extension and
+      special filename from the
+      [file-icons](https://github.com/file-icons/atom) pack (fonts
+      vendored under ISC / OFL 1.1 / MIT, receipts in
+      `frontend/src/fileicons/LICENSES.md`; the mapping ships as a
+      compact [binpazer](https://github.com/wow-look-at-my/bin-file-fmt)
+      binary artifact); variants follow the theme's light/dark
+      background
 - [x] Plugin system: async virtual results from external command/HTTP
       plugins (file search never waits on them), bang targeting and
       completion (`!calc 2+2`; a bare `!` lists every command),
