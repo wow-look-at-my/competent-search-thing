@@ -139,3 +139,96 @@ func TestBundleIconPositiveCacheHit(t *testing.T) {
 	require.NoError(t, os.RemoveAll(bundle))
 	require.Equal(t, first, svc.Resolve([]string{key}, 64)[key])
 }
+
+/* --- the NativeAppIcon seam (the OS-rendering fallback) ------------- */
+
+func TestBundleIconNativeFallbackServesAssetsCarOnly(t *testing.T) {
+	f := newFixture(t)
+	// CFBundleIconName without CFBundleIconFile: the pure plist/icns
+	// path misses (the Assets.car-only shape). Without the seam this
+	// exact fixture negative-caches into the glyph (TestBundleIconMisses
+	// "assets-car only"); with it, the seam runs BEFORE the
+	// negative-caching decision, so the key resolves to the OS's icon
+	// instead of pinning the miss.
+	bundle := writeBundle(t, f.root, "Catalyst.app", buildIconPlist(t, "", "AppIconAsset"), "", nil)
+	nativePNG := tinyPNG(t, 4, color.White)
+	calls := 0
+	gotPath, gotSize := "", 0
+	opt := f.options(t)
+	opt.NativeAppIcon = func(path string, sizePx int) []byte {
+		calls++
+		gotPath, gotSize = path, sizePx
+		return nativePNG
+	}
+	svc := NewService(opt)
+	key := "app:" + bundle
+
+	require.Equal(t, pngURI(nativePNG), svc.Resolve([]string{key}, 64)[key],
+		"the seam's PNG serves as a data URI when the pure path misses")
+	require.Equal(t, bundle, gotPath, "the seam sees the bundle path")
+	require.Equal(t, 64, gotSize, "the seam sees the clamped pixel size")
+
+	// A native hit lands in the positive cache like any other hit:
+	// the repeat resolve serves from cache without re-asking the seam.
+	require.Equal(t, pngURI(nativePNG), svc.Resolve([]string{key}, 64)[key])
+	require.Equal(t, 1, calls)
+}
+
+func TestBundleIconNativeFallbackNilStaysNegativeCached(t *testing.T) {
+	f := newFixture(t)
+	bundle := writeBundle(t, f.root, "NoIcon.app", buildIconPlist(t, "", "AppIconAsset"), "", nil)
+	var answer []byte
+	opt := f.options(t)
+	opt.NativeAppIcon = func(string, int) []byte { return answer }
+	svc := NewService(opt)
+	key := "app:" + bundle
+
+	require.Empty(t, svc.Resolve([]string{key}, 64),
+		"pure miss + seam answering nil = the honest glyph fallback")
+	// The seam WAS consulted and had nothing, so the miss is
+	// negative-cached like every other source's; a later answer does
+	// not resurrect the entry within this process.
+	answer = tinyPNG(t, 2, color.White)
+	require.Empty(t, svc.Resolve([]string{key}, 64))
+}
+
+func TestBundleIconNativeFallbackNotConsultedOnPureHit(t *testing.T) {
+	f := newFixture(t)
+	entry := tinyPNG(t, 2, color.White)
+	bundle := writeBundle(t, f.root, "Plain.app", xmlIconPlist("i"),
+		"i.icns", buildIcns(t, icnsEntry{"ic07", entry}))
+	calls := 0
+	opt := f.options(t)
+	opt.NativeAppIcon = func(string, int) []byte {
+		calls++
+		return tinyPNG(t, 4, color.Black)
+	}
+	svc := NewService(opt)
+	key := "app:" + bundle
+
+	require.Equal(t, pngURI(entry), svc.Resolve([]string{key}, 64)[key],
+		"the pure plist/icns extraction stays primary")
+	require.Zero(t, calls, "the seam is a fallback, never a replacement")
+}
+
+func TestBundleIconNativeFallbackRejectsInvalidBytes(t *testing.T) {
+	// Defense in depth: the seam contract is a PNG within the byte
+	// cap; anything else misses into the glyph rather than shipping
+	// junk to the frontend.
+	oversize := make([]byte, defaultMaxFileBytes+1)
+	copy(oversize, pngMagic)
+	cases := map[string][]byte{
+		"not a png": []byte("GIF89a definitely not a png"),
+		"oversized": oversize,
+	}
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			bundle := writeBundle(t, f.root, "Odd.app", buildIconPlist(t, "", "X"), "", nil)
+			opt := f.options(t)
+			opt.NativeAppIcon = func(string, int) []byte { return payload }
+			svc := NewService(opt)
+			require.Empty(t, svc.Resolve([]string{"app:" + bundle}, 64))
+		})
+	}
+}

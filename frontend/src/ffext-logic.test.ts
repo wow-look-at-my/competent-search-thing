@@ -160,6 +160,7 @@ describe("tabRow", () => {
         pinned: true,
         lastAccessed: 1721456789123.75,
         active: false,
+        favIconUrl: "https://t.example/favicon.ico",
         cookieStoreId: "ignored-extra-field",
       }),
     ).toEqual({
@@ -170,6 +171,7 @@ describe("tabRow", () => {
       pinned: true,
       lastAccessed: 1721456789124,
       active: false,
+      favIconUrl: "https://t.example/favicon.ico",
     });
   });
 
@@ -182,6 +184,7 @@ describe("tabRow", () => {
       pinned: false,
       lastAccessed: 0,
       active: false,
+      favIconUrl: "",
     });
   });
 });

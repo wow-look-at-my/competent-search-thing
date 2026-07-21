@@ -14,9 +14,11 @@ import (
 // and never decodes an image. Legacy 32-bit RLE entries (is32/il32/
 // ih32/it32 + their masks) and JPEG 2000 payloads are skipped: apps
 // whose .icns holds only those (plus CFBundleIconName-only apps, whose
-// icon lives in Assets.car) fall back to the builtin glyph -- an
-// estimated 5-15% of a typical /Applications scan, dominated by Mac
-// App Store / Catalyst-era bundles.
+// icon lives in Assets.car) miss here -- an estimated 5-15% of a
+// typical /Applications scan, dominated by Mac App Store /
+// Catalyst-era bundles -- and resolve through the NativeAppIcon seam
+// instead (bundle.go): the OS's own rendering, so only apps macOS
+// itself has no icon for keep the builtin glyph.
 
 // pngMagic is the 8-byte PNG file signature.
 var pngMagic = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}

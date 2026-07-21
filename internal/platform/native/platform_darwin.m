@@ -1,12 +1,15 @@
 // Cocoa/Carbon shim for display_darwin.go / movewindow_darwin.go /
-// appsource_darwin.go / hotkey_darwin.go / panel_darwin.go. Kept
-// minimal and conventional: CI compiles this (darwin job) but never
-// runs it, so nothing here is exercised before a real macOS session.
+// appsource_darwin.go / hotkey_darwin.go / panel_darwin.go /
+// appicon_darwin.go. Kept minimal and conventional: CI compiles this
+// (darwin job) and the darwin unit-test suite exercises csAppIconPNG
+// on the mac runner; everything else waits for a real macOS session.
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <Carbon/Carbon.h>
 #import <WebKit/WebKit.h>
 
+#include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "platform_darwin.h"
@@ -233,6 +236,78 @@ int csRunningApps(csAppInfo *out, int max) {
 		}
 	});
 	return n;
+}
+
+// --- OS app-icon rasterization (appicon_darwin.go) ---
+
+void *csAppIconPNG(const char *path, int size, int *outLen) {
+	*outLen = 0;
+	if (path == NULL || size <= 0 || size > 1024) {
+		return NULL;
+	}
+	void *out = NULL;
+	// The whole body runs under its own autorelease pool: the caller
+	// is an arbitrary Go goroutine thread (which has none), and
+	// iconForFile:/representationUsingType: autorelease freely. No
+	// main-thread hop -- see the header comment; the per-thread
+	// current-graphics-context stack keeps the offscreen draw isolated.
+	@autoreleasepool {
+		NSString *p = [NSString stringWithUTF8String:path];
+		if (p == nil) {
+			return NULL;
+		}
+		// iconForFile: answers a generic icon for ANY string; only
+		// paths that actually exist may claim one.
+		if (![[NSFileManager defaultManager] fileExistsAtPath:p]) {
+			return NULL;
+		}
+		NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:p];
+		if (icon == nil) {
+			return NULL;
+		}
+		NSBitmapImageRep *rep = [[[NSBitmapImageRep alloc]
+			initWithBitmapDataPlanes:NULL
+			              pixelsWide:size
+			              pixelsHigh:size
+			           bitsPerSample:8
+			         samplesPerPixel:4
+			                hasAlpha:YES
+			                isPlanar:NO
+			          colorSpaceName:NSCalibratedRGBColorSpace
+			             bytesPerRow:0
+			            bitsPerPixel:0] autorelease];
+		if (rep == nil) {
+			return NULL;
+		}
+		NSGraphicsContext *ctx = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+		if (ctx == nil) {
+			return NULL;
+		}
+		[NSGraphicsContext saveGraphicsState];
+		[NSGraphicsContext setCurrentContext:ctx];
+		// Copy, not SourceOver: every destination pixel (alpha
+		// included) comes from the image, so the rep's uninitialized
+		// buffer can never show through; drawInRect picks the image's
+		// best representation for the target size, exactly what the
+		// Dock does.
+		[icon drawInRect:NSMakeRect(0, 0, size, size)
+		        fromRect:NSZeroRect
+		       operation:NSCompositingOperationCopy
+		        fraction:1.0];
+		[ctx flushGraphics];
+		[NSGraphicsContext restoreGraphicsState];
+		NSData *png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+		if (png == nil || png.length == 0 || png.length > (NSUInteger)INT_MAX) {
+			return NULL;
+		}
+		out = malloc(png.length);
+		if (out == NULL) {
+			return NULL;
+		}
+		memcpy(out, png.bytes, png.length);
+		*outLen = (int)png.length;
+	}
+	return out;
 }
 
 // --- Carbon global hotkey (hotkey_darwin.go) ---

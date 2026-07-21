@@ -120,8 +120,12 @@ func TestServerConnectListsTabs(t *testing.T) {
 	require.False(t, s.Connected())
 
 	f := dialFakeHost(t, path)
+	withFav := wireTabRow(1, 10, "One", "https://one.example/")
+	withFav["favIconUrl"] = "https://one.example/favicon.ico"
 	f.tabs = []map[string]any{
-		wireTabRow(1, 10, "One", "https://one.example/"),
+		withFav,
+		// No favIconUrl at all: an older extension's row (the
+		// tolerance contract) stays parseable and answers "".
 		wireTabRow(2, 10, "Two", "https://two.example/"),
 	}
 	// The server asks a fresh connection for its tabs unprompted.
@@ -134,6 +138,8 @@ func TestServerConnectListsTabs(t *testing.T) {
 	require.Equal(t, "One", tabs[0].Title)
 	require.Equal(t, "https://one.example/", tabs[0].URL)
 	require.Equal(t, int64(1000), tabs[0].LastAccessed)
+	require.Equal(t, "https://one.example/favicon.ico", tabs[0].FavIconURL)
+	require.Empty(t, tabs[1].FavIconURL, "a favIconUrl-less row answers empty")
 	_, at := s.Tabs()
 	require.WithinDuration(t, time.Now(), at, 3*time.Second)
 }
