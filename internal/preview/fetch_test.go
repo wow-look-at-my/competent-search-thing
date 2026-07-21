@@ -223,9 +223,10 @@ func TestFetchAIEndToEndWithCache(t *testing.T) {
 	require.Equal(t, "m", p.AI.Model, "cache hits report the configured model")
 	require.Equal(t, int64(1), hits.Load(), "the cache hit never dialed")
 
-	// A FRESH cache over the same file (a new app run) still hits.
+	// A FRESH cache over the same file (a new app run) still hits --
+	// under the provider-qualified key (see aiprovider.go installAI).
 	cache2 := NewAICache(cachePath)
-	answer, ok := cache2.Get("m", "q")
+	answer, ok := cache2.Get("openai/m", "q")
 	require.True(t, ok)
 	require.Equal(t, "cached answer", answer)
 }

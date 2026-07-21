@@ -112,8 +112,8 @@ const (
 	DefaultPreviewTextMaxKB    = 256
 	DefaultPreviewImageMaxEdge = 800
 	DefaultPreviewDirMax       = 200
-	DefaultPreviewKagiMax     = 8
-	DefaultPreviewOpenAIModel = "gpt-5-mini"
+	DefaultPreviewKagiMax      = 8
+	DefaultPreviewOpenAIModel  = "gpt-5-mini"
 	DefaultPreviewOpenAITokens = 1024
 	// DefaultPreviewAnthropicModel is the Anthropic answer model:
 	// the cheapest current-generation model, the right default for
