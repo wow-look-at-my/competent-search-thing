@@ -2290,13 +2290,16 @@ produce one, with the built-in glyph as the always-available fallback:
 - **macOS**: the `.app` bundle's `Contents/Info.plist` (both the XML
   and the binary serialization Xcode writes) names its
   `CFBundleIconFile`; the referenced `.icns` container's best modern
-  PNG entry is served directly, no image decoding involved. Apps whose
-  icon lives ONLY in an `Assets.car` asset catalog
-  (`CFBundleIconName` without `CFBundleIconFile` -- an estimated
-  5-15% of a typical `/Applications` scan, mostly Mac App Store /
-  Catalyst-era bundles) keep the glyph, as do icns files carrying
-  only legacy RLE or JPEG 2000 entries. The darwin CI job measures
-  the real ratio against the runner's `/Applications` on every push.
+  PNG entry is served directly, no image decoding involved. Apps that
+  path cannot read -- an icon living ONLY in an `Assets.car` asset
+  catalog (`CFBundleIconName` without `CFBundleIconFile`, an
+  estimated 5-15% of a typical `/Applications` scan, mostly Mac App
+  Store / Catalyst-era bundles), or an icns carrying only legacy RLE
+  or JPEG 2000 entries -- resolve through macOS itself instead
+  (`NSWorkspace`), so every app shows the same icon Launchpad, Finder
+  and the Dock show; the glyph remains only where macOS has no icon
+  either. The darwin CI job asserts every bundle in the runner's
+  `/Applications` resolves on every push.
 - **Windows**: no `.ico` extraction yet; app rows keep the glyph.
 
 Resolution is lazy and never blocks a query: rows render with the

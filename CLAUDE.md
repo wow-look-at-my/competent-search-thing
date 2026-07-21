@@ -177,7 +177,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   hatch, default ON per the never-below-60 ruling),
   builds the icon resolver once (icons.go in this package:
   the `newIcons` builder seam, production buildIcons =
-  icons.NewService over its defaults -- zero IO at build, the first
+  icons.NewService over Options{NativeAppIcon: native.AppIconPNG} --
+  the OS-rendering darwin fallback wired unconditionally, the
+  !darwin stub answers nil; zero IO at build, the first
   Resolve pays initialization -- behind the bound
   `ResolveIcons(keys, size) map[string]string`, which the frontend
   calls with batched per-render icon keys; nil resolver (newTestApp)
@@ -2314,12 +2316,27 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   below, else unknown-size band; NO image decoding ever -- skipping
   legacy RLE/JPEG-2000 payloads and entries over 512KB
   (maxIcnsEntryBytes; plist capped 4 MiB, icns container 32 MiB via
-  stat-first readCapped). CFBundleIconName-only (Assets.car) apps
-  are a DELIBERATE miss (negative-cached -> glyph fallback; est.
-  5-15% of /Applications, measured by the darwin-only
-  real_darwin_test.go which runs un-gated on the mac job and fails
-  only when a POPULATED /Applications resolves nothing). Consumed by
-  internal/app icons.go (the newIcons seam).
+  stat-first readCapped). When the pure plist/icns walk misses --
+  CFBundleIconName-only (Assets.car) apps (est. 5-15% of
+  /Applications, the Little Snitch field report), legacy-only icns
+  payloads, any structural miss -- the injectable Options.
+  NativeAppIcon seam (func(path string, sizePx int) []byte) is asked
+  BEFORE the miss is negative-cached: production wiring passes
+  native.AppIconPNG (NSWorkspace iconForFile rasterized to a PNG --
+  what Launchpad/Finder show, asset catalogs included; the !darwin
+  stub answers nil), a native hit lands in the positive cache like
+  any other, a nil answer negative-caches into the glyph (the honest
+  only-when-macOS-has-none fallback), and non-PNG/oversized seam
+  bytes are rejected (defense in depth). The pure path stays primary
+  (seam never consulted on a pure hit; bundle_test.go pins the whole
+  order headlessly) and a nil seam keeps pre-seam behavior
+  byte-identical. The darwin-only real_darwin_test.go runs un-gated
+  on the mac job: the pure-path tally (fails only when a POPULATED
+  /Applications resolves nothing), the acceptance sweep (with the
+  production seam wired EVERY /Applications bundle must resolve --
+  any miss is a bug), and the Assets.car-only pin (skipped when the
+  runner has no such app). Consumed by internal/app icons.go (the
+  newIcons seam).
 - `internal/fileicons` -- the per-file-type icon MAPPING layer: the
   committed artifact data.bin (a binpazer container from
   wow-look-at-my/bin-file-fmt -- one IconRules user block, GUID
@@ -2946,6 +2963,20 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   declared as a category so the (BOOL, id) calls compile), returning
   the honest CS_UNCAP_* status -- a WebKit that drops the SPI
   degrades to a status code, never a crash.
+  AppIconPNG (appicon_darwin.go + the !darwin nil stub; the icons
+  service's NativeAppIcon production seam): csAppIconPNG =
+  [NSWorkspace iconForFile:] -- the icon Launchpad/Finder/the Dock
+  show, Assets.car included -- drawn offscreen into an NSBitmapImageRep
+  (Copy op so the uninitialized buffer never shows through) and
+  returned as a malloc'd PNG the Go side copies+frees; deliberately
+  NO runOnMain hop (NSWorkspace lookup + NSImage drawing are
+  thread-safe, the caller is the ResolveIcons goroutine, and the
+  darwin unit-test binary pumps no main queue -- a dispatch_sync
+  there would deadlock), body under its own @autoreleasepool
+  (Go threads have none), missing paths refused (iconForFile answers
+  a generic icon for ANY string). The ONE shim entry point the mac CI
+  job actually EXERCISES (internal/icons real_darwin_test.go sweeps
+  the runner's real /Applications through it).
   display_darwin.go also carries `#cgo LDFLAGS: -framework
   UniformTypeIdentifiers` on Wails' behalf: the v2 darwin frontend
   references UTType without linking that framework, and newer Xcode
