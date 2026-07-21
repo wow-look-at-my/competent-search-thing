@@ -1,11 +1,14 @@
 // DOM construction for the results list: one row per file hit with a
-// folder/file glyph (cloned from the <template> elements in
-// index.html), the entry name with the matched substring highlighted,
-// and the dimmed parent directory -- plus the plugin sections that
-// render in the two plugin zones (priority > 0 above the file rows,
-// everything else below; header + rows cloned from templates, icon
-// glyph map, whitelisted --plugin-accent styling hook). Pure
-// text-node builders throughout: nothing here can inject markup.
+// per-file-type icon glyph (resolved synchronously by
+// fileicons/fileicons.ts from the vendored file-icons pack), the
+// entry name with the matched substring highlighted, and the dimmed
+// parent directory -- plus the plugin sections that render in the two
+// plugin zones (priority > 0 above the file rows, everything else
+// below; header + rows cloned from templates, icon glyph map,
+// whitelisted --plugin-accent styling hook). Pure text-node builders
+// throughout: nothing here can inject markup.
+
+import { fileIcon } from "./fileicons/fileicons";
 
 // RowHandlers receive the ROW ELEMENT, not a captured index: handler
 // indices are resolved at EVENT time (main.ts does rows.indexOf), so
@@ -19,10 +22,29 @@ export interface RowHandlers {
   onActivate(row: HTMLDivElement, reveal: boolean): void;
 }
 
-const folderTpl = document.getElementById(
-  "tpl-icon-folder",
-) as HTMLTemplateElement;
-const fileTpl = document.getElementById("tpl-icon-file") as HTMLTemplateElement;
+// The tpl-icon-folder/file <template>s stay in index.html for the
+// preview pane's dir listing; file ROWS render fileicons glyphs
+// instead (buildFileGlyph below), so render.ts no longer clones them.
+
+// buildFileGlyph builds one row's icon span: the resolved glyph
+// character in its icon-font class, coloured EXCLUSIVELY through the
+// --fi-dark/--fi-light custom properties (the --plugin-accent
+// precedent -- never inline color styles; fileicons.css consumes them
+// per the html.icons-light motif class). Synchronous: no ResolveIcons
+// round-trip for file rows.
+export function buildFileGlyph(name: string, isDir: boolean): HTMLSpanElement {
+  const icon = fileIcon(name, isDir);
+  const el = document.createElement("span");
+  el.className = "icon file-glyph " + icon.font;
+  el.textContent = icon.glyph;
+  if (icon.colorDark !== undefined) {
+    el.style.setProperty("--fi-dark", icon.colorDark);
+  }
+  if (icon.colorLight !== undefined) {
+    el.style.setProperty("--fi-light", icon.colorLight);
+  }
+  return el;
+}
 
 // parentDir strips the trailing name component from a path, tolerating
 // both separator styles so Windows paths render sensibly too.
@@ -120,8 +142,7 @@ export function renderResults(
     row.className = "result";
     row.setAttribute("role", "option");
 
-    const tpl = item.isDir ? folderTpl : fileTpl;
-    row.append(tpl.content.cloneNode(true));
+    row.append(buildFileGlyph(item.name, item.isDir));
     row.append(highlightedName(item.name, item.matchRanges));
 
     const dir = document.createElement("span");

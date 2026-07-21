@@ -95,6 +95,13 @@ const files = [
   "Projects/searchbar/README.md",
   "Projects/searchbar/go.mod",
   "Projects/searchbar/index.go",
+  // "rep"-prefixed names across common code extensions so the
+  // 02-results/03-selection shots demonstrate varied per-file-type
+  // icons (beside the report *.pdf/xlsx/md/csv matches above).
+  "Projects/searchbar/repo.go",
+  "Projects/webapp/src/reply.ts",
+  "Projects/webapp/repack.json",
+  "Projects/webapp/src/repair.css",
   "Projects/webapp/package.json",
   "Projects/webapp/README.md",
   "Projects/webapp/src/app.ts",
@@ -191,13 +198,17 @@ async function stop(p: Proc): Promise<void> {
 
 // Per-theme assertion bounds, derived from real local captures on the same
 // fixture (do not guess -- re-derive if the UI changes). Measured values
-// (re-derived 2026-07-18, when the window grew to 780x550 and gained the
-// bottom stats row; the bands still hold with wide margins, so only these
-// evidence numbers changed):
-//   dark  01/02/03 = 26576/68782/68810 bytes, means  7044/ 8584/ 8578
-//   light 01/02/03 = 26869/70196/70217 bytes, means 61725/60666/60668
-// Previous derivation (2026-07-17, 680x460, when 01 gained the empty-query
-// cheat sheet): dark means 7149/8338/8329, light 61601/61052/61055.
+// (re-derived 2026-07-20, when file rows gained the per-file-type
+// glyph icons (the file-icons webfonts), the fixture gained the four
+// rep-* code files, and the 02 settle grew to 1600ms; the bands still
+// hold with wide margins, so only these evidence numbers changed):
+//   dark  01/02/03 = 26987/103166/103120 bytes, means  7054/ 9689/ 9687
+//   light 01/02/03 = 27105/104035/103991 bytes, means 61725/59407/59408
+// Previous derivation (2026-07-18, when the window grew to 780x550 and
+// gained the bottom stats row): dark means 7044/8584/8578, light
+// 61725/60666/60668; before that (2026-07-17, 680x460, when 01 gained
+// the empty-query cheat sheet): dark 7149/8338/8329, light
+// 61601/61052/61055.
 // A dead/black webview captures near mean 0; solid white near 65535. The
 // light theme sits ~61k, so its band must clear 60k yet still reject a
 // blank-white window; the size floors do the rest (a flat rectangle
@@ -288,7 +299,11 @@ async function summonAndCapture(theme: ThemeSpec): Promise<void> {
   await $`xdotool windowactivate ${wid}`.silent().nothrow();
   await sleep(400);
   await $`xdotool type --delay 60 rep`.silent();
-  await sleep(700);
+  // Settle long enough for the per-keystroke renders AND the icon
+  // webfont rasterization to finish under Xvfb software rendering --
+  // 700ms caught a mid-typing frame once file rows started rendering
+  // real per-type icons.
+  await sleep(1600);
   await capture(wid, theme, "02-results.png");
 
   await $`xdotool key Down Down`.silent();
