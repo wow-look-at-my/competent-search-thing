@@ -94,6 +94,13 @@ func TestWebextensionLogicLockstep(t *testing.T) {
 	require.Equal(t, MsgListTabs, mjsString(t, src, "MSG_LIST_TABS"))
 	require.Equal(t, MsgActivate, mjsString(t, src, "MSG_ACTIVATE"))
 	require.Equal(t, MsgTabsChanged, mjsString(t, src, "MSG_TABS_CHANGED"))
+
+	// tabRow must keep emitting favIconUrl -- the wire field rides the
+	// tolerance contract (no protocol bump; a missing field parses as
+	// ""), so only this pin keeps the Go side from silently losing the
+	// live favicon hints if the projection drops it.
+	require.Regexp(t, `favIconUrl:\s*tab\.favIconUrl`, src,
+		"logic.mjs tabRow must project tab.favIconUrl onto the wire")
 }
 
 func TestWebextensionBackgroundLoadsLogic(t *testing.T) {

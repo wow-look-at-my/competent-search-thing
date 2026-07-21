@@ -27,6 +27,7 @@ import (
 	"context"
 	"encoding/base64"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,18 +39,22 @@ import (
 
 // Resolve key protocol (the wire contract with the frontend):
 //
-//	"dir"             -> the directory icon (folder, inode-directory)
-//	"file:<basename>" -> the file-type icon for that file name
-//	"app:<ref>"       -> ref is a .desktop Icon= value: an absolute
-//	                     .png/.svg path served directly, or a themed
-//	                     icon name (trailing .png/.svg/.xpm stripped)
+//	"dir"              -> the directory icon (folder, inode-directory)
+//	"file:<basename>"  -> the file-type icon for that file name
+//	"app:<ref>"        -> ref is a .desktop Icon= value: an absolute
+//	                      .png/.svg path served directly, or a themed
+//	                      icon name (trailing .png/.svg/.xpm stripped)
+//	"favicon:<pageURL>" -> the website favicon for an http(s) page URL
+//	                      (Firefox result rows; see favicon.go for the
+//	                      hint/offline/fetch resolution tiers)
 //
 // Unknown or malformed keys and lookup misses are simply absent from
 // the returned map.
 const (
-	keyDir        = "dir"
-	keyFilePrefix = "file:"
-	keyAppPrefix  = "app:"
+	keyDir           = "dir"
+	keyFilePrefix    = "file:"
+	keyAppPrefix     = "app:"
+	keyFaviconPrefix = "favicon:"
 )
 
 // Size and cache bounds.
@@ -98,6 +103,23 @@ type Options struct {
 	// (NSWorkspace iconForFile on darwin, a nil-returning stub
 	// elsewhere); nil keeps the pure path alone.
 	NativeAppIcon func(path string, sizePx int) []byte
+	// FaviconLookup, when non-nil, resolves an http(s) page URL to a
+	// stored website favicon: raw image bytes (sniffed here, never
+	// trusted) plus an optional known favicon URL worth fetching when
+	// no usable bytes are stored. Production wiring passes
+	// internal/firefox's FaviconReader.Lookup (the profile's
+	// favicons.sqlite, read from a private snapshot); nil skips the
+	// offline tier -- see favicon.go for the full "favicon:" key
+	// resolution order.
+	FaviconLookup func(pageURL string, sizePx int) (data []byte, iconURL string)
+
+	// favTransport / favTimeout / favMaxFetch are test seams for the
+	// bounded favicon fetch tier (the firefox.TabCacheOptions unexported
+	// pattern): zero values mean http.DefaultTransport, the 3s
+	// production timeout, and the 256 KiB production cap.
+	favTransport http.RoundTripper
+	favTimeout   time.Duration
+	favMaxFetch  int64
 }
 
 // Service resolves icon keys to data URIs. Safe for concurrent use:
@@ -111,15 +133,20 @@ type Service struct {
 	pixmapDirs    []string
 	maxFileBytes  int64
 	nativeAppIcon func(path string, sizePx int) []byte
+	faviconLookup func(pageURL string, sizePx int) (data []byte, iconURL string)
+	favClient     *http.Client
+	favMaxFetch   int64
 
 	once sync.Once // initialize: mime db load + theme detection
 
-	mu       sync.Mutex // guards everything below
-	mime     *mimeDB
-	chain    []string
-	themes   map[string]*themeIndex
-	cache    *lru // (name|size or path|size) -> data URI
-	negative *lru // same keys known to miss (value unused)
+	mu          sync.Mutex // guards everything below
+	mime        *mimeDB
+	chain       []string
+	themes      map[string]*themeIndex
+	cache       *lru                     // (name|size or path|size or favicon key|size) -> data URI
+	negative    *lru                     // same keys known to miss (value unused)
+	favHints    *lru                     // pageURL -> browser-reported favicon hint (NoteFavicon)
+	favInflight map[string]chan struct{} // favicon cache keys resolving right now
 }
 
 // NewService builds a Service from o. No IO happens here.
@@ -132,7 +159,14 @@ func NewService(o Options) *Service {
 		pixmapDirs:    o.PixmapDirs,
 		maxFileBytes:  o.MaxFileBytes,
 		nativeAppIcon: o.NativeAppIcon,
+		faviconLookup: o.FaviconLookup,
+		favClient:     newFaviconClient(o.favTransport, o.favTimeout),
+		favMaxFetch:   o.favMaxFetch,
 		themes:        map[string]*themeIndex{},
+		favInflight:   map[string]chan struct{}{},
+	}
+	if s.favMaxFetch <= 0 {
+		s.favMaxFetch = faviconFetchMaxBytes
 	}
 	if s.getenv == nil {
 		s.getenv = os.Getenv
@@ -171,13 +205,17 @@ func NewService(o Options) *Service {
 	}
 	s.cache = newLRU(entries)
 	s.negative = newLRU(entries)
+	s.favHints = newLRU(entries)
 	return s
 }
 
-// Resolve maps each icon key (see the key protocol above) to a
-// data:image/png;base64 or data:image/svg+xml;base64 URI at the
-// wanted physical pixel size (clamped to [8,256]). Keys that miss or
-// make no sense are absent from the result; the map is never nil.
+// Resolve maps each icon key (see the key protocol above) to an image
+// data URI at the wanted physical pixel size (clamped to [8,256]).
+// Keys that miss or make no sense are absent from the result; the map
+// is never nil. Favicon keys resolve in a SECOND phase outside the
+// service mutex: their miss path may read the favicon snapshot or run
+// one bounded network fetch (see favicon.go), and neither may ever
+// block the app-icon/file-icon keys of a concurrent batch.
 func (s *Service) Resolve(keys []string, size int) map[string]string {
 	if size < minIconSize {
 		size = minIconSize
@@ -185,14 +223,31 @@ func (s *Service) Resolve(keys []string, size int) map[string]string {
 		size = maxIconSize
 	}
 	s.once.Do(s.initialize)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	out := make(map[string]string, len(keys))
+	var favKeys []string
+	favSeen := map[string]bool{}
+	s.mu.Lock()
 	for _, key := range keys {
 		if _, done := out[key]; done {
 			continue
 		}
+		if strings.HasPrefix(key, keyFaviconPrefix) {
+			ck := key + "|" + strconv.Itoa(size)
+			if uri, ok := s.cache.get(ck); ok {
+				out[key] = uri
+			} else if _, neg := s.negative.get(ck); !neg && !favSeen[key] {
+				favSeen[key] = true
+				favKeys = append(favKeys, key)
+			}
+			continue
+		}
 		if uri, ok := s.resolveKey(key, size); ok {
+			out[key] = uri
+		}
+	}
+	s.mu.Unlock()
+	for _, key := range favKeys {
+		if uri, ok := s.resolveFavicon(key, size); ok {
 			out[key] = uri
 		}
 	}
@@ -461,5 +516,20 @@ func (l *lru) put(key, val string) {
 		oldest := l.ll.Back()
 		l.ll.Remove(oldest)
 		delete(l.byKey, oldest.Value.(*lruEntry).key)
+	}
+}
+
+// deletePrefix drops every entry whose key starts with prefix (a
+// bounded walk -- the list never exceeds cap entries). NoteFavicon
+// uses it to un-pin negative-cached favicon misses when a fresh
+// browser hint arrives for the page.
+func (l *lru) deletePrefix(prefix string) {
+	for el := l.ll.Front(); el != nil; {
+		next := el.Next()
+		if e := el.Value.(*lruEntry); strings.HasPrefix(e.key, prefix) {
+			l.ll.Remove(el)
+			delete(l.byKey, e.key)
+		}
+		el = next
 	}
 }

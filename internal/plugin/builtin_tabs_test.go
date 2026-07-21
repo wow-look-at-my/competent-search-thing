@@ -106,6 +106,8 @@ func TestTabsProviderResultShape(t *testing.T) {
 	require.Equal(t, "Hacker News", r.Title)
 	require.Equal(t, "https://news.ycombinator.com/", r.Subtitle, "the subtitle is the full URL")
 	require.Equal(t, "link", r.Icon, "globe belongs to frequent-sites")
+	require.Equal(t, "favicon:https://news.ycombinator.com/", r.IconKey,
+		"tab rows carry the favicon IconKey so the frontend can swap in the real site icon")
 	require.Equal(t, tabPinnedBadge, r.Badge, "pinned tabs carry the badge")
 	require.NotNil(t, r.Score)
 	require.Equal(t, &Action{Type: ActionOpenURL, Value: "https://news.ycombinator.com/"}, r.Action)
@@ -115,6 +117,7 @@ func TestTabsProviderResultShape(t *testing.T) {
 	require.Len(t, results, 1)
 	require.Equal(t, "blog.example.org", results[0].Title)
 	require.Empty(t, results[0].Badge)
+	require.Equal(t, "favicon:https://blog.example.org/", results[0].IconKey)
 }
 
 func TestTabsProviderTokenSwitchesAction(t *testing.T) {

@@ -46,13 +46,23 @@ INSERT INTO moz_places (id, url, title, hidden) VALUES (1, ?, ?, 0);`, url, titl
 // the little-endian size, and a literals-only LZ4 block (which every
 // block decoder accepts).
 func writeRecoveryFixture(t *testing.T, dir, url, title string) {
+	writeRecoveryFixtureImage(t, dir, url, title, "")
+}
+
+// writeRecoveryFixtureImage is writeRecoveryFixture with the tab's
+// "image" attribute (the sessionstore favicon URL) set when non-empty.
+func writeRecoveryFixtureImage(t *testing.T, dir, url, title, image string) {
 	t.Helper()
 	type entry struct {
 		URL   string `json:"url"`
 		Title string `json:"title"`
 	}
+	tabObj := map[string]any{"entries": []entry{{URL: url, Title: title}}, "index": 1}
+	if image != "" {
+		tabObj["image"] = image
+	}
 	raw, err := json.Marshal(map[string]any{"windows": []map[string]any{{
-		"tabs": []map[string]any{{"entries": []entry{{URL: url, Title: title}}, "index": 1}},
+		"tabs": []map[string]any{tabObj},
 	}}})
 	require.NoError(t, err)
 
@@ -110,9 +120,13 @@ func TestFirefoxSourcesNoProfileIsQuietlyNil(t *testing.T) {
 
 func TestFirefoxSourcesProfileDirOverrides(t *testing.T) {
 	a, _ := newTestApp(t, nil, Options{})
+	noter := &fakeNotingResolver{}
+	a.newIcons = func() iconResolver { return noter }
+	a.startIcons()
 	sitesDir, tabsDir := t.TempDir(), t.TempDir()
 	writePlacesFixture(t, sitesDir, "https://daily.example/", "Daily", 12)
-	writeRecoveryFixture(t, tabsDir, "https://open.example/page", "Open page")
+	writeRecoveryFixtureImage(t, tabsDir, "https://open.example/page", "Open page",
+		"https://open.example/favicon.ico")
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
@@ -139,6 +153,9 @@ func TestFirefoxSourcesProfileDirOverrides(t *testing.T) {
 	require.Equal(t, "https://open.example/page", tb.URL)
 	require.Equal(t, "Open page", tb.Title)
 	require.Equal(t, "open.example", tb.Host)
+	require.Contains(t, noter.noted(),
+		[2]string{"https://open.example/page", "https://open.example/favicon.ico"},
+		"the sessionstore fallback notes the snapshot's image attribute as the favicon hint")
 }
 
 func TestFirefoxSourcesSharedDiscovery(t *testing.T) {

@@ -22,7 +22,8 @@
 //
 //	-> {"id":N,"type":"listTabs"}
 //	<- {"id":N,"ok":true,"tabs":[{"id":..,"windowId":..,"title":..,
-//	     "url":..,"pinned":..,"lastAccessed":..,"active":..}, ...]}
+//	     "url":..,"pinned":..,"lastAccessed":..,"active":..,
+//	     "favIconUrl":..}, ...]}
 //	-> {"id":N,"type":"activate","tabId":T,"windowId":W}
 //	<- {"id":N,"ok":true} | {"id":N,"ok":false,"error":"..."}
 //	<- {"type":"tabsChanged","tabs":[...]}          (unsolicited push)
@@ -96,6 +97,12 @@ type Tab struct {
 	Pinned       bool
 	LastAccessed int64 // milliseconds since the Unix epoch, 0 unknown
 	Active       bool
+	// FavIconURL is the tab's favicon as Firefox reports it (an http(s)
+	// URL or a data: URI), "" when the browser has none. The app layer
+	// feeds it to the icon resolver's favicon hint side-channel; an
+	// older extension simply never sends the field (the tolerance
+	// contract), so it stays "".
+	FavIconURL string
 }
 
 // request is one bridge->extension message (relayed verbatim by the
@@ -129,4 +136,5 @@ type wireTab struct {
 	Pinned       bool    `json:"pinned"`
 	LastAccessed float64 `json:"lastAccessed"`
 	Active       bool    `json:"active"`
+	FavIconURL   string  `json:"favIconUrl"`
 }

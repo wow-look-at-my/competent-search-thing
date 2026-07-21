@@ -243,6 +243,7 @@ func (s *Server) storeTabs(hc *hostConn, wire []wireTab) {
 			Pinned:       w.Pinned,
 			LastAccessed: int64(w.LastAccessed),
 			Active:       w.Active,
+			FavIconURL:   w.FavIconURL,
 		})
 	}
 	s.mu.Lock()
