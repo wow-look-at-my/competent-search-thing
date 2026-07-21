@@ -18,7 +18,7 @@ import (
 	binpazer "github.com/wow-look-at-my/bin-file-fmt/go"
 )
 
-var knownFonts = map[string]bool{"fi": true, "fa": true, "mf": true, "oct": true}
+var knownFonts = map[string]bool{"fi": true, "fa": true, "mf": true, "oct": true, "di": true}
 
 func decodeCommitted(t *testing.T) *Table {
 	t.Helper()
@@ -29,15 +29,15 @@ func decodeCommitted(t *testing.T) *Table {
 
 func TestLoadDecodesTheEmbeddedArtifact(t *testing.T) {
 	tab := Load()
-	assert.Len(t, tab.FileRules, 2158)
-	assert.Len(t, tab.DirRules, 42)
+	assert.Len(t, tab.FileRules, 2363)
+	assert.Len(t, tab.DirRules, 51)
 	assert.Same(t, tab, Load(), "Load caches")
 }
 
 func TestVendoringReceipts(t *testing.T) {
 	tab := decodeCommitted(t)
-	assert.Len(t, tab.FileRules, 2158)
-	assert.Len(t, tab.DirRules, 42)
+	assert.Len(t, tab.FileRules, 2363)
+	assert.Len(t, tab.DirRules, 51)
 	assert.Equal(t, Icon{Font: "oct", CP: 0xf011}, tab.DefFile, "octicons file-text")
 	assert.Equal(t, Icon{Font: "oct", CP: 0xf016}, tab.DefDir, "octicons file-directory")
 	for _, r := range append(append([]Rule{}, tab.FileRules...), tab.DirRules...) {
@@ -126,6 +126,29 @@ func TestPackContentPins(t *testing.T) {
 	}
 	require.GreaterOrEqual(t, github, 0, "a .github dir rule exists")
 	assert.Equal(t, 61450, tab.DirRules[github].CP)
+
+	// The recovered buckets (PR #65 dropped them; see LICENSES.md):
+	// Devicons-face rules ride the vendored file-icons/DevOpicons
+	// font, and the Atom-builtin octicon classes resolve against the
+	// octicons codepoint data.
+	rsAt := suffixAt(".rs")
+	require.GreaterOrEqual(t, rsAt, 0, "a .rs suffix rule exists (recovered Devicons face)")
+	assert.Equal(t, Rule{Font: "di", CP: 0xe6a8, Suffix: ".rs", Dark: "#8f5536", Light: "#8f5536"},
+		tab.FileRules[rsAt])
+	pdfAt := suffixAt(".pdf")
+	require.GreaterOrEqual(t, pdfAt, 0, "a .pdf suffix rule exists (recovered icon-file-pdf)")
+	assert.Equal(t, Rule{Font: "oct", CP: 0xf014, Suffix: ".pdf", Dark: "#ac4142", Light: "#ac4142"},
+		tab.FileRules[pdfAt])
+	nodeModules := -1
+	for i, r := range tab.DirRules {
+		if strings.Contains(r.Regex, "node_modules") {
+			nodeModules = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, nodeModules, 0, "a node_modules dir rule exists (recovered Devicons face)")
+	assert.Equal(t, "di", tab.DirRules[nodeModules].Font)
+	assert.Equal(t, 0xe618, tab.DirRules[nodeModules].CP)
 }
 
 /* --- hardening ------------------------------------------------------ */

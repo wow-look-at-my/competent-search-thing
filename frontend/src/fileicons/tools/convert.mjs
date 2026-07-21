@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // convert.mjs -- regenerates the vendored fileicons artifacts from
 // pinned checkouts of file-icons/atom and primer/octicons (the
-// commits are recorded in ../README.md): the four woff2 fonts into
+// commits are recorded in ../README.md): the five woff2 fonts into
 // <fileicons-dir>/fonts/ and the mapping artifact data.bin at
 // <data-bin-out> (the committed copy lives at
 // internal/fileicons/data.bin, beside its Go decoder). Emitting
@@ -16,7 +16,10 @@
 // recognize -- the inputs are pinned, so drift means re-verify):
 //   1. styles/icons.less  -> icon class -> {font, codepoint} (929
 //      single-line rules; the font mixins .octicons/.fa/.mf/.devicons/
-//      .fi name the five faces).
+//      .fi name the five faces), plus the Atom-builtin octicon
+//      classes ("icon-<name>" -- Atom shipped these itself, so the
+//      pack's icons.less never declares them) resolved against the
+//      octicons checkout's lib/font/codepoints.json.
 //   2. styles/colours.less + the mixins.less semantics -> colour
 //      class -> {dark hex, light hex}: the LESS palette math
 //      (lighten/darken/saturate by percentage points of HSL) with the
@@ -28,17 +31,19 @@
 //      ["medium-X","dark-X"] = [dark-theme, light-theme] exactly like
 //      lib/icons/icon-definition.js); priority desc then source
 //      order; matchPath rules dropped (we only match basenames).
-//   4. Icon resolution drops rules whose class is not in icons.less
-//      and EVERY rule using the Devicons face (fonts/devopicons.woff2
-//      carries no license -- see ../LICENSES.md); every surviving
-//      {font, codepoint} is verified against the font's actual cmap
-//      (woff2cmap.mjs) so no rule can reference a missing glyph.
+//   4. Icon resolution drops rules whose class resolves to no glyph
+//      source; every surviving {font, codepoint} is verified against
+//      the font's actual cmap (woff2cmap.mjs) so no rule can
+//      reference a missing glyph. The Devicons face is vendored from
+//      file-icons/DevOpicons (the pack bundles the identical bytes as
+//      fonts/devopicons.woff2 -- provenance receipts in
+//      ../LICENSES.md).
 //   5. Defaults mirror the pack's Atom fallbacks: octicons file-text
 //      for files, octicons file-directory for directories, uncolored.
 //   6. Emits data.bin -- the IconRules payload (emitbin.mjs encoding
 //      v1) packed into a binpazer container by the first-party
-//      `binpazer` CLI (pack + validate) -- and copies the four
-//      licensed woff2 fonts.
+//      `binpazer` CLI (pack + validate) -- and copies the five
+//      woff2 fonts.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -76,6 +81,24 @@ const icons = new Map();
   }
   if (icons.size < 900) {
     throw new Error(`icons.less parse suspiciously small: ${icons.size}`);
+  }
+}
+
+// Atom-builtin octicon classes: config.cson's noSuffix entries (PDF,
+// Text, Mail, Circuit Board, D*Mark, Theme) reference "icon-<name>"
+// CSS classes Atom itself shipped from the SAME Octicons face we
+// already vendor -- the pack's icons.less never declares them, so
+// they used to drop as class-less. Resolve every octicon name from
+// the pinned checkout's codepoint data; unknown "icon-*" classes
+// still fall through to the class-less drop below.
+{
+  const codepoints = JSON.parse(read(octiconsDir, "lib/font/codepoints.json"));
+  for (const [name, cp] of Object.entries(codepoints)) {
+    const cls = `icon-${name}`;
+    if (!Number.isInteger(cp) || icons.has(cls)) {
+      throw new Error(`octicons codepoints.json: unexpected entry ${name}`);
+    }
+    icons.set(cls, { font: "oct", cp });
   }
 }
 
@@ -348,7 +371,7 @@ function parseCson(text) {
 
 /* ---- 4. assemble rules --------------------------------------------------- */
 
-const stats = { rules: 0, matchPath: 0, devicons: 0, noIcon: 0, noGlyph: 0, entries: 0 };
+const stats = { rules: 0, matchPath: 0, noIcon: 0, noGlyph: 0, entries: 0 };
 const droppedIcons = new Set();
 const noGlyph = new Set();
 
@@ -391,10 +414,6 @@ function buildRules(entries, cmaps) {
     if (!icon) {
       stats.noIcon += entry.match.length;
       droppedIcons.add(String(cls));
-      continue;
-    }
-    if (icon.font === "di") {
-      stats.devicons += entry.match.length;
       continue;
     }
     if (!cmaps[icon.font].has(icon.cp)) {
@@ -443,12 +462,15 @@ const FONT_FILES = {
   fa: ["fontawesome.woff2", path.join(atomDir, "fonts/fontawesome.woff2")],
   mf: ["mfixx.woff2", path.join(atomDir, "fonts/mfixx.woff2")],
   oct: ["octicons.woff2", path.join(octiconsDir, "build/font/octicons.woff2")],
+  // The Devicons face: file-icons/DevOpicons' dist/DevOpicons.woff2,
+  // which the pack bundles byte-identically (sha256-verified) as
+  // fonts/devopicons.woff2 -- see ../LICENSES.md for provenance.
+  di: ["devopicons.woff2", path.join(atomDir, "fonts/devopicons.woff2")],
 };
 const cmaps = {};
 for (const [id, [, src]] of Object.entries(FONT_FILES)) {
   cmaps[id] = cmapCodepoints(fs.readFileSync(src));
 }
-cmaps.di = new Set(); // excluded: never consulted, never shipped
 
 const cson = parseCson(read(atomDir, "config.cson"));
 if (!cson.fileIcons || !cson.directoryIcons) {
@@ -477,8 +499,7 @@ packIconTable(encodeIconPayload(data), dataBinOut);
 
 console.log(
   `converted: ${fileRules.length} file rules + ${dirRules.length} dir rules ` +
-    `from ${stats.entries} entries; 4 fonts (${fontBytes} bytes); dropped: ` +
-    `${stats.devicons} devicons-face rules (unlicensed font), ` +
+    `from ${stats.entries} entries; 5 fonts (${fontBytes} bytes); dropped: ` +
     `${stats.matchPath} path-scoped, ${stats.noIcon} without an icon class ` +
     `[${[...droppedIcons].sort().join(", ")}], ${stats.noGlyph} glyphless ` +
     `[${[...noGlyph].sort().join(", ")}]`,

@@ -178,6 +178,7 @@ var fontFiles = map[string]string{
 	"fa":  "fontawesome.woff2",
 	"mf":  "mfixx.woff2",
 	"oct": "octicons.woff2",
+	"di":  "devopicons.woff2",
 }
 
 func loadCmaps(t *testing.T) map[string]map[int]bool {

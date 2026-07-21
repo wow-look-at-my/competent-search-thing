@@ -233,14 +233,16 @@ const fontFiles: Record<string, string> = {
   fa: "fontawesome.woff2",
   mf: "mfixx.woff2",
   oct: "octicons.woff2",
+  di: "devopicons.woff2",
 };
 const fontByteCap: Record<string, number> = {
   fi: 240000,
   fa: 90000,
   mf: 40000,
   oct: 32000,
+  di: 60000,
 };
-const totalByteCap = 350000;
+const totalByteCap = 410000;
 
 describe("committed fonts", () => {
   it("fonts stay inside their byte budgets", () => {

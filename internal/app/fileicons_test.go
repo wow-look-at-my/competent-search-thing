@@ -12,8 +12,8 @@ import (
 func TestGetFileIconsServesTheDecodedTable(t *testing.T) {
 	a, _ := newTestApp(t, nil, Options{})
 	tab := a.GetFileIcons()
-	assert.Len(t, tab.FileRules, 2158)
-	assert.Len(t, tab.DirRules, 42)
+	assert.Len(t, tab.FileRules, 2363)
+	assert.Len(t, tab.DirRules, 51)
 	assert.Equal(t, "oct", tab.DefFile.Font)
 	assert.Equal(t, 0xf011, tab.DefFile.CP)
 	assert.Equal(t, 0xf016, tab.DefDir.CP)
