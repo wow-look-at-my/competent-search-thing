@@ -38,7 +38,7 @@ type Row struct {
 	// Plugin rows.
 	Plugin     string // provider id ("apps-search", "firefox-tabs", ...)
 	Score      int    // engine wire score 0..100
-	Priority   int    // emission priority (apps-search = 1 today)
+	Priority   int    // emission priority (the promotable sources = 1)
 	SourceRank int    // index among the SAME provider's rows
 
 	// Shared query context. In a pairwise linear model a feature that

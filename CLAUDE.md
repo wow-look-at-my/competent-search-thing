@@ -1716,8 +1716,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   MarshalJSON and no reader; the on-disk format is the contract) --
   missing/oversized files = (nil, nil), malformed/wrong-version/
   unknown-kind lines skipped, SourceRank counted per plugin id,
-  Priority derived (apps-search = 1, the one production prioritized
-  source; serve reads the emission's real value), Hour from the
+  Priority derived (prioritizedSource: apps-search + the two Firefox
+  web sources firefox-frequent/firefox-tabs = 1, every other id 0 --
+  deliberately ALWAYS 1 for the promotable sources even though
+  serving is tier-gated, the over-approximation apps-search has
+  always had; serve reads the emission's real value), Hour from the
   pick ts. train.go: Train = pairwise logistic SGD (picked row must
   outscore every other shown row of its impression; fixed seed
   20260720, 12 epochs, lr 0.2, L2 1e-4 -- deterministic given the

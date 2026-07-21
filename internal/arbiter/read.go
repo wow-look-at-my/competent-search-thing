@@ -110,9 +110,9 @@ func ReadLogFile(path string) ([]Impression, error) {
 // SourceRank (this row's index among the SAME provider's rows --
 // same-provider rows are consecutive in the delivered list, so the
 // count doubles as the within-section index the serve path uses),
-// Priority (apps-search is the one prioritized source in production;
-// the emission's actual value is used at serve time), and Hour (the
-// pick timestamp's local hour).
+// Priority (the prioritized production sources derive 1, see
+// prioritizedSource; the emission's actual value is used at serve
+// time), and Hour (the pick timestamp's local hour).
 func projectRecord(rec logLine) (Impression, bool) {
 	if len(rec.Shown) == 0 || rec.Picked.Rank < 0 || rec.Picked.Rank >= len(rec.Shown) {
 		return Impression{}, false
@@ -143,7 +143,7 @@ func projectRecord(rec logLine) (Impression, bool) {
 			row.Score = sr.Score
 			row.SourceRank = perPlugin[sr.Plugin]
 			perPlugin[sr.Plugin]++
-			if sr.Plugin == prioritizedBuiltin {
+			if prioritizedSource(sr.Plugin) {
 				row.Priority = 1
 			}
 		default:
@@ -156,11 +156,21 @@ func projectRecord(rec logLine) (Impression, bool) {
 	return imp, true
 }
 
-// prioritizedBuiltin is the one production source with a non-zero
-// emission priority (internal/plugin's apps-search, priority 1); the
-// log does not record priorities, so training derives them from the
-// id while the serve path reads the emission's actual value.
-const prioritizedBuiltin = "apps-search"
+// prioritizedSource reports whether id names a production source
+// whose emissions can carry a non-zero priority: internal/plugin's
+// apps-search plus the two Firefox web sources firefox-frequent and
+// firefox-tabs (each priority 1 on a strong best match). The log
+// does not record priorities, so training derives them from the id
+// -- deliberately ALWAYS 1 for these sources even though serving is
+// tier-gated, the same over-approximation apps-search has always
+// had -- while the serve path reads the emission's actual value.
+func prioritizedSource(id string) bool {
+	switch id {
+	case "apps-search", "firefox-frequent", "firefox-tabs":
+		return true
+	}
+	return false
+}
 
 // readBounded reads path entirely, mapping "missing" and "absurdly
 // large" both onto (nil, nil).
