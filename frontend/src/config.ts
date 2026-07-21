@@ -655,6 +655,69 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+/* --- description linkification ----------------------------------------- */
+
+// linkSegments splits description text into plain and URL segments --
+// the pure half of linkification (vitest-pinned). Trailing
+// punctuation that reads as sentence text stays out of the URL, so
+// "get one at https://x.example/keys ." links cleanly.
+export function linkSegments(
+  text: string,
+): { text: string; isUrl: boolean }[] {
+  const out: { text: string; isUrl: boolean }[] = [];
+  const re = /https?:\/\/[^\s]+/g;
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    const start = m.index ?? 0;
+    let url = m[0];
+    while (url.length > 0 && ".,;:)]'\"".includes(url[url.length - 1])) {
+      url = url.slice(0, -1);
+    }
+    if (url === "") {
+      continue;
+    }
+    if (start > last) {
+      out.push({ text: text.slice(last, start), isUrl: false });
+    }
+    out.push({ text: url, isUrl: true });
+    last = start + url.length;
+  }
+  if (last < text.length) {
+    out.push({ text: text.slice(last), isUrl: false });
+  }
+  return out;
+}
+
+// descNode builds a description div whose http(s) URLs are clickable
+// -- text nodes plus <a> elements, never innerHTML. A click routes
+// through the Go open path (OpenExternalURL validates and opens the
+// system browser; the bar stays up) and preventDefault keeps the
+// webview itself from ever navigating.
+function descNode(cls: string, text: string): HTMLDivElement {
+  const div = el("div", cls);
+  for (const seg of linkSegments(text)) {
+    if (!seg.isUrl) {
+      div.append(document.createTextNode(seg.text));
+      continue;
+    }
+    const url = seg.text;
+    const a = el("a", "config-link", url);
+    a.href = url;
+    a.title = "open in your browser";
+    a.addEventListener("click", (ev: MouseEvent) => {
+      ev.preventDefault(); // the webview must never navigate
+      if (app === null) {
+        return;
+      }
+      app.OpenExternalURL(url).catch((err: unknown) => {
+        flash(String(err), FLASH_ERROR_MS);
+      });
+    });
+    div.append(a);
+  }
+  return div;
+}
+
 // resolve follows the schema's local "#/$defs/<name>" refs.
 function resolve(node: SchemaNode): SchemaNode {
   const ref = node.$ref;
@@ -788,7 +851,7 @@ function makeSection(
   }
   sec.append(header);
   if (node !== undefined && node.description !== undefined) {
-    sec.append(el("div", "config-section-note", node.description));
+    sec.append(descNode("config-section-note", node.description));
   }
   tocEntries.push({ dotted, label: tocLabel, depth, section: sec });
   return sec;
@@ -818,7 +881,116 @@ function renderSection(
       sec.append(renderLeafRow([...path, key], child, classify(child)));
     }
   }
+  appendTestRow(sec, path.join("."));
   return sec;
+}
+
+/* --- provider Test buttons --------------------------------------------- */
+
+// providerTestRequest builds one TestPreviewProvider request from the
+// working copy's CANDIDATE values for the provider section at dotted,
+// or null for sections without a Test button. Pure over (dotted, doc)
+// so vitest pins the field mapping; unsaved edits are testable
+// because the values come from the live working copy at click time.
+export function providerTestRequest(
+  dotted: string,
+  from: unknown,
+): PreviewProviderTest | null {
+  const str = (path: string[]): string => {
+    const v = getPath(from, path);
+    return typeof v === "string" ? v : "";
+  };
+  switch (dotted) {
+    case "preview.kagi":
+      return {
+        provider: "kagi",
+        apiKey: str(["preview", "kagi", "apiKey"]),
+        baseUrl: str(["preview", "kagi", "baseUrl"]),
+        model: "",
+      };
+    case "preview.openai":
+      return {
+        provider: "openai",
+        apiKey: str(["preview", "openai", "apiKey"]),
+        baseUrl: str(["preview", "openai", "baseUrl"]),
+        model: str(["preview", "openai", "model"]),
+      };
+    case "preview.anthropic":
+      return {
+        provider: "anthropic",
+        apiKey: str(["preview", "anthropic", "apiKey"]),
+        baseUrl: str(["preview", "anthropic", "baseUrl"]),
+        model: str(["preview", "anthropic", "model"]),
+      };
+    case "preview.custom":
+      return {
+        provider: "custom",
+        apiKey: str(["preview", "custom", "apiKey"]),
+        baseUrl: str(["preview", "custom", "baseUrl"]),
+        model: str(["preview", "custom", "model"]),
+      };
+    default:
+      return null;
+  }
+}
+
+// testButtonHint is the per-provider help line under the Test button.
+// The Kagi wording carries the honest cost note: a limit-1 real
+// search is the cheapest test the API offers, and it SPENDS a credit.
+function testButtonHint(dotted: string): string {
+  if (dotted === "preview.kagi") {
+    return "Runs ONE real search with the values above (unsaved edits included). NOTE: this spends 1 Kagi API credit.";
+  }
+  return "Sends ONE tiny real request with the values above (unsaved edits included) and reports the endpoint's honest answer.";
+}
+
+// appendTestRow adds the provider Test row to the four preview
+// provider sections. The probe runs against the CANDIDATE working
+// copy (empty fields fall back to the provider's environment
+// variables Go-side, like the live dispatcher); the outcome renders
+// inline next to the button.
+function appendTestRow(sec: HTMLElement, dotted: string): void {
+  if (providerTestRequest(dotted, {}) === null) {
+    return;
+  }
+  const row = el("div", "config-row config-test-row");
+  row.dataset.search = (dotted + " test connection").toLowerCase();
+  const top = el("div", "config-row-top");
+  const btn = el("button", "config-btn config-test-btn", "Test");
+  btn.type = "button";
+  btn.id = "cfg-test-" + dotted.split(".").join("-");
+  const result = el("span", "config-test-result");
+  result.hidden = true;
+  btn.addEventListener("click", () => {
+    if (app === null || doc === null) {
+      return;
+    }
+    const req = providerTestRequest(dotted, doc);
+    if (req === null) {
+      return;
+    }
+    btn.disabled = true;
+    result.hidden = false;
+    result.className = "config-test-result";
+    result.textContent = "testing...";
+    app
+      .TestPreviewProvider(req)
+      .then((res) => {
+        result.textContent = res.message;
+        result.classList.add(res.ok ? "config-test-ok" : "config-test-err");
+      })
+      .catch((err: unknown) => {
+        result.textContent = String(err);
+        result.classList.add("config-test-err");
+      })
+      .finally(() => {
+        btn.disabled = false;
+      });
+  });
+  top.append(btn, result);
+  row.append(top);
+  row.append(descNode("config-help", testButtonHint(dotted)));
+  sec.append(row);
 }
 
 /* --- the ToC sidebar -------------------------------------------------- */
@@ -943,7 +1115,7 @@ function renderLeafRow(
     top.append(control);
   }
   if (node.description !== undefined) {
-    row.append(el("div", "config-help", node.description));
+    row.append(descNode("config-help", node.description));
   }
   return row;
 }
