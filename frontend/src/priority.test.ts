@@ -1,16 +1,22 @@
-// The frontend ordering gate for "apps above file results": priority
-// sections render in the zone ABOVE the file rows, the flat selection
-// traverses priority -> files -> below-zone in document order, and a
-// late-arriving priority emission takes row 0 only while the user has
-// not navigated. Deterministic, DOM-light: the real index.html markup
-// is loaded by test-setup.ts, the pure split/comparator/reconcile
-// rules are exercised directly.
+// The frontend ordering gate for "file results default to last": ALL
+// plugin sections -- weak and strong alike -- render in the zone
+// ABOVE the file rows (the 2026-07-21 ruling; sectionAboveFiles is
+// the one predicate deciding it, and the below zone is retained
+// empty as the weak-sections-below veto variant's home), sections
+// order among themselves by compareSections (priority desc, max
+// score desc, plugin id -- strong promoted sections still lead), the
+// flat selection traverses sections -> files -> below-zone in
+// document order, and a late-arriving emission takes row 0 only
+// while the user has not navigated. Deterministic, DOM-light: the
+// real index.html markup is loaded by test-setup.ts, the pure
+// split/comparator/reconcile rules are exercised directly.
 
 import { describe, expect, it } from "vitest";
 import {
   compareSections,
   renderPluginSections,
   renderResults,
+  sectionAboveFiles,
   splitByPriority,
 } from "./render";
 import type { PluginSection, RowHandlers } from "./render";
@@ -53,31 +59,51 @@ function zones(): { priorityEl: HTMLElement; fileEl: HTMLElement; pluginEl: HTML
   return { priorityEl, fileEl, pluginEl };
 }
 
-describe("priority zones", () => {
+describe("files-last zones", () => {
   it("index.html nests the priority zone above the file zone", () => {
     const { priorityEl, fileEl, pluginEl } = zones();
     expect(precedes(priorityEl, fileEl)).toBe(true);
     expect(precedes(fileEl, pluginEl)).toBe(true);
   });
 
-  it("renders priority section rows above file rows above plugin rows", () => {
+  it("sectionAboveFiles routes EVERY section above the files", () => {
+    // The one predicate behind the files-last default: weak
+    // (priority 0) and strong (priority 1) sections alike render
+    // above the file rows. The veto variant flips exactly this
+    // predicate back to `s.priority > 0` -- these asserts are the
+    // pins that variant rewrites.
+    expect(sectionAboveFiles(section("windows", 0, ["Weak win"]))).toBe(true);
+    expect(sectionAboveFiles(section("apps-search", 1, ["Strong app"]))).toBe(
+      true,
+    );
+  });
+
+  it("renders weak and strong section rows above the file rows", () => {
     const { priorityEl, fileEl, pluginEl } = zones();
     const fileRows = renderResults(fileEl, [fileItem("firefly.txt")], handlers);
     const split = splitByPriority([
       section("windows", 0, ["Firefox -- window"]),
       section("apps-search", 1, ["Firefox"]),
     ]);
+    // Both sections -- the weak priority-0 one included -- land in
+    // the above-files group; the below zone renders empty (retained
+    // for the veto variant).
+    expect(split.normal).toHaveLength(0);
     const above = renderPluginSections(priorityEl, split.priority, handlers);
     const below = renderPluginSections(pluginEl, split.normal, handlers);
 
-    expect(above.rows).toHaveLength(1);
-    expect(below.rows).toHaveLength(1);
+    expect(above.rows).toHaveLength(2);
+    expect(below.rows).toHaveLength(0);
+    // compareSections still leads with the strong section.
     expect(above.refs[0].pluginId).toBe("apps-search");
-    expect(precedes(above.rows[0], fileRows[0])).toBe(true);
-    expect(precedes(fileRows[0], below.rows[0])).toBe(true);
+    expect(above.refs[1].pluginId).toBe("windows");
+    // Files come LAST: every section row precedes the first file row.
+    expect(precedes(above.rows[above.rows.length - 1], fileRows[0])).toBe(
+      true,
+    );
   });
 
-  it("flat selection order (priority, files, below) is document order", () => {
+  it("flat selection order is sections then files -- row 0 is a plugin row", () => {
     const { priorityEl, fileEl, pluginEl } = zones();
     const fileRows = renderResults(
       fileEl,
@@ -91,21 +117,36 @@ describe("priority zones", () => {
     const above = renderPluginSections(priorityEl, split.priority, handlers);
     const below = renderPluginSections(pluginEl, split.normal, handlers);
 
-    // The combined selection array (priority rows, file rows, plugin
-    // rows) must already BE document order -- the invariant the flat
-    // ArrowUp/Down model relies on.
+    // The combined selection array (section rows, file rows, the
+    // empty below zone) must already BE document order -- the
+    // invariant the flat ArrowUp/Down model relies on.
     const combined = above.rows.concat(fileRows, below.rows);
     expect(combined).toHaveLength(6);
     for (let i = 0; i + 1 < combined.length; i++) {
       expect(precedes(combined[i], combined[i + 1])).toBe(true);
     }
+    // With sections present, row 0 is the FIRST PLUGIN ROW (the
+    // Spotlight-style consequence of files-last) and the file rows
+    // sit at the traversal's tail; auto-select therefore lands on
+    // the first plugin row while the user has not navigated.
+    expect(combined[0]).toBe(above.rows[0]);
+    expect(combined[combined.length - 1]).toBe(fileRows[1]);
+    expect(
+      reconcileSelection({
+        prevItemIndex: -1,
+        prevSelected: -1,
+        rowCount: combined.length,
+        queryBlank: false,
+        userNavigated: false,
+      }),
+    ).toBe(0);
   });
 
-  it("orders apps + tabs + sites deterministically when all promote at once", () => {
-    // All three prioritized sources (apps-search plus the two Firefox
-    // web sources) can earn priority 1 for the same query: every one
-    // of them renders in #priority-results above the file rows,
-    // ordered by max score desc then plugin id (priorities are equal).
+  it("orders apps + tabs + sites + a weak section deterministically", () => {
+    // Three strong (priority 1) sections and one weak (priority 0)
+    // section all render above the files together: priority desc
+    // first (strong sections lead even against a higher-scoring weak
+    // one), then max score desc, then plugin id.
     const { priorityEl, fileEl } = zones();
     const fileRows = renderResults(
       fileEl,
@@ -121,17 +162,22 @@ describe("priority zones", () => {
     expect(split.priority.map((s) => s.plugin)).toEqual([
       "firefox-tabs",
       "apps-search",
+      "windows",
       "firefox-frequent",
     ]);
-    expect(split.normal.map((s) => s.plugin)).toEqual(["windows"]);
+    expect(split.normal).toHaveLength(0);
 
-    // Equal priority 1: max score desc (tabs/sites 83 over apps 73),
-    // score ties by plugin id ("firefox-frequent" < "firefox-tabs").
-    const ordered = [tabs, apps, sites].sort(compareSections);
+    // Priority 1 leads over priority 0 regardless of score (the
+    // 85-scoring windows section renders after every promoted one);
+    // equal priority orders by max score desc (tabs/sites 83 over
+    // apps 73), score ties by plugin id ("firefox-frequent" <
+    // "firefox-tabs").
+    const ordered = [tabs, apps, wins, sites].sort(compareSections);
     expect(ordered.map((s) => s.plugin)).toEqual([
       "firefox-frequent",
       "firefox-tabs",
       "apps-search",
+      "windows",
     ]);
 
     // The rendered zone applies the same order, above the file rows.
@@ -140,25 +186,27 @@ describe("priority zones", () => {
       "firefox-frequent",
       "firefox-tabs",
       "apps-search",
+      "windows",
     ]);
     expect(precedes(above.rows[above.rows.length - 1], fileRows[0])).toBe(
       true,
     );
   });
 
-  it("splitByPriority partitions and compareSections orders deterministically", () => {
+  it("splitByPriority routes all sections above; compareSections is unchanged", () => {
     const apps = section("apps-search", 1, ["Firefox"], 73);
     const tabs = section("firefox-tabs", 0, ["Fire tab"], 85);
     const wins = section("windows", 0, ["Fire win"], 85);
     const sites = section("firefox-frequent", 0, ["fire.dev"], 95);
 
     const split = splitByPriority([tabs, apps, wins, sites]);
-    expect(split.priority.map((s) => s.plugin)).toEqual(["apps-search"]);
-    expect(split.normal.map((s) => s.plugin)).toEqual([
+    expect(split.priority.map((s) => s.plugin)).toEqual([
       "firefox-tabs",
+      "apps-search",
       "windows",
       "firefox-frequent",
     ]);
+    expect(split.normal).toEqual([]);
 
     // priority desc, then max score desc, then plugin id.
     const ordered = [tabs, wins, sites, apps].sort(compareSections);
@@ -171,7 +219,7 @@ describe("priority zones", () => {
   });
 });
 
-describe("late priority emission selection", () => {
+describe("late emission selection", () => {
   const base = { queryBlank: false, userNavigated: false };
 
   it("auto-selects row 0 while the user has not navigated", () => {
@@ -179,15 +227,16 @@ describe("late priority emission selection", () => {
     expect(
       reconcileSelection({ ...base, prevItemIndex: 0, prevSelected: 0, rowCount: 1 }),
     ).toBe(0);
-    // The apps emission prepends a row; the previously selected file
-    // is now index 1, but auto-select re-runs: the app takes row 0.
+    // A section emission prepends rows above the files; the
+    // previously selected file is now index 1, but auto-select
+    // re-runs: the first plugin row takes row 0.
     expect(
       reconcileSelection({ ...base, prevItemIndex: 1, prevSelected: 0, rowCount: 2 }),
     ).toBe(0);
   });
 
   it("preserves a navigated user's item by identity", () => {
-    // The user arrowed onto the file; the apps row prepends; the
+    // The user arrowed onto the file; a section row prepends; the
     // selection follows the file to its shifted index.
     expect(
       reconcileSelection({
