@@ -4,8 +4,9 @@ A cross-platform desktop searchbar: press a global hotkey, a small
 frameless bar pops up on the display your cursor is on, and every
 keystroke instantly filters an in-memory index of your file names --
 Spotlight-style presentation with voidtools-Everything-style speed.
-An async [plugin system](#plugins) adds virtual results below the file
-rows -- type `=2+2` and a calculator card answers, `#ff8800` previews a
+An async [plugin system](#plugins) adds virtual results above the file
+rows (file results come last) -- type `=2+2` and a calculator card
+answers, `#ff8800` previews a
 color, `!ps fire` lists matching running apps -- without ever slowing
 the file search down. Built with Go and [Wails v2](https://wails.io),
 with a tiny vanilla TypeScript + Vite frontend.
@@ -557,11 +558,11 @@ buildhost (see [Install](#install)):
       opt-in app-context awareness (focused/running/installed apps),
       built-in commands (`!rescan`, `!reload`, `!config`, `!version`,
       `!quit`, `!app`) and three documented example plugins
-- [x] Installed apps in normal results: strongly matching apps show
-      up as an async Apps section ABOVE the file results for plain
-      queries (word-start tier or better earns the promotion; weak
-      substring/fuzzy matches render below the files), ordered by
-      your actual launch counts within a match class; capped at 6;
+- [x] Installed apps in normal results: matching apps show up as an
+      async Apps section above the file results for plain queries
+      (file results default to last; a word-start-or-better best
+      match leads the sections and trims to its strong rows), ordered
+      by your actual launch counts within a match class; capped at 6;
       see [Apps in normal results](#apps-in-normal-results)
 - [x] Empty-query cheat sheet: an empty bar lists the available
       commands (the same list a bare `!` shows) with no row
@@ -764,9 +765,10 @@ priors layer writes nothing and sends nothing.
 layer: when the same name matches a file, a browser tab, and an
 app, which did YOU mean? Type `jira` and the bar shows a file named
 `jira-notes.md`, the open "JIRA - Sprint 12" Firefox tab, and maybe
-an app -- out of the box the files always render first. If you keep
+an app -- out of the box the sections order by match strength with
+the file list last. If you keep
 picking the tab, the arbiter learns that and floats the tabs section
-above the file results for queries shaped like that; if you keep
+ahead of the other sections for queries shaped like that; if you keep
 picking `.md` files over their `.txt` siblings, file rows get a
 small learned nudge too.
 
@@ -788,8 +790,8 @@ deterministic engine already delivered, before anything paints:
   one match-class band, so an exact match can never lose to a fuzzy
   one and strong engine decisions stand.
 - Across sources it may re-order a plugin section's rows and float a
-  section (tabs, apps, sites) above the file results when its best
-  row outscores the best file row for that query.
+  section (tabs, apps, sites) ahead of the other sections when its
+  best row outscores the best file row for that query.
 
 The ACTIVATION GATE is what makes default-on safe: the model
 participates only once **at least 200 picks** exist in the ranking
@@ -1569,7 +1571,7 @@ json.dump({
 ```
 
 Summon the bar, run `!reload`, then type `hi there`. A "Hello, there"
-card appears below the file results; Enter copies "there" to the
+card appears above the file results; Enter copies "there" to the
 clipboard. Because `bangs` defaults to the plugin id, `!hello there`
 works too, bypassing the prefix trigger.
 
@@ -1928,20 +1930,19 @@ exactly like `!app` does. This is the fourth built-in provider,
   apps you actually open first), then name. The section caps at 6
   results to stay out of the way -- use `!app` / `!launch` for the
   full list of 15.
-- "Above the files" must be EARNED: the section is promoted only
-  when its best row matched at the word-start tier or better, and a
-  promoted section carries only those strong rows. Weak matches
-  (substring, fuzzy) render below the file results instead -- a
-  scattered-subsequence app hit never outranks a directory literally
-  named like your query.
-- The placement is a SOURCE PRIORITY, not a score: the promoted
-  emission carries priority 1 (unpromoted sections are 0 and render
-  below the file results), the UI places priority > 0 sections in
-  the zone above the file rows, and the engine's scoring bands are
-  untouched. The priority is stamped by the app for its built-in
-  sources; external plugins cannot set it. The Firefox frequent-sites
-  and open-tabs sections earn the exact same promotion, so a strongly
-  matching open tab or frequent site also renders above the files.
+- File results default to LAST: every result section renders above
+  the file list. Being FIRST is still earned -- a section whose best
+  row matched at the word-start tier or better is promoted ahead of
+  the other sections and carries only those strong rows; weak
+  (substring/fuzzy) sections keep all their rows and render after
+  the promoted ones, still above the files.
+- The placement is a SOURCE PRIORITY, not a score: a promoted
+  emission carries priority 1 (weak sections are 0), the UI orders
+  sections by priority then match strength ahead of the file rows,
+  and the engine's scoring bands are untouched. The priority is
+  stamped by the app for its built-in sources; external plugins
+  cannot set it. The Firefox frequent-sites and open-tabs sections
+  earn the exact same promotion.
 - Launch counts come from the frecency store: every successful app
   launch through the bar counts, decaying with the same 14-day
   half-life as file opens (under namespaced `app:` keys in
@@ -1966,9 +1967,10 @@ no bangs: they answer plain queries with a "Frequent Sites" and an
 
 When the machine has a Firefox profile, plain queries (two or more
 characters) also search the pages you visit frequently. Matches appear
-as a "Frequent Sites" section -- above the file results when its best
-match is strong (word-start or better, the same earned promotion as
-the Apps section), below them otherwise -- each row showing
+as a "Frequent Sites" section above the file results (files come
+last; a strong best match -- word-start or better, the same earned
+promotion as the Apps section -- leads the sections and trims to its
+strong rows), each row showing
 the page title (or its host when untitled), the full URL, and the
 site's real favicon (a globe glyph stands in while it resolves, and
 stays for sites without one -- see [Site favicons](#site-favicons));
@@ -2063,10 +2065,11 @@ contains a Firefox-format `places.sqlite`.
 ### Open tabs (Firefox)
 
 Plain queries (two or more characters) also search the tabs currently
-open in Firefox. Matches appear as an "Open Tabs" section -- above
-the file results when its best match is strong (word-start or better,
-the same earned promotion as the Apps section), below them otherwise
--- each row showing the tab title (or its host when untitled), the
+open in Firefox. Matches appear as an "Open Tabs" section above the
+file results (files come last; a strong best match -- word-start or
+better, the same earned promotion as the Apps section -- leads the
+sections and trims to its strong rows), each row showing the tab
+title (or its host when untitled), the
 full URL, the site's real favicon (a link glyph until it resolves --
 see [Site favicons](#site-favicons)), and a `pinned` badge on pinned tabs.
 
@@ -2363,7 +2366,7 @@ image icons are a trusted-builtin-source capability.
 
 On X11 sessions, typing two or more characters also searches the
 titles of the windows currently open on your desktop. Matches appear
-as an "Open Windows" section below the file results (subtitle = the
+as an "Open Windows" section above the file results (subtitle = the
 owning application), and pressing Enter on one ACTIVATES that window
 -- raises and focuses it -- instead of opening anything. Think
 "window switcher you can type at".

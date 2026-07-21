@@ -1,8 +1,9 @@
 // Frontend wiring: as-you-type search over the Go index with stale
 // response dropping, a keyboard/mouse selection model, open/reveal
 // actions, the async plugin pipeline (fire-and-forget QueryPlugins,
-// "plugin:results" sections -- priority > 0 sections in the zone
-// ABOVE the file rows, the rest below -- the bang-target chip, plugin
+// "plugin:results" sections -- ALL sections in the zone ABOVE the
+// file rows, file results last; the priority orders sections and
+// the below zone renders empty -- the bang-target chip, plugin
 // action dispatch), the empty-query command cheat sheet (CheatSheet,
 // rendered unselected), the query history (the bar summons empty;
 // Up/Down recall committed queries -- see the history section below),
@@ -71,8 +72,10 @@ const statsNodes: StatsNodes = {
 };
 
 // A selectable row: a file hit or one plugin result. The flat
-// keyboard selection runs over the priority plugin rows first, then
-// files, then the below-zone plugin rows -- the DOM order.
+// keyboard selection runs over the plugin section rows first (every
+// section renders above the files), then the file rows, then the
+// below zone (empty by default; the weak-sections-below veto
+// variant's home) -- the DOM order.
 type SelectableItem =
   | { kind: "file"; file: WailsSearchResult }
   | { kind: "plugin"; pluginId: string; result: PluginResult };
@@ -85,7 +88,7 @@ interface UIState {
   sections: PluginSection[]; // plugin emissions for the current seq
   priorityRefs: PluginRowRef[]; // rendered above the file rows
   priorityRows: HTMLDivElement[];
-  pluginRefs: PluginRowRef[]; // rendered below the file rows
+  pluginRefs: PluginRowRef[]; // the below zone (empty by default)
   pluginRows: HTMLDivElement[];
   selected: number;
   seq: number; // stale-response guard: only the newest generation renders
@@ -247,8 +250,8 @@ function moveSelection(delta: number): void {
 }
 
 // syncCombined rebuilds the flat selection model in DOM order --
-// priority plugin rows, then file rows, then below-zone plugin rows
-// -- after any area re-renders.
+// plugin section rows (the above-files zone), then file rows, then
+// the below zone (empty by default) -- after any area re-renders.
 function syncCombined(): void {
   const items: SelectableItem[] = [];
   for (const ref of state.priorityRefs) {
@@ -286,13 +289,15 @@ function updateEmptyState(): void {
     state.sections.length > 0;
 }
 
-// renderPluginArea re-renders BOTH plugin zones -- priority > 0
-// sections above the file rows, the rest below -- and reconciles the
-// flat selection with the new combined row set (selection.ts): a
-// navigated user keeps their item by identity, an un-navigated one
-// gets auto-select re-run on row 0, so a late-arriving apps section
-// takes the selection Spotlight-style; the blank-query cheat sheet
-// stays unselected.
+// renderPluginArea re-renders BOTH plugin zones -- EVERY section
+// above the file rows (file results default to last; render.ts's
+// sectionAboveFiles routes all sections to the priority zone and
+// the below zone renders empty) -- and reconciles the flat selection
+// with the new combined row set (selection.ts): a navigated user
+// keeps their item by identity, an un-navigated one gets
+// auto-select re-run on row 0, so a late-arriving section takes the
+// selection Spotlight-style; the blank-query cheat sheet stays
+// unselected.
 function renderPluginArea(): void {
   const prevItem = state.items[state.selected] ?? null;
   const zones = splitByPriority(state.sections);
@@ -581,7 +586,10 @@ function fetchCheatSheet(app: WailsAppBindings, seq: number): void {
       if (results.length === 0) {
         return; // suggestions disabled or nothing registered
       }
-      // The cheat sheet always renders in the classic below zone.
+      // The cheat sheet is an ordinary priority-0 section riding the
+      // normal all-sections-above-files render path -- the file list
+      // is empty at a blank query, so it paints exactly as before,
+      // and nothing auto-selects it.
       state.sections = [
         { plugin: e.plugin, name: e.name, results, priority: 0 },
       ];
