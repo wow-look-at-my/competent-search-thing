@@ -34,6 +34,12 @@ type Tab struct {
 	// LastAccessed is the tab's last-activation time in milliseconds
 	// since the Unix epoch (0 when the snapshot omits it).
 	LastAccessed int64
+	// FavIconURL is the tab's "image" attribute -- the favicon URL the
+	// session snapshot recorded (an http(s) URL or a data: URI in
+	// practice; Firefox occasionally stores internal schemes like
+	// fake-favicon-uri:, passed through VERBATIM here -- consumers
+	// validate). "" when the snapshot has none.
+	FavIconURL string
 }
 
 // Session-snapshot JSON shapes, consumed fields only (the real file
@@ -55,6 +61,9 @@ type sessionTab struct {
 	Hidden       bool           `json:"hidden"`
 	Pinned       bool           `json:"pinned"`
 	LastAccessed int64          `json:"lastAccessed"`
+	// Image is the tab's favicon URL as SessionStore records it
+	// (TabState collects gBrowser.getIcon(tab) under the "image" key).
+	Image string `json:"image"`
 }
 
 type sessionEntry struct {
@@ -124,6 +133,7 @@ func ReadOpenTabs(profileDir string) ([]Tab, error) {
 				Host:         host,
 				Pinned:       tb.Pinned,
 				LastAccessed: tb.LastAccessed,
+				FavIconURL:   tb.Image,
 			})
 			if len(tabs) >= MaxOpenTabs {
 				return tabs, nil

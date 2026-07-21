@@ -112,6 +112,10 @@ func (a *App) openTabs(dir string) func() []plugin.TabInfo {
 		}
 		out := make([]plugin.TabInfo, len(tabs))
 		for i, tb := range tabs {
+			// The snapshot's image attribute is the fallback rows'
+			// favicon hint (liveTabs notes the bridge's favIconUrl the
+			// same way; the noter validates either).
+			a.noteFavicon(tb.URL, tb.FavIconURL)
 			out[i] = plugin.TabInfo{
 				URL:          tb.URL,
 				Title:        tb.Title,

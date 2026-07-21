@@ -2,10 +2,13 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 )
 
 // fakeIconResolver records Resolve calls and answers from a fixed map.
@@ -64,5 +67,44 @@ func TestResolveIconsDelegatesToService(t *testing.T) {
 
 func TestBuildIconsProducesService(t *testing.T) {
 	a, _ := newTestApp(t, nil, Options{})
-	require.NotNil(t, a.buildIcons(), "the production seam value constructs a resolver (no IO)")
+	svc := a.buildIcons()
+	require.NotNil(t, svc, "the production seam value constructs a resolver (no IO)")
+	_, isNoter := svc.(faviconNoter)
+	require.True(t, isNoter, "the production resolver accepts favicon hints")
+}
+
+func TestFaviconProfileDir(t *testing.T) {
+	a, _ := newTestApp(t, nil, Options{})
+	require.Empty(t, a.faviconProfileDir(),
+		"default config + pinned-nil firefoxBases: no profile anywhere")
+
+	// A config override wins without any discovery: open-tabs first...
+	cfg := config.Default()
+	cfg.Firefox.OpenTabs.ProfileDir = "/profiles/tabs"
+	cfg.Firefox.FrequentSites.ProfileDir = "/profiles/sites"
+	require.NoError(t, config.Save(cfg))
+	require.Equal(t, "/profiles/tabs", a.faviconProfileDir())
+
+	// ...then frequent-sites.
+	cfg.Firefox.OpenTabs.ProfileDir = ""
+	require.NoError(t, config.Save(cfg))
+	require.Equal(t, "/profiles/sites", a.faviconProfileDir())
+
+	// No overrides: the shared platform discovery answers.
+	cfg.Firefox.FrequentSites.ProfileDir = ""
+	require.NoError(t, config.Save(cfg))
+	base := t.TempDir()
+	writeProfilesINI(t, base, "abc.default")
+	a.plat.firefoxBases = func() []string { return []string{base} }
+	require.Equal(t, filepath.Join(base, "abc.default"), a.faviconProfileDir())
+}
+
+func TestNoteFaviconNilAndPlainResolvers(t *testing.T) {
+	a, _ := newTestApp(t, nil, Options{})
+	a.noteFavicon("https://a.example/", "https://a.example/f.ico") // no resolver: no panic
+
+	a.newIcons = func() iconResolver { return &fakeIconResolver{} }
+	a.startIcons()
+	a.noteFavicon("https://a.example/", "https://a.example/f.ico") // plain resolver: quietly skipped
+	a.noteFavicon("https://a.example/", "")                        // empty hint: short-circuits
 }

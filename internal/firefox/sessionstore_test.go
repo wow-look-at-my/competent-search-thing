@@ -43,6 +43,7 @@ func TestReadOpenTabsMultiWindow(t *testing.T) {
 	pinned := tab(1, entry("https://pin.example/x", "Pinned page"))
 	pinned.Pinned = true
 	pinned.LastAccessed = 1700000000123
+	pinned.Image = "https://pin.example/favicon.ico"
 	writeRecovery(t, dir, sessionFile{Windows: []sessionWindow{
 		window(
 			pinned,
@@ -54,10 +55,10 @@ func TestReadOpenTabsMultiWindow(t *testing.T) {
 	tabs, err := ReadOpenTabs(dir)
 	require.NoError(t, err)
 	require.Equal(t, []Tab{
-		{URL: "https://pin.example/x", Title: "Pinned page", Host: "pin.example", Pinned: true, LastAccessed: 1700000000123},
+		{URL: "https://pin.example/x", Title: "Pinned page", Host: "pin.example", Pinned: true, LastAccessed: 1700000000123, FavIconURL: "https://pin.example/favicon.ico"},
 		{URL: "http://cur.example:8080/p?q=1", Title: "Current", Host: "cur.example"},
 		{URL: "https://second-window.example/", Title: "Second window", Host: "second-window.example"},
-	}, tabs, "tabs from every window, each contributing its CURRENT entry, port stripped from the host")
+	}, tabs, "tabs from every window, each contributing its CURRENT entry, port stripped from the host; the image attribute rides along verbatim (absent = empty)")
 }
 
 func TestReadOpenTabsIndexClamping(t *testing.T) {

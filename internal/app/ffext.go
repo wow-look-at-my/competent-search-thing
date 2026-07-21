@@ -150,7 +150,10 @@ func (a *App) kickFfextRefresh() {
 // fallback. Rows are filtered to http(s)-with-host exactly like the
 // sessionstore reader, so the two sources are interchangeable and
 // every row's URL survives the activate_tab fallback's open_url
-// validation.
+// validation. Each row's browser-reported favicon location feeds the
+// icon resolver's hint side-channel (noteFavicon: bounded map writes,
+// never IO), so the favicon resolution behind the rows' IconKeys has
+// the live hint by the time the frontend asks.
 func (a *App) liveTabs() ([]plugin.TabInfo, bool) {
 	b := a.ffextBridgeHandle()
 	if b == nil || !b.Connected() {
@@ -166,6 +169,7 @@ func (a *App) liveTabs() ([]plugin.TabInfo, bool) {
 		if !hok {
 			continue
 		}
+		a.noteFavicon(tb.URL, tb.FavIconURL)
 		out = append(out, plugin.TabInfo{
 			URL:          tb.URL,
 			Title:        tb.Title,

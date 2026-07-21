@@ -19,6 +19,7 @@ export interface WireTab {
   pinned: boolean;
   lastAccessed: number;
   active: boolean;
+  favIconUrl: string;
 }
 
 export interface HostReply {

@@ -102,10 +102,17 @@ func TestFirefoxProviderResultShape(t *testing.T) {
 	require.Equal(t, "blog.example.org", r.Title, "an untitled page falls back to its host")
 	require.Equal(t, "https://blog.example.org/", r.Subtitle, "the subtitle is the full URL")
 	require.Equal(t, "globe", r.Icon)
+	require.Equal(t, "favicon:https://blog.example.org/", r.IconKey,
+		"frequent-site rows carry the favicon IconKey like tab rows")
 	require.NotNil(t, r.Score)
 	require.GreaterOrEqual(t, *r.Score, float64(0))
 	require.LessOrEqual(t, *r.Score, float64(100))
 	require.Equal(t, &Action{Type: ActionOpenURL, Value: "https://blog.example.org/"}, r.Action)
+}
+
+func TestFaviconIconKey(t *testing.T) {
+	require.Equal(t, "favicon:https://x.example/p", faviconIconKey("https://x.example/p"))
+	require.Empty(t, faviconIconKey(""), "no URL, no key: the glyph stands alone")
 }
 
 func TestFirefoxProviderCapAndDefaults(t *testing.T) {
