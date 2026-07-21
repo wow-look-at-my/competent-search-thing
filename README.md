@@ -1947,8 +1947,10 @@ no bangs: they answer plain queries with a "Frequent Sites" and an
 When the machine has a Firefox profile, plain queries (two or more
 characters) also search the pages you visit frequently. Matches appear
 as a "Frequent Sites" section below the file results, each row showing
-the page title (or its host when untitled), the full URL, and a globe
-icon; activating a row opens the page in your default browser.
+the page title (or its host when untitled), the full URL, and the
+site's real favicon (a globe glyph stands in while it resolves, and
+stays for sites without one -- see [Site favicons](#site-favicons));
+activating a row opens the page in your default browser.
 
 **"Frequent" means: visited more than 10 times in the past 30 days AND
 at least once in the past 7 days.** Both thresholds are configurable
@@ -1957,9 +1959,11 @@ at least once in the past 7 days.** Both thresholds are configurable
 
 **Privacy**: the history is read locally, from your own Firefox
 profile, by the app running on your machine -- the same data the
-awesome bar uses. Nothing is transmitted anywhere, no browser
-extension is involved, and the only network traffic ever caused by
-this feature is you opening a result in your browser.
+awesome bar uses. Nothing is transmitted anywhere and no browser
+extension is involved; the only network traffic this section can
+cause is you opening a result, plus at most a bounded favicon
+download for a site whose icon is not stored locally (see
+[Site favicons](#site-favicons)).
 
 How it works:
 
@@ -2038,8 +2042,9 @@ contains a Firefox-format `places.sqlite`.
 
 Plain queries (two or more characters) also search the tabs currently
 open in Firefox. Matches appear as an "Open Tabs" section, each row
-showing the tab title (or its host when untitled), the full URL, a
-link icon, and a `pinned` badge on pinned tabs.
+showing the tab title (or its host when untitled), the full URL, the
+site's real favicon (a link glyph until it resolves -- see
+[Site favicons](#site-favicons)), and a `pinned` badge on pinned tabs.
 
 **How activation behaves.** With the companion extension connected
 (next subsection), picking a row SWITCHES to that exact tab: Firefox
@@ -2057,6 +2062,22 @@ the extension reports the live list over a local user-only socket.
 Private windows never appear: Firefox does not persist them into the
 snapshot, and extensions do not see them unless you explicitly allow
 that in `about:addons`.
+
+#### Site favicons
+
+Both Firefox sections show each site's real favicon. Resolution is
+asynchronous -- the builtin glyph (globe / link) stands in and stays
+for sites without an icon; results never wait on it. Sources, in
+order:
+
+- **Firefox's own reports**: the companion extension's live per-tab
+  favicon, or the icon URL the session snapshot recorded.
+- **Your profile's `favicons.sqlite`**, read exactly like the
+  history: a private snapshot copy, never the live file.
+- **One bounded download of a known favicon URL** (from the two
+  sources above -- never a guessed one) when the icon is not stored
+  locally: http(s) only, 3-second and 256 KiB caps, cached either
+  way so a site is fetched at most once.
 
 #### Tab switching (companion extension)
 
