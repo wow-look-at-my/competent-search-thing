@@ -42,6 +42,8 @@ const fakeApp: WailsAppBindings = {
   QueryPlugins: () =>
     Promise.resolve({ targeted: false, plugin: "", name: "", bang: "" }),
   RunPluginAction: () => Promise.resolve(),
+  TestPreviewProvider: () => Promise.resolve({ ok: true, message: "ok" }),
+  OpenExternalURL: () => Promise.resolve(),
   CheatSheet: () =>
     Promise.resolve({ plugin: "", name: "", gen: 0, results: [] }),
   GetHistory: () => Promise.resolve([]),
@@ -87,7 +89,8 @@ const fakeApp: WailsAppBindings = {
     Promise.resolve({
       enabled: true,
       kagiConfigured: false,
-      openaiConfigured: false,
+      aiProvider: "openai",
+      aiConfigured: false,
       resultsWidth: 680,
     }),
   FetchWebPreview: () => Promise.resolve(),

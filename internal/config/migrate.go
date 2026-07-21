@@ -63,7 +63,17 @@ import (
 //	  affirmative) and window.translucent (an affirmative flag, not
 //	  enable/disable naming) are untouched, and search.telemetry
 //	  stays switchless by design.
-const currentRootsVersion = 7
+//	8 -- the preview pane turns ON by default (see
+//	  migratePreviewDefaultOn): preview.enabled becomes the
+//	  affirmative *bool (nil/absent = ON, Normalize repairs to
+//	  explicit true) and a pre-v8 stored false -- the plain-bool
+//	  era's machine handwriting on every save, not a user choice
+//	  (the feature was opt-in; deliberate off was expressed by never
+//	  opting in) -- is reset to on with a loud note naming the
+//	  opt-out. A false saved AFTER this flip is stamped
+//	  rootsVersion >= 8 and never revisited: a real opt-out,
+//	  respected forever.
+const currentRootsVersion = 8
 
 // CurrentRootsVersion returns the rootsVersion stamp this build
 // writes. Writers that must preserve the field across a full-file
@@ -292,8 +302,39 @@ func (c *Config) migrateRootsFor(goos string, raw []byte) bool {
 	if c.RootsVersion < 7 {
 		c.migrateBoolPolarity(raw)
 	}
+	// v8: the preview pane turns on by default.
+	if c.RootsVersion < 8 {
+		c.migratePreviewDefaultOn()
+	}
 	c.RootsVersion = currentRootsVersion
 	return true
+}
+
+// migratePreviewDefaultOn is the v8 step (see the version ladder
+// above): the preview pane becomes ON by default. A pre-v8 stored
+// `"preview": {"enabled": false}` is treated as never-chosen -- the
+// plain-bool era serialized false on every app-written save (Default()
+// on first run, GUI saves, drag commits, earlier migration
+// save-backs), so a stored false is almost always the machine's
+// handwriting, and a deliberate off state was expressed by never
+// opting in -- and is dropped to nil for Normalize to repair to
+// explicit true, announced loudly with the opt-out. The parsed *bool
+// distinguishes present-false from absent by itself, so this step
+// needs no raw-bytes read (the key kept its name and type shape on
+// the wire). Post-flip opt-outs are safe by construction: every save
+// from this build stamps rootsVersion 8, and this step never runs at
+// or above 8.
+func (c *Config) migratePreviewDefaultOn() {
+	const optOut = "set preview.enabled=false (config editor or config.json) to turn it off"
+	switch {
+	case c.Preview.Enabled == nil:
+		c.MigrationNotes = append(c.MigrationNotes,
+			"the preview pane is now ON by default; "+optOut)
+	case !*c.Preview.Enabled:
+		c.Preview.Enabled = nil // pre-flip machine-written false: not a user choice
+		c.MigrationNotes = append(c.MigrationNotes,
+			"the preview pane is now ON by default and the machine-written preview.enabled=false in your config was reset; "+optOut)
+	}
 }
 
 // rankingV6Raw is the minimal raw-document shape the v6 step reads:

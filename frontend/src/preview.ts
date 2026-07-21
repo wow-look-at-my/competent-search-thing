@@ -36,7 +36,8 @@ let app: WailsAppBindings | null = null;
 let wired = false; // initPreview grabbed elements + wired listeners
 let enabled = false;
 let kagiConfigured = false;
-let openaiConfigured = false;
+let aiConfigured = false;
+let aiProvider = "openai";
 
 let bodyEl: HTMLDivElement;
 let spinnerEl: HTMLDivElement;
@@ -109,7 +110,8 @@ export function applyPreviewConfig(cfg: PreviewConfigInfo): void {
   const was = enabled;
   enabled = cfg.enabled;
   kagiConfigured = cfg.kagiConfigured;
-  openaiConfigured = cfg.openaiConfigured;
+  aiConfigured = cfg.aiConfigured;
+  aiProvider = cfg.aiProvider !== "" ? cfg.aiProvider : "openai";
   if (!enabled) {
     if (was) {
       cancelSpinner();
@@ -127,7 +129,7 @@ export function applyPreviewConfig(cfg: PreviewConfigInfo): void {
     document.body.style.setProperty("--preview-results-col", `${cfg.resultsWidth}px`);
   }
   setTrigger(webBtn, kagiConfigured, "preview.kagi.apiKey (or KAGI_API_KEY)");
-  setTrigger(aiBtn, openaiConfigured, "preview.openai.apiKey (or OPENAI_API_KEY)");
+  setTrigger(aiBtn, aiConfigured, aiKeyHint(aiProvider));
   updateStripLabels();
   if (!was) {
     lastKey = null; // the next selection change repaints the pane
@@ -236,6 +238,21 @@ function targetKey(t: PreviewTarget): string {
 
 /* --- explicit web / AI triggers ------------------------------------- */
 
+// aiKeyHint names the SELECTED AI provider's config knobs for the
+// disabled-button hint (preview.aiProvider decides which section is
+// consulted; custom has no key requirement, its base URL + model are
+// the credentials).
+function aiKeyHint(provider: string): string {
+  switch (provider) {
+    case "anthropic":
+      return "preview.anthropic.apiKey (or ANTHROPIC_API_KEY)";
+    case "custom":
+      return "preview.custom.baseUrl + preview.custom.model";
+    default:
+      return "preview.openai.apiKey (or OPENAI_API_KEY)";
+  }
+}
+
 // setTrigger reflects one provider's key state on its strip button --
 // in BOTH directions, since a live config change can add or remove a
 // key while the app runs.
@@ -281,7 +298,7 @@ function triggerWeb(): void {
 }
 
 function triggerAI(): void {
-  if (app === null || !enabled || !openaiConfigured || query.trim() === "") {
+  if (app === null || !enabled || !aiConfigured || query.trim() === "") {
     return;
   }
   const g = ++gen;

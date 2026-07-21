@@ -32,6 +32,11 @@ type OpenAIClient struct {
 	// HTTPClient performs the requests (default http.DefaultClient;
 	// callers bound requests with their context).
 	HTTPClient *http.Client
+	// Name labels this client's error messages (default "openai").
+	// The custom provider sets "custom" so a misconfigured local
+	// endpoint's errors name the section that configures it instead
+	// of blaming OpenAI.
+	Name string
 
 	key             string
 	model           string
@@ -46,6 +51,14 @@ func NewOpenAIClient(key, model string, maxOutputTokens int) *OpenAIClient {
 
 // Model returns the configured model name.
 func (c *OpenAIClient) Model() string { return c.model }
+
+// label is the error-message prefix (Name, default "openai").
+func (c *OpenAIClient) label() string {
+	if c.Name != "" {
+		return c.Name
+	}
+	return "openai"
+}
 
 // openAIResponse is the subset of the Responses API answer this
 // client consumes.
@@ -81,7 +94,7 @@ func (c *OpenAIClient) Ask(ctx context.Context, prompt string) (string, string, 
 		MaxOutputTokens int    `json:"max_output_tokens"`
 	}{Model: c.model, Input: prompt, MaxOutputTokens: c.maxOutputTokens})
 	if err != nil {
-		return "", "", fmt.Errorf("openai: %w", err)
+		return "", "", fmt.Errorf("%s: %w", c.label(), err)
 	}
 	base := c.BaseURL
 	if base == "" {
@@ -89,9 +102,11 @@ func (c *OpenAIClient) Ask(ctx context.Context, prompt string) (string, string, 
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+openAIResponsesPath, bytes.NewReader(reqBody))
 	if err != nil {
-		return "", "", fmt.Errorf("openai: %w", err)
+		return "", "", fmt.Errorf("%s: %w", c.label(), err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.key)
+	if c.key != "" {
+		req.Header.Set("Authorization", "Bearer "+c.key)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	client := c.HTTPClient
 	if client == nil {
@@ -99,22 +114,22 @@ func (c *OpenAIClient) Ask(ctx context.Context, prompt string) (string, string, 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("openai: %w", err)
+		return "", "", fmt.Errorf("%s: %w", c.label(), err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, openAIMaxBody))
 	if err != nil {
-		return "", "", fmt.Errorf("openai: reading response: %w", err)
+		return "", "", fmt.Errorf("%s: reading response: %w", c.label(), err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return "", "", openAIHTTPError(resp.StatusCode, body)
+		return "", "", openAIHTTPError(c.label(), resp.StatusCode, body)
 	}
 	var parsed openAIResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", "", fmt.Errorf("openai: malformed response: %w", err)
+		return "", "", fmt.Errorf("%s: malformed response: %w", c.label(), err)
 	}
 	if parsed.Error != nil && parsed.Error.Message != "" {
-		return "", "", fmt.Errorf("openai: %s", capString(parsed.Error.Message, providerErrMsgCap))
+		return "", "", fmt.Errorf("%s: %s", c.label(), capString(parsed.Error.Message, providerErrMsgCap))
 	}
 	var b strings.Builder
 	for _, item := range parsed.Output {
@@ -142,7 +157,7 @@ func (c *OpenAIClient) Ask(ctx context.Context, prompt string) (string, string, 
 		answer += marker
 	}
 	if answer == "" {
-		return "", "", fmt.Errorf("openai: empty answer (status %q)", parsed.Status)
+		return "", "", fmt.Errorf("%s: empty answer (status %q)", c.label(), parsed.Status)
 	}
 	model := parsed.Model
 	if model == "" {
@@ -151,17 +166,17 @@ func (c *OpenAIClient) Ask(ctx context.Context, prompt string) (string, string, 
 	return answer, model, nil
 }
 
-// openAIHTTPError builds the terse non-2xx error: "openai: HTTP
+// openAIHTTPError builds the terse non-2xx error: "<label>: HTTP
 // <code>" plus at most the short parsed {"error":{"message":...}} --
 // never the raw body, never the key.
-func openAIHTTPError(code int, body []byte) error {
+func openAIHTTPError(label string, code int, body []byte) error {
 	var envelope struct {
 		Error struct {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error.Message != "" {
-		return fmt.Errorf("openai: HTTP %d: %s", code, capString(envelope.Error.Message, providerErrMsgCap))
+		return fmt.Errorf("%s: HTTP %d: %s", label, code, capString(envelope.Error.Message, providerErrMsgCap))
 	}
-	return fmt.Errorf("openai: HTTP %d", code)
+	return fmt.Errorf("%s: HTTP %d", label, code)
 }

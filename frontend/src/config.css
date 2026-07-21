@@ -466,3 +466,43 @@ body.with-config #bar #config-pane {
   color: var(--sb-accent, #8db8ff);
   border-color: var(--sb-accent, #8db8ff);
 }
+
+/* --- description links + provider Test buttons --------------------- */
+
+/* Clickable doc links inside schema descriptions (config.ts descNode
+   builds them as real anchors; clicks route through Go's
+   OpenExternalURL, never a webview navigation). */
+.config-link {
+  color: var(--sb-accent, #8db8ff);
+  text-decoration: underline;
+  cursor: pointer;
+  word-break: break-all;
+}
+
+.config-link:hover {
+  color: var(--sb-fg, #f2f2f5);
+}
+
+/* The per-provider Test row: button + inline outcome. */
+.config-test-row .config-row-top {
+  align-items: center;
+  gap: var(--sb-gap, 10px);
+}
+
+.config-test-result {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--sb-font-size-small, 12px);
+  color: var(--sb-fg-dim, #a0a0aa);
+}
+
+.config-test-result.config-test-ok {
+  color: var(--sb-accent, #8db8ff);
+}
+
+.config-test-result.config-test-err {
+  color: var(--sb-warning, #d9a13d);
+}
