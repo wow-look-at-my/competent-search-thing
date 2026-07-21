@@ -16,6 +16,7 @@
 // GetPreviewConfig + the selection/query hooks).
 
 import { configModeActive, initConfig } from "./config";
+import { initFileIcons } from "./fileicons/fileicons";
 import { initFPSMeter } from "./fpsmeter";
 import { initResize } from "./resize";
 import {
@@ -789,6 +790,11 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
 
 function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   initTheme(app, rt);
+  // The per-file-type icon table (fileicons.ts): fetched once from
+  // the Go side, fire-and-forget like initTheme -- the bar starts
+  // hidden, so the table installs long before the first file row
+  // renders (and the matcher serves the pack defaults until then).
+  void initFileIcons(app);
   app
     .GetPreviewConfig()
     .then((cfg) => {

@@ -47,6 +47,13 @@ const fakeApp: WailsAppBindings = {
   GetHistory: () => Promise.resolve([]),
   AddHistory: () => Promise.resolve(),
   ResolveIcons: () => Promise.resolve({}),
+  GetFileIcons: () =>
+    Promise.resolve({
+      fileRules: [],
+      dirRules: [],
+      defFile: { font: "oct", cp: 0xf011 },
+      defDir: { font: "oct", cp: 0xf016 },
+    }),
   RecordPick: (report) => {
     picks.push(report);
     return Promise.resolve();
