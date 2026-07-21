@@ -1917,11 +1917,13 @@ exactly like `!app` does. This is the fourth built-in provider,
   scattered-subsequence app hit never outranks a directory literally
   named like your query.
 - The placement is a SOURCE PRIORITY, not a score: the promoted
-  emission carries priority 1 (everything else is 0 and renders
+  emission carries priority 1 (unpromoted sections are 0 and render
   below the file results), the UI places priority > 0 sections in
   the zone above the file rows, and the engine's scoring bands are
   untouched. The priority is stamped by the app for its built-in
-  sources; external plugins cannot set it.
+  sources; external plugins cannot set it. The Firefox frequent-sites
+  and open-tabs sections earn the exact same promotion, so a strongly
+  matching open tab or frequent site also renders above the files.
 - Launch counts come from the frecency store: every successful app
   launch through the bar counts, decaying with the same 14-day
   half-life as file opens (under namespaced `app:` keys in
@@ -1946,7 +1948,9 @@ no bangs: they answer plain queries with a "Frequent Sites" and an
 
 When the machine has a Firefox profile, plain queries (two or more
 characters) also search the pages you visit frequently. Matches appear
-as a "Frequent Sites" section below the file results, each row showing
+as a "Frequent Sites" section -- above the file results when its best
+match is strong (word-start or better, the same earned promotion as
+the Apps section), below them otherwise -- each row showing
 the page title (or its host when untitled), the full URL, and a globe
 icon; activating a row opens the page in your default browser.
 
@@ -2037,9 +2041,11 @@ contains a Firefox-format `places.sqlite`.
 ### Open tabs (Firefox)
 
 Plain queries (two or more characters) also search the tabs currently
-open in Firefox. Matches appear as an "Open Tabs" section, each row
-showing the tab title (or its host when untitled), the full URL, a
-link icon, and a `pinned` badge on pinned tabs.
+open in Firefox. Matches appear as an "Open Tabs" section -- above
+the file results when its best match is strong (word-start or better,
+the same earned promotion as the Apps section), below them otherwise
+-- each row showing the tab title (or its host when untitled), the
+full URL, a link icon, and a `pinned` badge on pinned tabs.
 
 **How activation behaves.** With the companion extension connected
 (next subsection), picking a row SWITCHES to that exact tab: Firefox

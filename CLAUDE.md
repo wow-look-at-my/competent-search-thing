@@ -1986,14 +1986,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (sourceResults returns it beside the rows; TierNone for external/
   empty answers); Emission gains Priority (json priority,omitempty)
   stamped in dispatchOne and CheatSheet via providerPriority (type
-  assertion, absent = 0 whatever the tier). Only apps-search
-  implements it (sourcePriorityApps = 1 when best <= strongTier =
+  assertion, absent = 0 whatever the tier). THREE sources implement
+  it -- apps-search (sourcePriorityApps) and the two Firefox web
+  sources firefox-frequent + firefox-tabs (the shared
+  sourcePriorityWeb; the "tampermonkey" field report, where an
+  exact-title open-tab row rendered below every file result, weak
+  fuzzy matches included) -- each = 1 when best <= strongTier =
   TierWordStart -- a STRONG match (triggered/exact/prefix/word-start)
   earns the above-file-results placement, a weak best (substring/
   fuzzy) emits at 0 and renders below the files: the macOS "test"
   field report, where scattered-subsequence app hits outranked a
-  directory literally named "test"), and a PROMOTED emission is cut
-  to its strong rows inside sourceResults (weak rows must never ride
+  directory literally named "test" -- and a PROMOTED emission is cut
+  to its strong rows inside sourceResults (generic for every
+  prioritized source: weak rows must never ride
   the promoted zone; they render below the files whenever no strong
   match exists, the whole section then being priority 0); the
   targeted apps provider stays 0
@@ -2003,7 +2008,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   TestSourcePriorityMetadata + TestExternalEmissionPriorityAlwaysZero
   + TestPriorityNeverChangesMintedScores: the mint is byte-identical,
   bands untouched; TestAppsSearchWeakMatchesStayBelowFiles +
-  TestAppsSearchPromotedSectionStrongRowsOnly pin the tier gate).
+  TestAppsSearchPromotedSectionStrongRowsOnly pin the tier gate, and
+  builtin_web_priority_test.go mirrors the whole family for the two
+  web sources incl. TestWebPriorityNeverChangesMintedScores).
   APP USAGE TIE-BREAK: Options.AppUsage (the app layer's frecency
   store behind a live accessor; nil = cold) feeds appCandidates'
   Candidate.TieBreak (decayed launch count x1000, usageTieBreak), so
@@ -2052,10 +2059,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   override on builtinBase, effective min 2 runes), the shared
   engine's canonical bands over the app name (words = letter/digit
   runs, so spaces, hyphens, dots split), cap 6, same run_command
-  launch, and THE one prioritized source (priority(best) = 1 only at
+  launch, and a prioritized source (priority(best) = 1 only at
   word-start tier or better -> its Emission renders above the file
   results with only its strong rows; weak bests emit at 0, below the
-  files); bang routing keeps it
+  files -- the tier-gated promotion the two Firefox web sources
+  share); bang routing keeps it
   exclusive with the targeted !app
   path, and a nil/empty snapshot emits nothing;
   builtin_openwindows.go "windows"/Open Windows -- also in the normal
@@ -2076,6 +2084,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   host substring 70 > title-or-URL substring 60, ties by visit count
   then title, cap Options.FrequentSitesMax (<=0 -> 6); result =
   title-or-host / URL subtitle / icon "globe" / open_url action;
+  a prioritized source (sourcePriorityWeb: a word-start-or-better
+  best promotes the section above the file results cut to its strong
+  rows, weak bests emit at 0 below the files -- the apps-search
+  tier gate);
   builtin_tabs.go "firefox-tabs"/Open Tabs -- same NO-bangs
   all-queries semantics, registered ONLY when Options.OpenTabs (the
   getter yielding []TabInfo, mirror of internal/firefox.Tab) is
@@ -2089,7 +2101,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   internal-only activate_tab {Tab: token, Value: URL} SWITCH, a
   token-less (sessionstore) row keeps the byte-identical open_url --
   which re-OPENS the page (the README tab-switching section owns the
-  user-facing story).
+  user-facing story); a prioritized source exactly like
+  firefox-frequent (sourcePriorityWeb, the same tier gate -- the
+  "tampermonkey" fix: a strong open-tab title match renders above
+  the file results).
   Exhaustively
   unit-tested, table-driven, plus an end-to-end manifest ->
   registry -> /bin/sh transport dispatch test.

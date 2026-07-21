@@ -84,6 +84,18 @@ func (p *tabsProvider) match(query string, _ *AppInfo) (string, int, bool) {
 
 func (p *tabsProvider) limit() int { return p.max }
 
+// priority implements the optional prioritized extension: the shared
+// sourcePriorityWeb promotion (builtin_firefox.go) -- a strong
+// (word-start or better) best row lifts the open-tabs section above
+// the file results, a weak best keeps it below them, and the
+// threshold is the engine TIER, never the wire score bands.
+func (p *tabsProvider) priority(best match.Tier) int {
+	if best <= strongTier {
+		return sourcePriorityWeb
+	}
+	return 0
+}
+
 // candidates hands the tabs snapshot to the shared engine: match
 // fields [title, host ("www." stripped), URL] -- the TITLE outranks
 // the host within a tier here, unlike frequent-sites (an already-open
