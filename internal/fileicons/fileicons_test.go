@@ -78,14 +78,22 @@ func TestPackContentPins(t *testing.T) {
 	assert.Equal(t, "#6a9fb5", goRule.Dark)
 	assert.Equal(t, "#6a9fb5", goRule.Light)
 
-	// Compound suffixes precede the plain extension (pack priority
-	// order -- the frontend's first-match semantics depend on it).
+	// Compound suffixes precede the generic json-family rules (pack
+	// priority order -- the frontend's first-match semantics depend
+	// on it). The plain json icon (cp 60094) rides regex/".jsonc"
+	// rules, so the pin is against the first cp-60094 carrier.
 	huskyAt := suffixAt(".huskyrc.json")
-	jsonAt := suffixAt(".json")
-	require.GreaterOrEqual(t, huskyAt, 0)
-	require.GreaterOrEqual(t, jsonAt, 0)
-	assert.Less(t, huskyAt, jsonAt)
+	require.GreaterOrEqual(t, huskyAt, 0, "a .huskyrc.json suffix rule exists")
 	assert.Equal(t, 128054, tab.FileRules[huskyAt].CP)
+	jsonAt := -1
+	for i, r := range tab.FileRules {
+		if r.CP == 60094 {
+			jsonAt = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, jsonAt, 0, "a json-icon rule exists")
+	assert.Less(t, huskyAt, jsonAt)
 
 	regexWith := func(sub string) *Rule {
 		for i := range tab.FileRules {
@@ -98,10 +106,16 @@ func TestPackContentPins(t *testing.T) {
 	webpack := regexWith("webpack")
 	require.NotNil(t, webpack, "a webpack regex rule exists")
 	assert.Equal(t, 60001, webpack.CP)
-	makefile := regexWith("^Makefile")
-	require.NotNil(t, makefile, "a Makefile regex rule exists")
-	assert.Equal(t, "oct", makefile.Font)
-	assert.Equal(t, 61558, makefile.CP)
+	makefile := -1
+	for i, r := range tab.FileRules {
+		if r.Regex == "^Makefile" {
+			makefile = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, makefile, 0, "the bare ^Makefile regex rule exists")
+	assert.Equal(t, "oct", tab.FileRules[makefile].Font)
+	assert.Equal(t, 61558, tab.FileRules[makefile].CP)
 
 	github := -1
 	for i, r := range tab.DirRules {
@@ -239,7 +253,9 @@ func TestDecodeRejectsMalformedPayloads(t *testing.T) {
 		{"rule counts exceed payload", payloadHead(1000, 0).b, "exceed payload"},
 		{"reserved kind bits", payloadHead(1, 0).u8(0x40).u32(1).u16(1).raw("x").b, "reserved kind bits"},
 		{"rule font index out of range", payloadHead(1, 0).u8(0x05).u32(1).u16(1).raw("x").b, "font index"},
-		{"empty pattern", payloadHead(1, 0).u8(0).u32(1).u16(0).b, "empty match pattern"},
+		// The trailing pad byte keeps the rule-count size claim
+		// satisfied so the decoder reaches the per-rule error.
+		{"empty pattern", payloadHead(1, 0).u8(0).u32(1).u16(0).u8(0).b, "empty match pattern"},
 		{"trailing garbage", payloadHead(0, 0).u8(0).b, "trailing garbage"},
 		{
 			"rule codepoint out of range",
@@ -248,7 +264,7 @@ func TestDecodeRejectsMalformedPayloads(t *testing.T) {
 		},
 		{
 			"truncated colour",
-			payloadHead(1, 0).u8(0x10).u32(1).u8(0xaa).b,
+			payloadHead(1, 0).u8(0x10).u32(1).u8(0xaa).u8(0xbb).u8(0xcc).b,
 			"truncated",
 		},
 	}

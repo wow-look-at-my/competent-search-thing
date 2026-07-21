@@ -12,12 +12,12 @@
 package fileicons
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/andybalholm/brotli"
@@ -92,7 +92,16 @@ func cmapCodepoints(t *testing.T, woff2 []byte) map[int]bool {
 		}
 		tables = append(tables, tableEnt{tag: tag, streamLength: streamLength})
 	}
-	stream, err := io.ReadAll(brotli.NewReader(strings.NewReader(string(woff2[off:]))))
+	// The concatenated-tables stream's uncompressed size is the sum of
+	// the directory's per-table lengths; read exactly that much (the
+	// woff2 may carry trailing bytes after the brotli stream, which
+	// andybalholm/brotli would report as excessive input if drained).
+	total := 0
+	for _, ent := range tables {
+		total += ent.streamLength
+	}
+	stream := make([]byte, total)
+	_, err := io.ReadFull(brotli.NewReader(bytes.NewReader(woff2[off:])), stream)
 	require.NoError(t, err, "brotli stream")
 	at := 0
 	for _, ent := range tables {
@@ -152,7 +161,7 @@ func parseCmap(t *testing.T, cmap []byte) map[int]bool {
 			nGroups := be32(off + 12)
 			for g := 0; g < nGroups; g++ {
 				base := off + 16 + g*12
-				for cp := be32(base); cp <= be32(base + 4); cp++ {
+				for cp := be32(base); cp <= be32(base+4); cp++ {
 					out[cp] = true
 				}
 			}

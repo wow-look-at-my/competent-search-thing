@@ -51,8 +51,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/app` -- the Wails-bound App object and its methods
   (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/DomReady/
   Shutdown/QueryPlugins/RunPluginAction/CheatSheet/GetHistory/
-  AddHistory/GetStats/ResolveIcons/RecordPick/FPSEnabled/
-  RecordFPSSample). Bound methods
+  AddHistory/GetStats/ResolveIcons/GetFileIcons/RecordPick/
+  FPSEnabled/RecordFPSSample). Bound methods
   appear in JS as `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
   saves the runtime ctx, brings up the global hotkey once through a
   session-dependent backend plan (hotkey.go: empty spec = skip, parse
@@ -2246,6 +2246,33 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   real_darwin_test.go which runs un-gated on the mac job and fails
   only when a POPULATED /Applications resolves nothing). Consumed by
   internal/app icons.go (the newIcons seam).
+- `internal/fileicons` -- the per-file-type icon MAPPING layer: the
+  committed artifact data.bin (a binpazer container from
+  wow-look-at-my/bin-file-fmt -- one IconRules user block, GUID
+  IconRulesGUID, CRC-32C trailer -- whose payload is the compact
+  encoding v1 written by frontend/src/fileicons/tools/emitbin.mjs;
+  writer and reader are lockstep-pinned by the committed-artifact
+  tests) go:embedded beside its decoder. The container walk uses the
+  format's FIRST-PARTY Go reader (module
+  github.com/wow-look-at-my/bin-file-fmt/go -- the /go suffix is the
+  module root; a private org module, fetched via the git insteadOf
+  shim, GOPRIVATE locally); ONLY the payload layer is implemented
+  here (bounds-checked cursor, reserved-bit/range/exclusivity
+  validation, count-vs-size claims before allocation, unknown
+  ancillary blocks skipped, unknown critical refused). `Load()` =
+  cached decode that NEVER fails (error -> one log line + the
+  fallback table: zero rules, the octicon file-text/file-directory
+  defaults); `DecodeTable(data)` is the testable entry. Wire shape
+  (json tags fileRules/dirRules/defFile/defDir; rules
+  font/cp/suffix/regex/flags/dark/light) feeds internal/app's
+  GetFileIcons bound method (fileicons.go there), fetched once by
+  the frontend at wire-up. Tests: the retargeted committed-data
+  integrity gate (counts 2158/42, shapes, pack-content pins,
+  corruption/hardening over first-party-writer-built containers) +
+  woff2cmap_test.go, the Go port of tools/woff2cmap.mjs (test-only;
+  github.com/andybalholm/brotli) cross-checking every rule codepoint
+  against the four committed woff2 cmaps -- the tofu-glyph drift
+  gate, reading the fonts from frontend/src/fileicons/fonts/.
 - `internal/appctx` -- app-context collection for the plugin system,
   pure and headless-tested: the data types (AppInfo / InstalledApp
   (incl. Icon -- the platform icon ref: .desktop Icon= on linux, the
@@ -3188,32 +3215,40 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   glyph standing; accent_color is ONLY ever applied by
   setting the `--plugin-accent` custom property on the row -- never
   inline color styles) + `src/fileicons/` (the per-file-type icon
-  layer, ALL frontend -- zero Go involvement: data.json = the
-  generated rule set from the vendored file-icons/atom pack (2,158
-  file + 42 dir rules; pinned pack commit, per-font licenses and the
-  devopicons exclusion in LICENSES.md, regeneration via
-  tools/convert.mjs + the woff2 cmap reader tools/woff2cmap.mjs --
-  see its README.md), fonts/ = the four committed woff2 icon fonts
-  (file-icons ISC, FontAwesome 4.7 OFL 1.1, MFixx MIT, Octicons
-  v4.4.0 MIT), fileicons.ts = the matcher (`fileIcon(name, isDir)`:
-  pack-order first-match -- rules pre-sorted priority-desc so
-  special filenames/compound suffixes beat generic extensions;
-  string rule = case-insensitive basename suffix, regex rule = raw
-  basename with authored flags ("g" stripped -- .test statefulness);
-  memoized, never throws, no match = the pack's octicons
-  file-text/file-directory defaults, uncolored -> fg-dim) + the pure
-  `isLightBackground` (the pack's own HSL-lightness >= 0.5 motif
-  rule over hex/rgb()/hsl(); unparseable = dark), fileicons.css =
-  the four @font-face decls (vite emits the woff2 assets; wails
-  serves them from the embedded dist) + .file-glyph slot styling
-  (16px column, per-font pack sizings) consuming
-  --fi-dark/--fi-light with the html.icons-light class selecting the
-  light variants; src/fileicons.test.ts is the gate -- matcher
-  semantics, isLightBackground forms, and COMMITTED-DATA INTEGRITY:
-  every data.json codepoint must exist in its font's cmap (parsed by
-  the same woff2cmap.mjs the generator used, via its .d.mts
-  sibling -- the ffext logic.mjs precedent), font byte budgets, rule
-  counts, pure-ASCII data.json) + `src/theme.ts` (initTheme called
+  layer's frontend half -- the mapping artifact is Go-side now:
+  internal/fileicons/data.bin, a compact binpazer container
+  (wow-look-at-my/bin-file-fmt) holding the generated rule set from
+  the vendored file-icons/atom pack (2,158 file + 42 dir rules;
+  pinned pack commit, per-font licenses and the devopicons exclusion
+  in LICENSES.md; regeneration via tools/convert.mjs -> the
+  tools/emitbin.mjs payload encoder -> the first-party `binpazer`
+  CLI pack+validate -- see its README.md), decoded by
+  internal/fileicons and fetched ONCE at wire-up over the
+  GetFileIcons bound method (initFileIcons, the initTheme
+  fire-and-forget pattern; installFileIcons compiles the wire table,
+  refuses malformed defaults whole, and clears the memo cache so
+  pre-install resolutions self-correct; until the answer lands the
+  matcher serves the pack's octicon defaults). fonts/ = the four
+  committed woff2 icon fonts (file-icons ISC, FontAwesome 4.7 OFL
+  1.1, MFixx MIT, Octicons v4.4.0 MIT), fileicons.ts = the matcher
+  (`fileIcon(name, isDir)`: pack-order first-match -- rules
+  pre-sorted priority-desc so special filenames/compound suffixes
+  beat generic extensions; string rule = case-insensitive basename
+  suffix, regex rule = raw basename with authored flags ("g"
+  stripped -- .test statefulness); memoized, SYNCHRONOUS, never
+  throws, no match = the pack's octicons file-text/file-directory
+  defaults, uncolored -> fg-dim) + the pure `isLightBackground`
+  (the pack's own HSL-lightness >= 0.5 motif rule over
+  hex/rgb()/hsl(); unparseable = dark), fileicons.css = the four
+  @font-face decls (vite emits the woff2 assets; wails serves them
+  from the embedded dist) + .file-glyph slot styling (16px column,
+  per-font pack sizings) consuming --fi-dark/--fi-light with the
+  html.icons-light class selecting the light variants;
+  src/fileicons.test.ts is the frontend gate -- matcher semantics
+  over a fixture table, install/fallback wiring (null rule arrays,
+  rejecting bound method, malformed defaults refused), motif forms,
+  font byte budgets -- while the committed data.bin itself is gated
+  Go-side in internal/fileicons) + `src/theme.ts` (initTheme called
   first in
   wire(): fetches GetTheme and sets each token as `--sb-<k>` on
   <html>, injects GetCustomCSS as the text of the single managed
