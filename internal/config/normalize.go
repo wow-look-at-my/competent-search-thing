@@ -13,7 +13,11 @@ import (
 // fall back to the default root, relative roots are absolutized,
 // zero/negative knobs get their defaults (the firefox.frequentSites,
 // firefox.openTabs and preview numbers included, plus an empty
-// preview.openai.model; a negative watcher.sweepMinutes becomes 0 =
+// preview.openai.model and an empty preview.anthropic.model --
+// preview.custom.model deliberately stays as written, there is no
+// sensible default for an unknown server -- while preview.aiProvider
+// is lowercased and repaired to "openai" when empty or unknown, the
+// watcher.backend convention; a negative watcher.sweepMinutes becomes 0 =
 // the built-in cadence; the search.frecency numbers repair only
 // exact zeros -- negatives are the documented per-signal off switch
 // there; a non-positive search.telemetry.maxSizeKB gets its
@@ -25,13 +29,13 @@ import (
 // sigils. The affirmative *bool switches (search.fuzzyEnabled,
 // search.frecency/priors/arbiter.enabled, watcher.sweepEnabled,
 // plugins.enabled, plugins.entries.<id>.enabled, tray.enabled,
-// history.persistEnabled, stats.enabled) repair a nil pointer -- the
+// history.persistEnabled, stats.enabled, and -- since v8 --
+// preview.enabled) repair a nil pointer -- the
 // key absent from config.json -- to explicit true, their default, so
 // saved configs always carry the value the app runs with; an
 // explicit false always passes through. rewrites[].enabled is the
 // deliberate exception (nil = enabled, left as written -- user rule
-// objects are never grown), and preview.enabled is a plain bool
-// whose absent-means-off zero value already IS its default. The
+// objects are never grown). The
 // preview API keys are passed through verbatim, untouched.
 // Excludes are left as the user wrote them (an explicitly empty list
 // means "exclude nothing"), and so are watcher.watchExcludes and
@@ -175,6 +179,9 @@ func (c *Config) Normalize() {
 		w.Height = MinWindowHeight
 	}
 	pv := &c.Preview
+	if pv.Enabled == nil {
+		pv.Enabled = Bool(true)
+	}
 	if pv.WindowWidth <= 0 {
 		pv.WindowWidth = DefaultPreviewWindowWidth
 	}
@@ -198,5 +205,30 @@ func (c *Config) Normalize() {
 	}
 	if pv.OpenAI.MaxOutputTokens <= 0 {
 		pv.OpenAI.MaxOutputTokens = DefaultPreviewOpenAITokens
+	}
+	pv.AIProvider = normalizeAIProvider(pv.AIProvider)
+	if pv.Anthropic.Model == "" {
+		pv.Anthropic.Model = DefaultPreviewAnthropicModel
+	}
+	if pv.Anthropic.MaxOutputTokens <= 0 {
+		pv.Anthropic.MaxOutputTokens = DefaultPreviewAnthropicTokens
+	}
+	if pv.Custom.MaxOutputTokens <= 0 {
+		pv.Custom.MaxOutputTokens = DefaultPreviewCustomTokens
+	}
+}
+
+// normalizeAIProvider trims and lowercases the preview.aiProvider
+// selector and repairs empty or unknown values to the default
+// ("openai") -- the watcher.backend convention: the schema enum
+// rejects unknowns for authoring, the app degrades gracefully.
+func normalizeAIProvider(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case AIProviderAnthropic:
+		return AIProviderAnthropic
+	case AIProviderCustom:
+		return AIProviderCustom
+	default:
+		return DefaultPreviewAIProvider
 	}
 }

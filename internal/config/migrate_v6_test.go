@@ -91,7 +91,7 @@ func TestMigrateV6LearnedLayersMatrix(t *testing.T) {
 			require.NoError(t, json.Unmarshal(raw, &c))
 			require.True(t, c.migrateRootsFor("linux", raw))
 			require.True(t, Enabled(sec.enabled(&c)), "absent old key = the new default (on)")
-			require.Len(t, c.MigrationNotes, 2, "the telemetry note plus the learned-layers note")
+			require.Len(t, c.MigrationNotes, 3, "the telemetry note, the learned-layers note, and the v8 preview note")
 			require.Contains(t, c.MigrationNotes[1], "on by default")
 			require.Contains(t, c.MigrationNotes[1], full)
 		})

@@ -445,22 +445,22 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "true turns the preview pane on and widens the window to windowWidth x windowHeight (applied live; the shown window is always clamped to the screen's usable area)."
+          "default": true,
+          "description": "The preview pane -- ON by default since rootsVersion 8 (an absent key means enabled; the app repairs it to explicit true). Set false to turn the pane off and keep the classic bar-only window. While on, the window widens to windowWidth x windowHeight (applied live; the shown window is always clamped to the screen's usable area)."
         },
         "windowWidth": {
           "type": "integer",
           "minimum": 1,
-          "default": 1600,
+          "default": 1100,
           "x-editor-hidden": true,
-          "description": "Window width in pixels while the pane is enabled (default 1600). Ignored when enabled is false. Normally set by DRAGGING the bar's edges while the pane is mounted (the drag persists the size here), which is why the settings editor hides the field; the shown window is always clamped to the screen's usable area."
+          "description": "Window width in pixels while the pane is enabled (default 1100). Ignored when enabled is false. Normally set by DRAGGING the bar's edges while the pane is mounted (the drag persists the size here), which is why the settings editor hides the field; the shown window is always clamped to the screen's usable area."
         },
         "windowHeight": {
           "type": "integer",
           "minimum": 1,
-          "default": 800,
+          "default": 700,
           "x-editor-hidden": true,
-          "description": "Window height in pixels while the pane is enabled (default 800). Ignored when enabled is false. Same drag-to-resize and clamp rules as windowWidth."
+          "description": "Window height in pixels while the pane is enabled (default 700). Ignored when enabled is false. Same drag-to-resize and clamp rules as windowWidth."
         },
         "textMaxKB": {
           "type": "integer",
@@ -480,8 +480,16 @@
           "default": 200,
           "description": "Maximum entries in one directory listing preview (default 200)."
         },
+        "aiProvider": {
+          "type": "string",
+          "enum": ["openai", "anthropic", "custom"],
+          "default": "openai",
+          "description": "Which provider answers the explicit AI preview (Ctrl+I): 'openai' (the default), 'anthropic', or 'custom' -- an OpenAI-compatible endpoint you name in the custom section (Ollama, LM Studio, vLLM, ...). Only the selected provider's section is consulted; the others keep their values for switching back. Applied live. The app repairs empty or unknown values to 'openai'."
+        },
         "kagi": { "$ref": "#/$defs/previewKagiConfig" },
-        "openai": { "$ref": "#/$defs/previewOpenAIConfig" }
+        "openai": { "$ref": "#/$defs/previewOpenAIConfig" },
+        "anthropic": { "$ref": "#/$defs/previewAnthropicConfig" },
+        "custom": { "$ref": "#/$defs/previewCustomConfig" }
       },
       "additionalProperties": false
     },
@@ -492,7 +500,7 @@
         "apiKey": {
           "type": "string",
           "default": "",
-          "description": "SECRET: the Kagi Search API token. Passed through verbatim and never logged; keep config.json private when set. Empty means 'use the KAGI_API_KEY environment variable, if set'; with neither, the web-search preview stays unavailable."
+          "description": "SECRET: the Kagi Search API token -- get one at https://kagi.com/api/keys . Passed through verbatim and never logged; keep config.json private when set. Empty means 'use the KAGI_API_KEY environment variable, if set'; with neither, the web-search preview stays unavailable."
         },
         "baseUrl": {
           "type": "string",
@@ -515,7 +523,7 @@
         "apiKey": {
           "type": "string",
           "default": "",
-          "description": "SECRET: the OpenAI API key. Passed through verbatim and never logged; keep config.json private when set. Empty means 'use the OPENAI_API_KEY environment variable, if set'; with neither, the answer preview stays unavailable."
+          "description": "SECRET: the OpenAI API key -- get one at https://platform.openai.com/api-keys . Passed through verbatim and never logged; keep config.json private when set. Empty means 'use the OPENAI_API_KEY environment variable, if set'; with neither, the answer preview stays unavailable (when aiProvider is 'openai')."
         },
         "baseUrl": {
           "type": "string",
@@ -527,6 +535,63 @@
           "minLength": 1,
           "default": "gpt-5-mini",
           "description": "The model answering (default 'gpt-5-mini'). An empty value is repaired to the default by the app; this schema rejects it."
+        },
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1024,
+          "description": "Maximum tokens in one answer (default 1024)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "previewAnthropicConfig": {
+      "title": "Anthropic answer preview",
+      "type": "object",
+      "properties": {
+        "apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "SECRET: the Anthropic API key -- get one at https://platform.claude.com/settings/ . Passed through verbatim and never logged; keep config.json private when set. Empty means 'use the ANTHROPIC_API_KEY environment variable, if set'; with neither, the answer preview stays unavailable (when aiProvider is 'anthropic')."
+        },
+        "baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Custom API base URL; empty means 'use the ANTHROPIC_BASE_URL environment variable, if set', else the official endpoint (https://api.anthropic.com). Requests go to <baseUrl>/v1/messages (the target must implement the Anthropic Messages API); a non-http(s) or host-less value leaves the provider unavailable with an error naming this key."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "default": "claude-haiku-4-5",
+          "description": "The model answering (default 'claude-haiku-4-5', the cheapest current-generation Anthropic model). An empty value is repaired to the default by the app; this schema rejects it."
+        },
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1024,
+          "description": "Maximum tokens in one answer (default 1024)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "previewCustomConfig": {
+      "title": "Custom (OpenAI-compatible) answer preview",
+      "type": "object",
+      "properties": {
+        "apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "SECRET: the endpoint's API key, when it needs one. Passed through verbatim and never logged. Local servers (Ollama, LM Studio) usually need none -- empty sends no Authorization header. No environment fallback."
+        },
+        "baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "The endpoint's base URL -- REQUIRED for the custom provider to be usable (e.g. http://localhost:11434 for Ollama). Requests go to <baseUrl>/v1/responses (the target must implement the OpenAI Responses API wire shape). No environment fallback; a non-http(s) or host-less value leaves the provider unavailable with an error naming this key."
+        },
+        "model": {
+          "type": "string",
+          "default": "",
+          "description": "The model answering -- required; ask the endpoint what it serves (there is no sensible default for an unknown server, so the app never invents one)."
         },
         "maxOutputTokens": {
           "type": "integer",
@@ -701,14 +766,17 @@
         }
       },
       "preview": {
-        "enabled": false,
-        "windowWidth": 1600,
-        "windowHeight": 800,
+        "enabled": true,
+        "windowWidth": 1100,
+        "windowHeight": 700,
         "textMaxKB": 256,
         "imageMaxEdge": 800,
         "dirMaxEntries": 200,
+        "aiProvider": "openai",
         "kagi": { "apiKey": "", "maxResults": 8 },
-        "openai": { "apiKey": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 }
+        "openai": { "apiKey": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 },
+        "anthropic": { "apiKey": "", "model": "claude-haiku-4-5", "maxOutputTokens": 1024 },
+        "custom": { "apiKey": "", "baseUrl": "", "model": "", "maxOutputTokens": 1024 }
       }
     }
   ]

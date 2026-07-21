@@ -30,7 +30,7 @@ func TestMigrateV4DarwinDefaultShapedGainsFirmlinkExclude(t *testing.T) {
 		append(append(before, "/System/Volumes/Data"), darwinNoiseExcludesFor("darwin")...),
 		c.Excludes,
 		"the firmlink exclude, then the v5 noise set, are appended after everything the config already had")
-	require.Len(t, c.MigrationNotes, 4)
+	require.Len(t, c.MigrationNotes, 5)
 	require.Contains(t, c.MigrationNotes[0], "macOS firmlink exclude added: /System/Volumes/Data")
 	require.Contains(t, c.MigrationNotes[0], "remove it in config.json",
 		"the note names the way back for someone who truly wants the Data volume indexed raw")
@@ -49,7 +49,7 @@ func TestMigrateV4DarwinCuratedStampOnly(t *testing.T) {
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t, []string{"node_modules", "/proc"}, c.Excludes,
 		"a curated exclude list is never extended")
-	require.Len(t, c.MigrationNotes, 4)
+	require.Len(t, c.MigrationNotes, 5)
 	require.Contains(t, c.MigrationNotes[0], "/System/Volumes/Data")
 	require.Contains(t, c.MigrationNotes[0], "your customized exclude list was left unchanged")
 	require.Contains(t, c.MigrationNotes[1], "your customized exclude list was left unchanged")
@@ -65,7 +65,7 @@ func TestMigrateV4NonDarwinStampOnly(t *testing.T) {
 	require.True(t, c.migrateRootsFor("linux", nil), "the stamp still advances")
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t, before, c.Excludes, "no firmlink exclude exists off macOS")
-	require.Len(t, c.MigrationNotes, 2, "only the two v6 ranking-defaults notes fire")
+	require.Len(t, c.MigrationNotes, 3, "the two v6 ranking-defaults notes plus the v8 preview note fire")
 	require.Contains(t, c.MigrationNotes[0], "ranking telemetry is now always on")
 	require.Contains(t, c.MigrationNotes[1], "on by default")
 }
@@ -93,11 +93,12 @@ func TestMigrateLegacyDarwinFullChain(t *testing.T) {
 	want := append(append(append(baseExcludes(), systemExcludesFor("darwin")...), noiseExcludes()...), "/System/Volumes/Data")
 	want = append(want, darwinNoiseExcludesFor("darwin")...)
 	require.Equal(t, want, c.Excludes)
-	require.Len(t, c.MigrationNotes, 7)
+	require.Len(t, c.MigrationNotes, 8)
 	require.Contains(t, c.MigrationNotes[3], "macOS firmlink exclude added")
 	require.Contains(t, c.MigrationNotes[4], "macOS noise exclude patterns added")
 	require.Contains(t, c.MigrationNotes[5], "ranking telemetry is now always on")
-	require.Contains(t, c.MigrationNotes[6], "on by default", "the v6 learned-layers note lands last")
+	require.Contains(t, c.MigrationNotes[6], "on by default")
+	require.Contains(t, c.MigrationNotes[7], "preview pane is now ON by default", "the v8 preview note lands last")
 }
 
 func TestDarwinNoiseExcludesFor(t *testing.T) {
@@ -126,7 +127,7 @@ func TestMigrateV5DarwinDefaultShapedGainsNoiseExcludes(t *testing.T) {
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t, append(before, darwinNoiseExcludesFor("darwin")...), c.Excludes,
 		"the darwin noise set is appended after everything the config already had")
-	require.Len(t, c.MigrationNotes, 3, "the v4 firmlink note must NOT repeat")
+	require.Len(t, c.MigrationNotes, 4, "the v4 firmlink note must NOT repeat")
 	require.Contains(t, c.MigrationNotes[0], "macOS noise exclude patterns added: Caches, DerivedData, _CodeSignature, CodeResources, /private/var/folders")
 	require.Contains(t, c.MigrationNotes[0], "remove any of them in config.json")
 
@@ -146,7 +147,7 @@ func TestMigrateV5DarwinPartialAppendsOnlyMissing(t *testing.T) {
 		append(append(baseExcludes(), "DerivedData"),
 			"Caches", "_CodeSignature", "CodeResources", "/private/var/folders"),
 		c.Excludes, "the user's DerivedData keeps its position; only missing patterns append")
-	require.Len(t, c.MigrationNotes, 3)
+	require.Len(t, c.MigrationNotes, 4)
 	require.NotContains(t, c.MigrationNotes[0], "DerivedData,",
 		"an already-present pattern is not announced as added")
 }
@@ -161,7 +162,7 @@ func TestMigrateV5DarwinCuratedStampOnly(t *testing.T) {
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t, []string{"node_modules"}, c.Excludes,
 		"a curated exclude list is never extended")
-	require.Len(t, c.MigrationNotes, 3)
+	require.Len(t, c.MigrationNotes, 4)
 	require.Contains(t, c.MigrationNotes[0], "macOS cache/derived/temp noise set")
 	require.Contains(t, c.MigrationNotes[0], "your customized exclude list was left unchanged")
 }
@@ -176,7 +177,7 @@ func TestMigrateV5NonDarwinStampOnly(t *testing.T) {
 	require.True(t, c.migrateRootsFor("linux", nil), "the stamp still advances")
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
 	require.Equal(t, before, c.Excludes, "no darwin noise set exists off macOS")
-	require.Len(t, c.MigrationNotes, 2, "only the two v6 ranking-defaults notes fire")
+	require.Len(t, c.MigrationNotes, 3, "the two v6 ranking-defaults notes plus the v8 preview note fire")
 }
 
 // TestMigrateV3StepDoesNotRerunOnV3Configs pins the version gate: a
@@ -186,8 +187,8 @@ func TestMigrateV3StepDoesNotRerunOnV3Configs(t *testing.T) {
 	c := &Config{Roots: []string{"/"}, RootsVersion: 3, Excludes: []string{"node_modules"}}
 	require.True(t, c.migrateRootsFor("linux", nil))
 	require.Equal(t, currentRootsVersion, c.RootsVersion)
-	require.Len(t, c.MigrationNotes, 2,
-		"the v3 note fired when the config was stamped 3; only the v6 ranking notes are new")
+	require.Len(t, c.MigrationNotes, 3,
+		"the v3 note fired when the config was stamped 3; the v6 ranking notes and the v8 preview note are new")
 	require.Contains(t, c.MigrationNotes[0], "ranking telemetry is now always on")
 	require.Contains(t, c.MigrationNotes[1], "on by default")
 }

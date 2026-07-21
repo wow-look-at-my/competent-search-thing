@@ -16,24 +16,52 @@ import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/preview"
 )
 
-// previewTestOptions enables the pane with small caps.
+// previewTestOptions enables the pane with small caps. The provider
+// models mirror Normalize's guarantee (real configs never carry an
+// empty openai/anthropic model); AIProvider stays the raw zero value
+// so tests exercise the ""-means-openai path.
 func previewTestOptions() Options {
 	return Options{Preview: config.PreviewConfig{
-		Enabled:       true,
+		Enabled:       config.Bool(true),
 		WindowWidth:   1600,
 		WindowHeight:  800,
 		TextMaxKB:     4,
 		ImageMaxEdge:  100,
 		DirMaxEntries: 10,
+		OpenAI: config.PreviewOpenAIConfig{
+			Model:           config.DefaultPreviewOpenAIModel,
+			MaxOutputTokens: 16,
+		},
+		Anthropic: config.PreviewAnthropicConfig{
+			Model:           config.DefaultPreviewAnthropicModel,
+			MaxOutputTokens: 16,
+		},
 	}}
 }
 
-func TestPreviewDisabledByDefault(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{})
+func TestPreviewOnByDefault(t *testing.T) {
+	// The pane is ON by default (config v8): a zero-value preview
+	// section (Enabled nil) builds the dispatcher, and the keyless
+	// out-of-the-box state is honest -- file/dir/image previews work
+	// while the web/AI providers report unconfigured (the frontend
+	// renders their buttons disabled with a configure hint).
+	a, _ := newTestApp(t, nil, Options{})
+	a.Startup(context.Background())
+	require.NotNil(t, a.previewDispatcher(), "the default pane builds a dispatcher with zero configuration")
+
+	info := a.GetPreviewConfig()
+	require.True(t, info.Enabled)
+	require.False(t, info.KagiConfigured, "keyless: the web button renders its configure hint")
+	require.False(t, info.AIConfigured, "keyless: the AI button renders its configure hint")
+}
+
+func TestPreviewOptOutDisables(t *testing.T) {
+	// preview.enabled=false is the post-flip opt-out: no dispatcher,
+	// every bound method a safe no-op.
+	a, r := newTestApp(t, nil, Options{Preview: config.PreviewConfig{Enabled: config.Bool(false)}})
 	a.Startup(context.Background())
 	require.Nil(t, a.previewDispatcher(), "no dispatcher while the pane is off")
 
-	// Every bound method is a safe no-op.
 	a.QueryPreview(preview.Target{Kind: preview.TargetFile, Path: "/tmp/x"}, 1)
 	time.Sleep(50 * time.Millisecond)
 	require.Empty(t, r.emitted(eventPreviewResult))
@@ -42,7 +70,7 @@ func TestPreviewDisabledByDefault(t *testing.T) {
 	info := a.GetPreviewConfig()
 	require.False(t, info.Enabled)
 	require.False(t, info.KagiConfigured)
-	require.False(t, info.OpenAIConfigured)
+	require.False(t, info.AIConfigured)
 }
 
 func TestPreviewEnabledEmitsMetaThenRich(t *testing.T) {
@@ -107,13 +135,13 @@ func TestQueryPreviewSupersedes(t *testing.T) {
 
 func TestGetPreviewConfigConfiguredDetection(t *testing.T) {
 	a, _ := newTestApp(t, nil, Options{Preview: config.PreviewConfig{
-		Enabled: true,
+		Enabled: config.Bool(true),
 		Kagi:    config.PreviewKagiConfig{APIKey: "kagi-secret"},
 	}})
 	info := a.GetPreviewConfig()
 	require.True(t, info.Enabled)
 	require.True(t, info.KagiConfigured, "a config key counts as configured")
-	require.False(t, info.OpenAIConfigured)
+	require.False(t, info.AIConfigured)
 
 	// Environment variables count too (newTestApp pins getenv to "").
 	b, _ := newTestApp(t, nil, Options{})
@@ -125,11 +153,11 @@ func TestGetPreviewConfigConfiguredDetection(t *testing.T) {
 	}
 	info = b.GetPreviewConfig()
 	require.False(t, info.KagiConfigured)
-	require.True(t, info.OpenAIConfigured, "the env fallback counts as configured")
+	require.True(t, info.AIConfigured, "the env fallback counts as configured")
 }
 
 func TestFetchPreviewDisabledIsNoOp(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{})
+	a, r := newTestApp(t, nil, Options{Preview: config.PreviewConfig{Enabled: config.Bool(false)}})
 	a.Startup(context.Background())
 
 	a.FetchWebPreview("some query", 3)
@@ -199,7 +227,7 @@ func TestStartPreviewResolvesKeysLikeGetPreviewConfig(t *testing.T) {
 	require.True(t, d.AIConfigured(), "the OPENAI_API_KEY fallback configures the provider")
 	info := a.GetPreviewConfig()
 	require.True(t, info.KagiConfigured, "GetPreviewConfig agrees with the dispatcher")
-	require.True(t, info.OpenAIConfigured)
+	require.True(t, info.AIConfigured)
 
 	// Config keys win without any environment.
 	opt2 := previewTestOptions()
@@ -211,7 +239,7 @@ func TestStartPreviewResolvesKeysLikeGetPreviewConfig(t *testing.T) {
 	require.False(t, d.AIConfigured())
 	info = b.GetPreviewConfig()
 	require.True(t, info.KagiConfigured)
-	require.False(t, info.OpenAIConfigured)
+	require.False(t, info.AIConfigured)
 }
 
 func TestShutdownCancelsPreview(t *testing.T) {
@@ -371,7 +399,7 @@ func TestStartPreviewInvalidBaseURLKeepsTerseFetchError(t *testing.T) {
 	// the value.
 	info := a.GetPreviewConfig()
 	require.True(t, info.KagiConfigured)
-	require.True(t, info.OpenAIConfigured)
+	require.True(t, info.AIConfigured)
 
 	a.FetchWebPreview("q", 1)
 	events := r.emitted(eventPreviewResult)

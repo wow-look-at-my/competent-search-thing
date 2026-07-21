@@ -67,7 +67,8 @@ function fakeEnv(schemaJson: string, configJson: string): FakeEnv {
       Promise.resolve({
         enabled: false,
         kagiConfigured: false,
-        openaiConfigured: false,
+        aiProvider: "openai",
+        aiConfigured: false,
         resultsWidth: 680,
       }),
   } as unknown as WailsAppBindings;

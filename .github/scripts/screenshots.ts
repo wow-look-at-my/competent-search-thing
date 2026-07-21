@@ -148,6 +148,17 @@ function writeConfig(theme: string): void {
         rescanIntervalMinutes: 0,
         maxResults: 50,
         theme,
+        // The preview pane is ON by default (config v8) but CI
+        // screenshots MUST stay preview-off: the classic 780x550
+        // window is what the geometry match below and the per-theme
+        // blank-band bounds were derived from. The rootsVersion stamp
+        // makes this explicit false a POST-flip opt-out the v8
+        // migration respects -- an unstamped config counts as
+        // pre-flip and would be reset to on (a stamp >= 8 works; keep
+        // it in step with internal/config's currentRootsVersion if
+        // that ever matters for a future migration this config needs).
+        rootsVersion: 8,
+        preview: { enabled: false },
       },
       null,
       2,
