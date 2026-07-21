@@ -105,10 +105,12 @@ const (
 
 // Preview pane defaults (see PreviewConfig). The window grows to
 // DefaultPreviewWindowWidth x DefaultPreviewWindowHeight when the pane
-// is enabled; the size knobs bound what one preview may cost.
+// is enabled -- a deliberately modest step up from the 780x550 base
+// bar (not the pre-v8 1600x800 doubling) now that the pane is on by
+// default; the size knobs bound what one preview may cost.
 const (
-	DefaultPreviewWindowWidth  = 1600
-	DefaultPreviewWindowHeight = 800
+	DefaultPreviewWindowWidth  = 1100
+	DefaultPreviewWindowHeight = 700
 	DefaultPreviewTextMaxKB    = 256
 	DefaultPreviewImageMaxEdge = 800
 	DefaultPreviewDirMax       = 200
@@ -503,12 +505,19 @@ type OpenTabsConfig struct {
 
 // PreviewConfig configures the preview pane: a right-hand pane inside
 // a widened window showing the selected result (file contents, image
-// thumbnails, directory listings, metadata). The zero value -- the
-// default -- keeps the pane off and the window at its classic size.
+// thumbnails, directory listings, metadata). ON by default since
+// rootsVersion 8 (preview.enabled=false is the opt-out); the
+// file/dir/image previews need no configuration, while the web/AI
+// strips stay disabled-with-a-hint until their provider is set up.
 type PreviewConfig struct {
-	// Enabled turns the preview pane on. It is read once at startup
-	// (the window size cannot change while the app runs).
-	Enabled bool `json:"enabled"`
+	// Enabled turns the preview pane on -- the DEFAULT since
+	// rootsVersion 8: the affirmative *bool convention (nil = absent
+	// = ON; Normalize repairs nil to explicit true, the tray.enabled
+	// pattern). An explicit false written after the flip is a
+	// respected opt-out; a machine-written pre-v8 false (the
+	// plain-bool era serialized false on every save) is reset to on
+	// by the v8 migration with a loud note (see migrate.go).
+	Enabled *bool `json:"enabled"`
 	// WindowWidth is the window width in pixels while the pane is
 	// enabled (default 1600). Ignored when Enabled is false.
 	WindowWidth int `json:"windowWidth"`

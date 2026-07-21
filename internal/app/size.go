@@ -65,7 +65,7 @@ func (a *App) resultsWidth() int {
 // until then.
 func (a *App) applyWindowSize(next *config.Config) error {
 	w, h := next.Window.Width, next.Window.Height
-	if next.Preview.Enabled {
+	if config.Enabled(next.Preview.Enabled) {
 		w, h = next.Preview.WindowWidth, next.Preview.WindowHeight
 	}
 	a.mu.Lock()

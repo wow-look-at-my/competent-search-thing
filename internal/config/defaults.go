@@ -10,6 +10,7 @@ package config
 // edit.
 func DefaultPreview() PreviewConfig {
 	return PreviewConfig{
+		Enabled:       Bool(true),
 		WindowWidth:   DefaultPreviewWindowWidth,
 		WindowHeight:  DefaultPreviewWindowHeight,
 		TextMaxKB:     DefaultPreviewTextMaxKB,

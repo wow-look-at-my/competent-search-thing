@@ -69,7 +69,7 @@ const aiCacheFileName = "aicache.json"
 // invalid base into a terse fetch-path error instead of a broken
 // client.
 func (a *App) startPreview() {
-	if !a.previewConfig().Enabled {
+	if !config.Enabled(a.previewConfig().Enabled) {
 		return
 	}
 	a.buildPreviewDispatcher()
@@ -96,7 +96,7 @@ func (a *App) applyPreview(next *config.Config) error {
 	a.previewCfg = next.Preview
 	a.previewMu.Unlock()
 	a.shutdownPreview()
-	if next.Preview.Enabled {
+	if config.Enabled(next.Preview.Enabled) {
 		a.buildPreviewDispatcher()
 	}
 	return nil
@@ -209,7 +209,7 @@ func (a *App) QueryPreview(target preview.Target, gen int) {
 func (a *App) GetPreviewConfig() PreviewConfigInfo {
 	p := a.previewConfig()
 	return PreviewConfigInfo{
-		Enabled:        p.Enabled,
+		Enabled:        config.Enabled(p.Enabled),
 		KagiConfigured: p.Kagi.APIKey != "" || a.plat.getenv(envKagiAPIKey) != "",
 		AIProvider:     aiProviderName(p),
 		AIConfigured:   a.aiConfigured(p),

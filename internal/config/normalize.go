@@ -29,13 +29,13 @@ import (
 // sigils. The affirmative *bool switches (search.fuzzyEnabled,
 // search.frecency/priors/arbiter.enabled, watcher.sweepEnabled,
 // plugins.enabled, plugins.entries.<id>.enabled, tray.enabled,
-// history.persistEnabled, stats.enabled) repair a nil pointer -- the
+// history.persistEnabled, stats.enabled, and -- since v8 --
+// preview.enabled) repair a nil pointer -- the
 // key absent from config.json -- to explicit true, their default, so
 // saved configs always carry the value the app runs with; an
 // explicit false always passes through. rewrites[].enabled is the
 // deliberate exception (nil = enabled, left as written -- user rule
-// objects are never grown), and preview.enabled is a plain bool
-// whose absent-means-off zero value already IS its default. The
+// objects are never grown). The
 // preview API keys are passed through verbatim, untouched.
 // Excludes are left as the user wrote them (an explicitly empty list
 // means "exclude nothing"), and so are watcher.watchExcludes and
@@ -179,6 +179,9 @@ func (c *Config) Normalize() {
 		w.Height = MinWindowHeight
 	}
 	pv := &c.Preview
+	if pv.Enabled == nil {
+		pv.Enabled = Bool(true)
+	}
 	if pv.WindowWidth <= 0 {
 		pv.WindowWidth = DefaultPreviewWindowWidth
 	}

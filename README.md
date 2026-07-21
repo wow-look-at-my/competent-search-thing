@@ -975,9 +975,18 @@ clicking a dimmed entry clears the filter and jumps there.
   the schema's bounds, strings text fields; every control shows the
   schema description as help text, and a filter box at the top
   narrows the ~50 settings by name or description;
-- the two API keys (`preview.kagi.apiKey`, `preview.openai.apiKey`)
-  render as password fields with a show/hide toggle and are never
-  echoed anywhere else;
+- URLs in the help text are clickable links (the get-an-API-key pages
+  for Kagi, OpenAI, and Anthropic); they open in your browser, never
+  inside the app window;
+- the API keys (`preview.kagi.apiKey`, `preview.openai.apiKey`,
+  `preview.anthropic.apiKey`, `preview.custom.apiKey`) render as
+  password fields with a show/hide toggle and are never echoed
+  anywhere else;
+- each preview provider section (`preview.kagi` / `openai` /
+  `anthropic` / `custom`) carries a **Test** button that sends one
+  minimal real request with the values currently in the editor --
+  unsaved edits included -- and reports the honest outcome inline
+  (the Kagi test spends 1 API credit; the hint says so);
 - string lists (`roots`, `excludes`, `watcher.watchExcludes`,
   `bangs.sigils`) are one-entry-per-line editors; `bangs.aliases` is
   a key/value row editor with add/remove;
@@ -1166,14 +1175,17 @@ configs gain it on their next save):
     }
   },
   "preview": {
-    "enabled": false,
-    "windowWidth": 1600,
-    "windowHeight": 800,
+    "enabled": true,
+    "windowWidth": 1100,
+    "windowHeight": 700,
     "textMaxKB": 256,
     "imageMaxEdge": 800,
     "dirMaxEntries": 200,
+    "aiProvider": "openai",
     "kagi": { "apiKey": "", "baseUrl": "", "maxResults": 8 },
-    "openai": { "apiKey": "", "baseUrl": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 }
+    "openai": { "apiKey": "", "baseUrl": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 },
+    "anthropic": { "apiKey": "", "baseUrl": "", "model": "claude-haiku-4-5", "maxOutputTokens": 1024 },
+    "custom": { "apiKey": "", "baseUrl": "", "model": "", "maxOutputTokens": 1024 }
   },
   "rewrites": [
     {
@@ -1337,23 +1349,29 @@ Field reference:
 - `rewrites` -- regex -> URL rewrite rules; see
   [Rewrite rules](#rewrite-rules). Empty by default; disable all at
   once via `plugins.entries["rewrites"].enabled` = `false`.
-- `preview` -- the preview pane (opt-in). `enabled` (default `false`)
-  turns on a right-hand pane showing the selected result and widens
-  the window to `windowWidth` x `windowHeight` (defaults 1600 x 800;
-  read once at startup). `textMaxKB` (default 256) caps how much of a
+- `preview` -- the preview pane (ON by default). `enabled` (absent =
+  `true`) shows a right-hand pane with the selected result and widens
+  the window to `windowWidth` x `windowHeight` (defaults 1100 x 700;
+  read once at startup); set it to `false` to turn the pane off and
+  keep the classic bar-only window. `textMaxKB` (default 256) caps how much of a
   text file one preview reads; `imageMaxEdge` (default 800) caps a
   thumbnail's longest edge; `dirMaxEntries` (default 200) caps a
-  directory listing. `kagi.apiKey` / `openai.apiKey` are SECRETS
-  (passed through verbatim, never logged; the `KAGI_API_KEY` /
-  `OPENAI_API_KEY` environment variables work too) enabling the
-  explicit-trigger web-search and answer previews; `kagi.maxResults`
-  (default 8), `openai.model` (default `gpt-5-mini`) and
-  `openai.maxOutputTokens` (default 1024) tune them. `kagi.baseUrl` /
-  `openai.baseUrl` point either provider at a compatible server
-  (empty = the official endpoint; an empty `openai.baseUrl` also
-  honors `OPENAI_BASE_URL`); both pass through verbatim and are never
-  logged. Zero or negative
-  numbers and an empty model are repaired to the defaults. See
+  directory listing. `aiProvider` (`openai` default / `anthropic` /
+  `custom`) picks which section answers the AI preview. The API keys
+  (`kagi.apiKey`, `openai.apiKey`, `anthropic.apiKey`,
+  `custom.apiKey`) are SECRETS -- passed through verbatim, never
+  logged; the `KAGI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
+  environment variables fill empty ones. Per provider:
+  `kagi.maxResults` (default 8); `openai.model` (default
+  `gpt-5-mini`); `anthropic.model` (default `claude-haiku-4-5`);
+  `custom.model` (required, no invented default); each `.../
+  maxOutputTokens` defaults 1024. The `baseUrl` knobs point a
+  provider at a compatible server (empty = the official endpoint;
+  empty `openai.baseUrl` / `anthropic.baseUrl` also honor
+  `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`; `custom.baseUrl` is
+  REQUIRED -- it IS the endpoint); all pass through verbatim and are
+  never logged. Zero or negative numbers, an empty `aiProvider`, and
+  empty openai/anthropic models are repaired to the defaults. See
   [Preview pane](#preview-pane).
 
 The full format is formally described by
@@ -2547,16 +2565,24 @@ the machinery.
 
 ## Preview pane
 
-An opt-in right-hand pane that previews the selected result as you
-move through the list, plus explicit web-search and AI-answer lookups.
-Off by default; enable it in `config.json`:
+A right-hand pane that previews the selected result as you move
+through the list, plus explicit web-search and AI-answer lookups.
+ON by default, with zero configuration needed: file, image, and
+directory previews work out of the box, while the web and AI buttons
+simply show how to configure their providers until a key is set. Turn
+the pane off in `config.json` (or the in-app config editor) to keep
+the classic bar-only window:
 
 ```json
-{ "preview": { "enabled": true } }
+{ "preview": { "enabled": false } }
 ```
 
+(Configs from before the pane was on by default are switched on once,
+with a loud startup note saying exactly that and how to opt out; a
+`false` you write today is respected forever.)
+
 With the pane enabled the window opens at `preview.windowWidth` x
-`preview.windowHeight` (defaults 1600 x 800, read once at startup):
+`preview.windowHeight` (defaults 1100 x 700, read once at startup):
 the results column stays on the left at the flag-off bar width -- it
 follows `window.width` (default 780), so it renders exactly as the
 bar would without the pane -- and the pane fills the remaining width
@@ -2593,20 +2619,47 @@ the disk-touching dispatch is debounced (~90ms) so a held arrow key
 never queues work, stale answers are dropped by generation, and a
 spinner appears only when a preview takes longer than ~150ms.
 
-Web search (Kagi) and AI answers (OpenAI) run ONLY on an explicit
-trigger: the two buttons at the bottom of the pane or their
-shortcuts, `Ctrl+K` (search the web for the current query) and
-`Ctrl+I` (ask AI). No keystroke, selection, or render path ever
-calls out to the network by itself. Each provider needs its API key:
+Web search (Kagi) and AI answers run ONLY on an explicit trigger:
+the two buttons at the bottom of the pane or their shortcuts,
+`Ctrl+K` (search the web for the current query) and `Ctrl+I` (ask
+AI). No keystroke, selection, or render path ever calls out to the
+network by itself.
 
-- Kagi: `preview.kagi.apiKey`, or the `KAGI_API_KEY` environment
-  variable; `preview.kagi.maxResults` (default 8) caps the hits.
-- OpenAI: `preview.openai.apiKey`, or `OPENAI_API_KEY`;
-  `preview.openai.model` (default `gpt-5-mini`) and
-  `preview.openai.maxOutputTokens` (default 1024) shape the answer.
+Web search needs a Kagi key -- get one at
+<https://kagi.com/api/keys> -- in `preview.kagi.apiKey` or the
+`KAGI_API_KEY` environment variable; `preview.kagi.maxResults`
+(default 8) caps the hits.
 
-Both endpoints are configurable for self-hosted or compatible
-servers -- empty (the default) means the official endpoint:
+The AI answerer is chosen by `preview.aiProvider`:
+
+- `openai` (the default): `preview.openai.apiKey` or
+  `OPENAI_API_KEY` -- get a key at
+  <https://platform.openai.com/api-keys>; `model` (default
+  `gpt-5-mini`) and `maxOutputTokens` (default 1024) shape the
+  answer.
+- `anthropic`: `preview.anthropic.apiKey` or `ANTHROPIC_API_KEY` --
+  get a key at <https://platform.claude.com/settings/>; `model`
+  defaults to `claude-haiku-4-5` (the cheapest current-generation
+  model).
+- `custom`: any OpenAI-compatible endpoint you type in -- Ollama, LM
+  Studio, vLLM, a proxy. `preview.custom.baseUrl` is REQUIRED (it IS
+  the endpoint), `model` is required, and `apiKey` is optional
+  (local servers usually need none; empty sends no auth header).
+
+Only the selected provider is consulted; the other sections keep
+their values so switching back is one dropdown change. Provider
+switches apply live -- no restart.
+
+Every provider section in the config editor has a **Test** button:
+one minimal real request against the values currently in the editor
+(unsaved edits included; empty fields fall back to the environment
+variables above), answering inline with an honest ok or the
+provider's error and HTTP status. The Kagi test runs a real limit-1
+search and costs 1 API credit -- the cheapest honest test the API
+offers.
+
+Endpoints are configurable for self-hosted or compatible servers --
+empty (the default) means the official endpoint:
 
 - `preview.kagi.baseUrl` (config only, no environment fallback):
   replaces the whole default base (`https://kagi.com/api/v1`);
@@ -2616,19 +2669,24 @@ servers -- empty (the default) means the official endpoint:
   variable (the SDK convention; the config value wins): answers go to
   `<baseUrl>/v1/responses`, so the target must implement the OpenAI
   RESPONSES API -- pointing it at a server that only offers
-  `/v1/chat/completions` will not work.
+  `/v1/chat/completions` will not work. `preview.custom.baseUrl`
+  speaks the same wire shape.
+- `preview.anthropic.baseUrl`, or `ANTHROPIC_BASE_URL` (config
+  wins): answers go to `<baseUrl>/v1/messages`, the Anthropic
+  Messages API.
 
 One trailing `/` on a base URL is trimmed. A value that is not
 `http(s)` with a host is rejected: the provider stays unavailable and
 the fetch answers with a terse error naming the knob
 (`kagi: invalid baseUrl (preview.kagi.baseUrl)` / `openai: invalid
-baseUrl (preview.openai.baseUrl / OPENAI_BASE_URL)`) -- never the
-configured value, which may carry credentials.
+baseUrl (preview.openai.baseUrl / OPENAI_BASE_URL)` / the anthropic
+and custom equivalents) -- never the configured value, which may
+carry credentials.
 
 The keys are passed through verbatim and NEVER logged or exposed to
-the page -- the frontend only learns "configured or not", and an
-unconfigured provider's button renders disabled with a hint naming
-the config key.
+the page -- the frontend only learns "configured or not" plus the
+selected provider, and an unconfigured provider's button renders
+disabled with a hint naming its config keys.
 
 Web searches go to the Kagi Search API (`POST <baseUrl>/search` with
 a JSON body, default base `https://kagi.com/api/v1`,
@@ -2640,15 +2698,19 @@ a burst of 3 requests refilling at 1 per second -- fails fast with
 "rate limited, retry shortly" instead of dialing. Searches time out
 hard at 10 seconds.
 
-AI answers go to the OpenAI Responses API (`POST
-<baseUrl>/v1/responses`, default base `https://api.openai.com`, with
-your `model` and `maxOutputTokens`; answers cut off by the token cap
-end with a `[truncated by max_output_tokens]` marker line). Answers
-are cached PERSISTENTLY in `<configDir>/aicache.json` -- up to 128
-entries, least-recently-used evicted, file mode 0600 -- so asking the
-same question again (even across restarts) answers instantly with a
-`cached` badge and zero network; delete the file to clear the cache.
-Answers time out hard at 90 seconds.
+AI answers go to the selected provider -- the OpenAI Responses API
+(`POST <baseUrl>/v1/responses`, default base
+`https://api.openai.com`; the custom provider speaks the same shape)
+or the Anthropic Messages API (`POST <baseUrl>/v1/messages`, default
+base `https://api.anthropic.com`) -- with your `model` and
+`maxOutputTokens`; answers cut off by the token cap end with a
+truncation marker line. Answers are cached PERSISTENTLY in
+`<configDir>/aicache.json` -- up to 128 entries, least-recently-used
+evicted, file mode 0600, keyed by provider + model + question so
+switching providers never serves another backend's answer -- and
+asking the same question again (even across restarts) answers
+instantly with a `cached` badge and zero network; delete the file to
+clear the cache. Answers time out hard at 90 seconds.
 
 Both fetches share the preview pane's generation counter: answers
 that arrive after you moved on -- or after a newer fetch -- are

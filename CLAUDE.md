@@ -10,11 +10,13 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (frameless, always-on-top, start-hidden, hide-on-close,
   non-resizable, sized by app.PreviewWindowSize() (internal/app
   previewsize.go: fresh config.Load, same standalone-read pattern as
-  translucent.go; preview off or any config error = the configured
-  base size window.width/height -- the app.WindowSize() read,
-  internal/app size.go; Load repairs zero/too-small values to the
-  780x550 defaults / 320x240 floors even on error -- while
-  preview.enabled widens to preview.windowWidth/Height) -- the SAME
+  translucent.go; an explicit preview.enabled=false opt-out -- the
+  pane is ON by default since config v8 -- or any config error = the
+  configured base size window.width/height -- the app.WindowSize()
+  read, internal/app size.go; Load repairs zero/too-small values to
+  the 780x550 defaults / 320x240 floors even on error -- while the
+  enabled pane widens to preview.windowWidth/Height, defaults
+  1100x700) -- the SAME
   two values are wired into app Options WindowWidth/WindowHeight so
   the positioning math always matches the native window; zero
   Options fall back to the defaults via the unexported
@@ -1364,10 +1366,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   distinguishable from an explicit false -- Normalize repairs nil to
   explicit true for search.fuzzyEnabled, search.frecency/priors/
   arbiter.enabled, watcher.sweepEnabled, plugins.enabled, per-entry
-  plugins.entries.<id>.enabled, tray.enabled, history.persistEnabled
-  and stats.enabled, while rewrites[].enabled deliberately stays
-  nil-able (omitempty; user rule objects never grow keys) and
-  preview.enabled stays a plain default-OFF bool. search
+  plugins.entries.<id>.enabled, tray.enabled, history.persistEnabled,
+  stats.enabled and -- since v8 -- preview.enabled, while
+  rewrites[].enabled deliberately stays
+  nil-able (omitempty; user rule objects never grow keys). search
   {fuzzyEnabled -- the
   fuzzy-tier kill switch, absent/true = fuzzy ON; main.go wires its
   inverse to Manager.SetFuzzyDisabled -- and
@@ -1424,12 +1426,20 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   6, profileDir ""}, openTabs {maxResults 6, profileDir ""}} -- the
   frequentSites defaults encode ">10 visits in 30 days AND >=1 in 7";
   the numeric knobs are Normalize-repaired to defaults when <= 0,
-  both profileDirs are passed through verbatim), preview {enabled,
-  windowWidth 1600, windowHeight 800, textMaxKB 256, imageMaxEdge 800,
-  dirMaxEntries 200, kagi {apiKey, baseUrl, maxResults 8}, openai
-  {apiKey, baseUrl, model "gpt-5-mini", maxOutputTokens 1024}} -- the
-  opt-in preview
-  pane (zero value = off); numerics and an empty model are
+  both profileDirs are passed through verbatim), preview {enabled --
+  *bool, ON by default since v8 (nil repaired to true; explicit false
+  = the opt-out; the v8 migration resets a PRE-flip stored false as
+  machine handwriting, see migrate.go) -- windowWidth 1100,
+  windowHeight 700, textMaxKB 256, imageMaxEdge 800,
+  dirMaxEntries 200, aiProvider ("openai" default / "anthropic" /
+  "custom"; empty/unknown repaired to openai), kagi {apiKey, baseUrl,
+  maxResults 8}, and the three parallel AI sections openai
+  {apiKey, baseUrl, model "gpt-5-mini", maxOutputTokens 1024} /
+  anthropic {same shape, model "claude-haiku-4-5"} / custom {same
+  shape, model deliberately has NO invented default -- unknowable for
+  an arbitrary OpenAI-compatible server; the fetch/Test paths name
+  the missing knob}} -- the
+  preview pane; numerics and empty openai/anthropic models are
   Normalize-repaired, the API keys AND base URLs pass through verbatim
   (empty baseUrl = the official endpoint; validation happens in
   internal/preview, not here) and are never
@@ -1477,7 +1487,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   before the config-dir watcher comes up; its file name never
   matches the config.json hot-apply path, so no watcher loop).
   rootsVersion (0 = legacy, current
-  7) drives the one-shot Load migration (migrateRootsFor; goos and
+  8) drives the one-shot Load migration (migrateRootsFor; goos and
   the RAW file bytes are parameters so tests cover the darwin shape
   and the old-key reads headlessly), each missing
   step applied in
@@ -1507,10 +1517,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   old keys migrate nothing (absent still means ON), and a document
   carrying BOTH spellings keeps the new key and drops the old one,
   announced (plugins.entries.<id> and rewrites[i] pairs included,
-  entries sorted by id for deterministic notes) -- and each step is
+  entries sorted by id for deterministic notes); the v8 step
+  (migratePreviewDefaultOn) flips the preview pane ON by default --
+  a pre-v8 stored preview.enabled=false is treated as the plain-bool
+  era's machine handwriting (the feature was opt-in; deliberate off
+  was expressed by never opting in) and dropped to nil for Normalize
+  to repair to explicit true, with a loud note either way (absent =
+  announce-only, false = reset + announce, explicit true = silent);
+  a false stamped at rootsVersion >= 8 is a real post-flip opt-out
+  the step never revisits -- and each step is
   gated on its
   own version so already-fired informational notes never repeat.
-  Either way version 7 is
+  Either way version 8 is
   Saved back, and every user-visible change lands in the
   non-serialized MigrationNotes (json:"-") that internal/app logs
   loudly at startup -- the scope never changes silently. `Load` never crashes: missing file -> defaults
@@ -2147,9 +2165,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   "meta"|"text"|"image"|"dir"|"web"|"ai"|"error", title, path, meta,
   text, image, dir, web, ai, err, durMs}. dispatch.go:
   `New(parentCtx, Options{TextMaxKB, ImageMaxEdge, DirMaxEntries,
-  Emit, KagiAPIKey, KagiBaseURL, KagiMaxResults, OpenAIAPIKey,
-  OpenAIBaseURL, OpenAIModel,
-  OpenAIMaxOutputTokens, AICachePath, Logf})` -> Dispatcher (the
+  Emit, KagiAPIKey, KagiBaseURL, KagiMaxResults, AIProvider
+  ("openai" incl. "" / "anthropic" / "custom"), the three parallel
+  provider groups OpenAI*/Anthropic*/Custom* (each APIKey/BaseURL/
+  Model/MaxOutputTokens), AICachePath, Logf})` -> Dispatcher (the
   base URLs go through normalizeBaseURL: empty = the client default,
   ONE trailing "/" trimmed, anything not http(s)-with-a-host leaves
   that provider UNAVAILABLE -- webErr/aiErr carry the terse
@@ -2172,11 +2191,25 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   arm()): exactly ONE payload per accepted fetch -- kind "web"
   {query, results, cached} / "ai" {query, answer, model, cached} /
   "error" (blank query = "empty query"; no key = an error naming the
-  config key + env fallback; invalid baseUrl = "kagi: invalid baseUrl
+  SELECTED provider's config key + env fallback; invalid baseUrl =
+  "kagi: invalid baseUrl
   (preview.kagi.baseUrl)" / "openai: invalid baseUrl
-  (preview.openai.baseUrl / OPENAI_BASE_URL)"; provider failure; 10s
+  (preview.openai.baseUrl / OPENAI_BASE_URL)" / the anthropic and
+  custom equivalents; custom additionally answers "custom: no base
+  URL (preview.custom.baseUrl)" / "custom: no model
+  (preview.custom.model)" -- required knobs with no official
+  fallback; provider
+  failure; 10s
   web / 90s ai hard
-  timeouts spelled out by fetchErrMsg). kagi.go: KagiClient
+  timeouts spelled out by fetchErrMsg). aiprovider.go wires exactly
+  ONE AI provider per Dispatcher (wireAI dispatching on AIProvider:
+  openai = the existing client byte-identically; anthropic = the
+  Messages client; custom = the OpenAI client over a REQUIRED
+  user-typed base URL with the key OPTIONAL -- empty sends no
+  Authorization header, the local-server shape -- and a "custom"
+  error label so a misconfigured endpoint never blames OpenAI), each
+  installed via installAI with a per-provider honest unavailable
+  message. kagi.go: KagiClient
   (NewKagiClient(key, maxResults); BaseURL/HTTPClient/Now/Logf
   exported seams -- BaseURL doubles as the production
   preview.kagi.baseUrl override and REPLACES the whole default base
@@ -2212,13 +2245,42 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   line ("[truncated: content_filter]" for that reason; marker-only
   answers are legal -- reasoning models can spend every token before
   emitting text), API-error JSON {"error":{"message"}} -> terse
-  capped error. aicache.go: AICache -- the persistent AI answer LRU
+  capped error; the exported Name field relabels every error
+  ("custom" when the client serves the custom provider, so a
+  misconfigured local endpoint never blames OpenAI).
+  anthropic.go: AnthropicClient (NewAnthropicClient(key, model,
+  maxOutputTokens); same exported seams) -- the Anthropic Messages
+  API: POST {base}/v1/messages (default base
+  https://api.anthropic.com) with x-api-key + anthropic-version
+  headers, {"model","max_tokens","messages":[{role:user}]} in, a
+  content[] of "text" blocks out; stop_reason "max_tokens" appends
+  the truncation marker line (the OpenAI incomplete-status twin),
+  API-error JSON {"error":{"message"}} -> the same terse capped
+  error envelope, the key confined to the header -- never logged,
+  never in errors. probe.go: `ProbeProvider(ctx,
+  ProbeParams{Provider kagi|openai|anthropic|custom, APIKey,
+  BaseURL, Model})` -> ProbeResult{OK, Message} -- the
+  config editor Test buttons' engine: bounded inputs (key 4096 /
+  base 2048 / model 256 bytes -- wire-abuse defense), ONE minimal
+  real request per call (kagi = a REAL limit-1 search, which spends
+  one API credit -- the cheapest honest test the API offers, the
+  button hint says so; the AI providers = one ask capped at 16
+  output tokens, the smallest cap the OpenAI Responses API accepts),
+  candidate values resolved exactly like the live wiring (custom:
+  base+model required, key optional), honest ok/error messages that
+  carry the HTTP status + capped provider message but never the key
+  or raw body. aicache.go: AICache -- the persistent AI answer LRU
   on internal/history's atomic pattern (lazy one-shot Load: missing =
   empty+nil, corrupt = empty + error, logged once via the Logf seam;
   temp-file+rename 0600 writes, MkdirAll parent; in-memory updates
   even when the write fails; "" path = memory-only): {"v":1,
   "entries":[{k,model,prompt,answer,at}]} at Options.AICachePath, k =
-  sha256 hex of model+NUL+FULL prompt (the stored prompt is capped
+  sha256 hex of model+NUL+FULL prompt where the stored "model" is the
+  PROVIDER-QUALIFIED "<provider>/<configured model>" (installAI in
+  aiprovider.go; switching providers can never serve another
+  backend's cached answer even when model strings collide, and
+  pre-qualification entries keyed by the bare model simply miss once
+  and repopulate -- deliberate) (the stored prompt is capped
   2KB, answer 32KB), Get(model,prompt) refreshes recency (At),
   Put evicts past 128 entries by oldest At; hits emit Cached:true
   with zero network. cache.go: bytes-bounded LRU of rich payloads
@@ -2233,32 +2295,57 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   PNG, base64 data URI. dir.go: ListCapped (dirs first,
   case-insensitive, capped, entry.Info sizes, never recurses).
   meta.go: MetaFor (humanized size, mtime, mode, kind guess, path +
-  extra rows). Wired by internal/app's preview.go: Options.Preview
-  (config section) gates startPreview, which resolves each API key
+  extra rows). Wired by internal/app's preview.go: startPreview runs
+  unless config.Enabled(preview.enabled) is false (the pane is ON by
+  default since config v8; the file/dir/image/meta previews need
+  ZERO configuration -- keyless installs get them out of the box
+  while the web/AI strip buttons render disabled with a
+  configure-hint) and resolves each API key
   ONCE -- config value, else the env var through the getenv seam
-  (KAGI_API_KEY / OPENAI_API_KEY), exactly the resolution
-  GetPreviewConfig reports -- resolves the OpenAI base URL the same
-  way (preview.openai.baseUrl else OPENAI_BASE_URL; the Kagi base is
-  config-only, no env) -- and passes <configDir>/aicache.json
+  (KAGI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY), exactly the
+  resolution
+  GetPreviewConfig reports -- resolves the OpenAI and Anthropic base
+  URLs the same
+  way (preview.openai.baseUrl else OPENAI_BASE_URL;
+  preview.anthropic.baseUrl else ANTHROPIC_BASE_URL; the Kagi base
+  is config-only, no env, and the custom section is config-only
+  throughout) -- and passes <configDir>/aicache.json
   (config.Dir() failure = one log line + memory-only cache); the
   keys and base URLs flow only into preview.Options, never into logs
   or payloads;
   bound methods QueryPreview(target, gen) / GetPreviewConfig()
-  (enabled + kagi/openai configured + resultsWidth = the flag-off bar
+  (enabled + kagiConfigured + aiProvider + aiConfigured -- the
+  SELECTED provider's usability, so an OpenAI key never lights the
+  button while anthropic is selected; custom needs base+model, key
+  optional -- + resultsWidth = the flag-off bar
   width, Options.ResultsWidth wired from config window.width in
   main.go with a DefaultWindowWidth fallback when unset; keys never
   exposed) /
   FetchWebPreview / FetchAIPreview (gen store + dispatcher FetchWeb/
   FetchAI; nil dispatcher = no-op, so the frontend's Ctrl+K / Ctrl+I
-  strip is the ONLY call path and nothing automatic ever dials);
+  strip is the ONLY call path and nothing automatic ever dials) /
+  `TestPreviewProvider(PreviewProviderTest{provider, apiKey,
+  baseUrl, model}) preview.ProbeResult` (testpreview.go: the config
+  editor Test buttons -- CANDIDATE possibly-unsaved values, empty
+  fields resolved through the SAME env fallbacks the live dispatcher
+  uses, then preview.ProbeProvider under a 15s hard timeout on the
+  bound method's own goroutine) / `OpenExternalURL(raw) error`
+  (openurl.go: the editor's clickable doc links -- open_url-grade
+  validation (http/https + host), then openTarget directly --
+  deliberately NOT Open(), which would hide the bar and record
+  frecency, both wrong for a doc link clicked mid-edit; the webview
+  NEVER navigates);
   emissions
   ride the "preview:result" event behind the previewGen atomic gate
   (the QueryPlugins pattern); Shutdown cancels the dispatcher's
   parent ctx. previewsize.go `PreviewWindowSize()` (translucent.go
   pattern: fresh config.Load, any error = disabled) tells main.go the
-  window size BEFORE wails.Run; flag off = the configured base size
+  window size BEFORE wails.Run; an explicit preview.enabled=false
+  opt-out or any config error = the configured base size
   (window.width/height, defaults 780x550 -- the WindowSize read),
-  flag on = preview.windowWidth/Height, threaded into
+  the default-ON pane = preview.windowWidth/Height (defaults
+  1100x700 -- a modest step up from the 780x550 bar, chosen when the
+  pane turned on by default), threaded into
   Options.WindowWidth/WindowHeight for the positioning math
   (App.windowSize()).
 - `internal/progress` -- the startup progress printer behind the
@@ -3382,7 +3469,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   layout is behavior-identical to the classic bar; CI screenshots run
   preview-off and must stay that way, the 780x550 default-geometry
   window regex in
-  screenshots.ts depends on it) + `src/preview.ts` (ALL pane logic;
+  screenshots.ts depends on it -- since the pane turned default-ON
+  (config v8) the script's temp config opts out EXPLICITLY with a
+  rootsVersion >= 8 stamp, because an unstamped false would be
+  migrated back to on) + `src/preview.ts` (ALL pane logic;
   initPreview is called once from wire() with the GetPreviewConfig
   answer and wires elements + listeners UNCONDITIONALLY -- each
   handler gates on the live `enabled` flag -- then hands the answer
@@ -3411,7 +3501,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   ('Search web for "<q>"') and idles the pane on a cleared query.
   The strip buttons + hotkeys are the ONLY FetchWebPreview /
   FetchAIPreview call sites (never automatic; unconfigured providers
-  render disabled with a hint naming the config key). Renderers are
+  render disabled with a hint naming the SELECTED provider's config
+  knobs -- the AI button follows GetPreviewConfig's aiProvider +
+  aiConfigured, so it lights only when the provider the config
+  actually selects is usable). Renderers are
   text-node-only: meta dl, text (header + highlighted <pre><code> +
   truncation footer), image (<img src=dataUri> + WxH/size caption),
   dir (rows cloning the folder/file icon templates + "N more..."),
@@ -3458,7 +3551,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (Go owns validation; unparseable input marks the row invalid and
   blocks save by name), string = text input -- except descriptions
   starting "SECRET:" = password input + show/hide toggle, never
-  echoed elsewhere; array-of-string = one-per-line textarea
+  echoed elsewhere -- and description URLs render as real anchors
+  (linkSegments splits the text, descNode builds text nodes +
+  <a> elements -- no innerHTML) whose clicks preventDefault and route
+  through the OpenExternalURL bound method, so the get-an-API-key doc
+  links open the system browser and the webview never navigates,
+  while the four preview provider sections (kagi/openai/anthropic/
+  custom) each append a Test row: the button reads the WORKING COPY's
+  candidate values (providerTestRequest -- unsaved edits testable),
+  calls TestPreviewProvider, disables itself while in flight, and
+  renders the honest ok/error outcome inline beside the button (the
+  Kagi hint names the 1-credit cost); array-of-string = one-per-line textarea
   (trimmed, blanks dropped); object whose patternProperties values
   are all strings = key/value row editor with add/remove
   (bangs.aliases); EVERYTHING else (plugins.entries, rewrites, any
@@ -3565,8 +3668,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   desktop_id -- all echoed back
   unchanged)/PluginResult/PluginEmission plus the preview contract
   Preview{Target,Payload,ConfigInfo,MetaRow,Text,Image,Dir,DirEntry,
-  Web,WebResult,AI}, ResolveIcons, and the four preview bound
-  methods, plus the config-editor contract ConfigForEdit/ConfigSaveResult/
+  Web,WebResult,AI}, ResolveIcons, the four preview bound
+  methods, and the provider-UX pair TestPreviewProvider
+  (PreviewProviderTest -> PreviewProbeResult) + OpenExternalURL
+  (ConfigInfo carries aiProvider + aiConfigured, the selected
+  provider's usability), plus the config-editor contract ConfigForEdit/ConfigSaveResult/
   ConfigChangedEvent (Go nil slices arrive as null -- the applied/
   pending fields are `string[] | null`) and the four config bound
   methods GetConfigSchema/GetConfigForEdit/SaveConfig/OpenConfigFile

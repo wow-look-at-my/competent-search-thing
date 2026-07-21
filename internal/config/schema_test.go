@@ -111,7 +111,7 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 			},
 		},
 		Preview: PreviewConfig{
-			Enabled:       true,
+			Enabled:       Bool(true),
 			WindowWidth:   1920,
 			WindowHeight:  1000,
 			TextMaxKB:     512,

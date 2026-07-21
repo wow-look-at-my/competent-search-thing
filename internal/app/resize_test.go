@@ -17,7 +17,13 @@ import (
 // from a placed 780x550 window at BarPosition (570, 177).
 func summonedApp(t *testing.T) (*App, *seamRecorder) {
 	t.Helper()
-	a, r := newTestApp(t, nil, Options{WindowWidth: 780, WindowHeight: 550, ResultsWidth: 780})
+	// The classic bar-only shape: the pane is ON by default (config
+	// v8), so base-mode drag semantics need the explicit opt-out --
+	// commits must persist into window.width/height, not the preview
+	// pair (TestResizeCommitWritesPreviewSizeWhileMounted covers the
+	// pane-mounted twin with its own explicitly-enabled app).
+	a, r := newTestApp(t, nil, Options{WindowWidth: 780, WindowHeight: 550, ResultsWidth: 780,
+		Preview: config.PreviewConfig{Enabled: config.Bool(false)}})
 	a.plat.goos = "linux"
 	r.cursorOK = true
 	r.cursorX, r.cursorY = 960, 540
@@ -105,7 +111,7 @@ func TestResizeCommitPersistsWindowSize(t *testing.T) {
 
 func TestResizeCommitWritesPreviewSizeWhileMounted(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{WindowWidth: 1600, WindowHeight: 800, ResultsWidth: 780,
-		Preview: config.PreviewConfig{Enabled: true, WindowWidth: 1600, WindowHeight: 800}})
+		Preview: config.PreviewConfig{Enabled: config.Bool(true), WindowWidth: 1600, WindowHeight: 800}})
 	a.plat.goos = "linux"
 	r.cursorOK = true
 	r.cursorX, r.cursorY = 960, 540

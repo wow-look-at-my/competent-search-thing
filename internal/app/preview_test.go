@@ -22,7 +22,7 @@ import (
 // so tests exercise the ""-means-openai path.
 func previewTestOptions() Options {
 	return Options{Preview: config.PreviewConfig{
-		Enabled:       true,
+		Enabled:       config.Bool(true),
 		WindowWidth:   1600,
 		WindowHeight:  800,
 		TextMaxKB:     4,
@@ -39,12 +39,29 @@ func previewTestOptions() Options {
 	}}
 }
 
-func TestPreviewDisabledByDefault(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{})
+func TestPreviewOnByDefault(t *testing.T) {
+	// The pane is ON by default (config v8): a zero-value preview
+	// section (Enabled nil) builds the dispatcher, and the keyless
+	// out-of-the-box state is honest -- file/dir/image previews work
+	// while the web/AI providers report unconfigured (the frontend
+	// renders their buttons disabled with a configure hint).
+	a, _ := newTestApp(t, nil, Options{})
+	a.Startup(context.Background())
+	require.NotNil(t, a.previewDispatcher(), "the default pane builds a dispatcher with zero configuration")
+
+	info := a.GetPreviewConfig()
+	require.True(t, info.Enabled)
+	require.False(t, info.KagiConfigured, "keyless: the web button renders its configure hint")
+	require.False(t, info.AIConfigured, "keyless: the AI button renders its configure hint")
+}
+
+func TestPreviewOptOutDisables(t *testing.T) {
+	// preview.enabled=false is the post-flip opt-out: no dispatcher,
+	// every bound method a safe no-op.
+	a, r := newTestApp(t, nil, Options{Preview: config.PreviewConfig{Enabled: config.Bool(false)}})
 	a.Startup(context.Background())
 	require.Nil(t, a.previewDispatcher(), "no dispatcher while the pane is off")
 
-	// Every bound method is a safe no-op.
 	a.QueryPreview(preview.Target{Kind: preview.TargetFile, Path: "/tmp/x"}, 1)
 	time.Sleep(50 * time.Millisecond)
 	require.Empty(t, r.emitted(eventPreviewResult))
@@ -118,7 +135,7 @@ func TestQueryPreviewSupersedes(t *testing.T) {
 
 func TestGetPreviewConfigConfiguredDetection(t *testing.T) {
 	a, _ := newTestApp(t, nil, Options{Preview: config.PreviewConfig{
-		Enabled: true,
+		Enabled: config.Bool(true),
 		Kagi:    config.PreviewKagiConfig{APIKey: "kagi-secret"},
 	}})
 	info := a.GetPreviewConfig()
@@ -140,7 +157,7 @@ func TestGetPreviewConfigConfiguredDetection(t *testing.T) {
 }
 
 func TestFetchPreviewDisabledIsNoOp(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{})
+	a, r := newTestApp(t, nil, Options{Preview: config.PreviewConfig{Enabled: config.Bool(false)}})
 	a.Startup(context.Background())
 
 	a.FetchWebPreview("some query", 3)

@@ -130,7 +130,7 @@ func TestPreviewProviderTestHonestFailures(t *testing.T) {
 func TestGetPreviewConfigAIProviderSelection(t *testing.T) {
 	// Anthropic selected: its key (config or environment) decides.
 	a, _ := newTestApp(t, nil, Options{Preview: config.PreviewConfig{
-		Enabled:    true,
+		Enabled:    config.Bool(true),
 		AIProvider: config.AIProviderAnthropic,
 	}})
 	info := a.GetPreviewConfig()
@@ -147,7 +147,7 @@ func TestGetPreviewConfigAIProviderSelection(t *testing.T) {
 	// An OpenAI key alone does NOT light the button while anthropic
 	// is selected -- configured-ness follows the selection.
 	b, _ := newTestApp(t, nil, Options{Preview: config.PreviewConfig{
-		Enabled:    true,
+		Enabled:    config.Bool(true),
 		AIProvider: config.AIProviderAnthropic,
 		OpenAI:     config.PreviewOpenAIConfig{APIKey: "sk"},
 	}})
@@ -155,7 +155,7 @@ func TestGetPreviewConfigAIProviderSelection(t *testing.T) {
 
 	// Custom selected: base URL plus model, key optional.
 	c, _ := newTestApp(t, nil, Options{Preview: config.PreviewConfig{
-		Enabled:    true,
+		Enabled:    config.Bool(true),
 		AIProvider: config.AIProviderCustom,
 		Custom:     config.PreviewCustomConfig{BaseURL: "http://localhost:11434"},
 	}})
@@ -163,7 +163,7 @@ func TestGetPreviewConfigAIProviderSelection(t *testing.T) {
 	require.Equal(t, "custom", info.AIProvider)
 	require.False(t, info.AIConfigured, "a model is required too")
 	d, _ := newTestApp(t, nil, Options{Preview: config.PreviewConfig{
-		Enabled:    true,
+		Enabled:    config.Bool(true),
 		AIProvider: config.AIProviderCustom,
 		Custom:     config.PreviewCustomConfig{BaseURL: "http://localhost:11434", Model: "llama3"},
 	}})

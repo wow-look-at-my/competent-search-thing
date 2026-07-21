@@ -445,22 +445,22 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "true turns the preview pane on and widens the window to windowWidth x windowHeight (applied live; the shown window is always clamped to the screen's usable area)."
+          "default": true,
+          "description": "The preview pane -- ON by default since rootsVersion 8 (an absent key means enabled; the app repairs it to explicit true). Set false to turn the pane off and keep the classic bar-only window. While on, the window widens to windowWidth x windowHeight (applied live; the shown window is always clamped to the screen's usable area)."
         },
         "windowWidth": {
           "type": "integer",
           "minimum": 1,
-          "default": 1600,
+          "default": 1100,
           "x-editor-hidden": true,
-          "description": "Window width in pixels while the pane is enabled (default 1600). Ignored when enabled is false. Normally set by DRAGGING the bar's edges while the pane is mounted (the drag persists the size here), which is why the settings editor hides the field; the shown window is always clamped to the screen's usable area."
+          "description": "Window width in pixels while the pane is enabled (default 1100). Ignored when enabled is false. Normally set by DRAGGING the bar's edges while the pane is mounted (the drag persists the size here), which is why the settings editor hides the field; the shown window is always clamped to the screen's usable area."
         },
         "windowHeight": {
           "type": "integer",
           "minimum": 1,
-          "default": 800,
+          "default": 700,
           "x-editor-hidden": true,
-          "description": "Window height in pixels while the pane is enabled (default 800). Ignored when enabled is false. Same drag-to-resize and clamp rules as windowWidth."
+          "description": "Window height in pixels while the pane is enabled (default 700). Ignored when enabled is false. Same drag-to-resize and clamp rules as windowWidth."
         },
         "textMaxKB": {
           "type": "integer",
@@ -766,14 +766,17 @@
         }
       },
       "preview": {
-        "enabled": false,
-        "windowWidth": 1600,
-        "windowHeight": 800,
+        "enabled": true,
+        "windowWidth": 1100,
+        "windowHeight": 700,
         "textMaxKB": 256,
         "imageMaxEdge": 800,
         "dirMaxEntries": 200,
+        "aiProvider": "openai",
         "kagi": { "apiKey": "", "maxResults": 8 },
-        "openai": { "apiKey": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 }
+        "openai": { "apiKey": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 },
+        "anthropic": { "apiKey": "", "model": "claude-haiku-4-5", "maxOutputTokens": 1024 },
+        "custom": { "apiKey": "", "baseUrl": "", "model": "", "maxOutputTokens": 1024 }
       }
     }
   ]

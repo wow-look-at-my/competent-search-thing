@@ -13,9 +13,9 @@ import (
 func TestPreviewConfig(t *testing.T) {
 	setConfigDir(t)
 	require.Equal(t, PreviewConfig{
-		Enabled:       false,
-		WindowWidth:   1600,
-		WindowHeight:  800,
+		Enabled:       Bool(true),
+		WindowWidth:   1100,
+		WindowHeight:  700,
 		TextMaxKB:     256,
 		ImageMaxEdge:  800,
 		DirMaxEntries: 200,
@@ -24,10 +24,10 @@ func TestPreviewConfig(t *testing.T) {
 		OpenAI:        PreviewOpenAIConfig{Model: "gpt-5-mini", MaxOutputTokens: 1024},
 		Anthropic:     PreviewAnthropicConfig{Model: "claude-haiku-4-5", MaxOutputTokens: 1024},
 		Custom:        PreviewCustomConfig{MaxOutputTokens: 1024},
-	}, Default().Preview, "the preview pane defaults off with every knob populated")
+	}, Default().Preview, "the preview pane defaults ON (v8) with every knob populated")
 
 	// A config predating the preview block normalizes to the defaults
-	// (still disabled).
+	// -- which since v8 means the pane is ON (nil repairs to true).
 	var c Config
 	require.NoError(t, json.Unmarshal([]byte(`{"roots":["/data"]}`), &c))
 	c.Normalize()
@@ -40,7 +40,7 @@ func TestPreviewConfig(t *testing.T) {
 	// the consumer), and an odd spelling -- trailing slash included --
 	// survives byte-for-byte.
 	c = Config{Preview: PreviewConfig{
-		Enabled:       true,
+		Enabled:       Bool(true),
 		WindowWidth:   0,
 		WindowHeight:  -1,
 		TextMaxKB:     512,
@@ -70,7 +70,7 @@ func TestPreviewConfig(t *testing.T) {
 		},
 	}}
 	c.Normalize()
-	require.True(t, c.Preview.Enabled)
+	require.Equal(t, Bool(true), c.Preview.Enabled)
 	require.Equal(t, DefaultPreviewWindowWidth, c.Preview.WindowWidth)
 	require.Equal(t, DefaultPreviewWindowHeight, c.Preview.WindowHeight)
 	require.Equal(t, 512, c.Preview.TextMaxKB)
@@ -111,7 +111,7 @@ func TestPreviewConfig(t *testing.T) {
 
 	// The block round-trips through Save/Load.
 	in := Default()
-	in.Preview.Enabled = true
+	in.Preview.Enabled = Bool(true)
 	in.Preview.WindowWidth = 1440
 	in.Preview.AIProvider = AIProviderAnthropic
 	in.Preview.Kagi.APIKey = "kagi-secret"
@@ -120,7 +120,7 @@ func TestPreviewConfig(t *testing.T) {
 	require.NoError(t, Save(in))
 	got, err := Load()
 	require.NoError(t, err)
-	require.True(t, got.Preview.Enabled)
+	require.Equal(t, Bool(true), got.Preview.Enabled)
 	require.Equal(t, 1440, got.Preview.WindowWidth)
 	require.Equal(t, AIProviderAnthropic, got.Preview.AIProvider)
 	require.Equal(t, "kagi-secret", got.Preview.Kagi.APIKey)

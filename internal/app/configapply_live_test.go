@@ -238,11 +238,17 @@ func TestApplyFrecencyDisableAndRebuild(t *testing.T) {
 }
 
 func TestApplyWindowSizeResizesLive(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{WindowWidth: 780, WindowHeight: 550, ResultsWidth: 780})
+	a, r := newTestApp(t, nil, Options{WindowWidth: 780, WindowHeight: 550, ResultsWidth: 780,
+		Preview: config.PreviewConfig{Enabled: config.Bool(false)}})
 	a.Startup(context.Background())
-	seedBaseline(a, config.Default())
+	// The pane is ON by default (config v8): base-mode window sizing
+	// takes the explicit opt-out on both the baseline and the next
+	// config, or applyWindowSize would follow the preview size.
+	baseOff := config.Default()
+	baseOff.Preview.Enabled = config.Bool(false)
+	seedBaseline(a, baseOff)
 
-	next := config.Default()
+	next := baseOff
 	next.Window.Width, next.Window.Height = 900, 600
 	res := a.applyConfig(&next, "test")
 	require.Contains(t, res.Applied, "window")
@@ -256,7 +262,7 @@ func TestApplyWindowSizeResizesLive(t *testing.T) {
 	// while the results column keeps the flag-off width.
 	next2 := config.Default()
 	next2.Window.Width, next2.Window.Height = 900, 600
-	next2.Preview.Enabled = true
+	next2.Preview.Enabled = config.Bool(true)
 	res = a.applyConfig(&next2, "test")
 	require.Contains(t, res.Applied, "preview")
 	w, h = a.windowSize()
@@ -267,8 +273,10 @@ func TestApplyWindowSizeResizesLive(t *testing.T) {
 
 func TestApplyWindowSizePreStartupStoresOnly(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
-	seedBaseline(a, config.Default())
-	next := config.Default()
+	baseOff := config.Default()
+	baseOff.Preview.Enabled = config.Bool(false) // base-mode sizing: opt the default-ON pane out
+	seedBaseline(a, baseOff)
+	next := baseOff
 	next.Window.Width = 640
 	res := a.applyConfig(&next, "test")
 	require.Contains(t, res.Applied, "window")
@@ -318,14 +326,19 @@ func TestSaveConfigReportsNextLaunch(t *testing.T) {
 }
 
 func TestApplyPreviewRebuildsDispatcher(t *testing.T) {
-	a, _ := newTestApp(t, nil, Options{})
+	// Boot opted out (the pane is ON by default since config v8, so
+	// starting disabled takes an explicit false), then enable and
+	// disable through the live applier.
+	baseOff := config.Default()
+	baseOff.Preview.Enabled = config.Bool(false)
+	a, _ := newTestApp(t, nil, Options{Preview: baseOff.Preview})
 	a.Startup(context.Background())
-	require.Nil(t, a.previewDispatcher(), "preview starts disabled")
+	require.Nil(t, a.previewDispatcher(), "preview starts disabled under the opt-out")
 	require.False(t, a.GetPreviewConfig().Enabled)
-	seedBaseline(a, config.Default())
+	seedBaseline(a, baseOff)
 
 	next := config.Default()
-	next.Preview.Enabled = true
+	next.Preview.Enabled = config.Bool(true)
 	next.Preview.Kagi.APIKey = "k"
 	res := a.applyConfig(&next, "test")
 	require.Contains(t, res.Applied, "preview")
@@ -336,6 +349,7 @@ func TestApplyPreviewRebuildsDispatcher(t *testing.T) {
 	require.False(t, info.AIConfigured)
 
 	next2 := config.Default()
+	next2.Preview.Enabled = config.Bool(false)
 	res = a.applyConfig(&next2, "test")
 	require.Contains(t, res.Applied, "preview")
 	require.Nil(t, a.previewDispatcher(), "disabling tears it down")
