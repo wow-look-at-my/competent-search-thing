@@ -198,14 +198,18 @@ async function stop(p: Proc): Promise<void> {
 
 // Per-theme assertion bounds, derived from real local captures on the same
 // fixture (do not guess -- re-derive if the UI changes). Measured values
-// (re-derived 2026-07-20, when file rows gained the per-file-type
-// glyph icons (the file-icons webfonts), the fixture gained the four
-// rep-* code files, and the 02 settle grew to 1600ms; the bands still
-// hold with wide margins, so only these evidence numbers changed):
-//   dark  01/02/03 = 26987/103166/103120 bytes, means  7054/ 9689/ 9687
-//   light 01/02/03 = 27105/104035/103991 bytes, means 61725/59407/59408
-// Previous derivation (2026-07-18, when the window grew to 780x550 and
-// gained the bottom stats row): dark means 7044/8584/8578, light
+// (re-derived 2026-07-21, when the recovered Devicons-face and
+// Atom-builtin octicon rules landed: the fixture's PDF rows swapped
+// the uncolored default glyph for the coloured icon-file-pdf one, so
+// the 02/03 means moved a little; the bands still hold with wide
+// margins, so only these evidence numbers changed):
+//   dark  01/02/03 = 26552/103270/103283 bytes, means  7049/ 9633/ 9626
+//   light 01/02/03 = 26874/104799/104755 bytes, means 61728/59402/59403
+// Previous derivations: 2026-07-20 (file rows gained the
+// per-file-type glyph icons, the fixture gained the four rep-* code
+// files, the 02 settle grew to 1600ms): dark means 7054/9689/9687,
+// light 61725/59407/59408; 2026-07-18 (the window grew to 780x550 and
+// gained the bottom stats row): dark 7044/8584/8578, light
 // 61725/60666/60668; before that (2026-07-17, 680x460, when 01 gained
 // the empty-query cheat sheet): dark 7149/8338/8329, light
 // 61601/61052/61055.
