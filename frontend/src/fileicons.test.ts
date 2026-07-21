@@ -1,21 +1,45 @@
-// The file-type icon gate: pins the fileicons matcher semantics
-// (pack-order first-match: special filenames and compound suffixes
-// beat generic extensions), the light/dark motif rule, and the
-// INTEGRITY of the committed data: every data.json rule's codepoint
-// must exist in its committed font's cmap (parsed by the same
-// tools/woff2cmap.mjs the generator used -- a hand-edit of either
-// side fails here), the fonts stay inside their byte budget, and
-// data.json stays pure ASCII.
+// The file-type icon gate, frontend half: pins the fileicons matcher
+// semantics (pack-order first-match: special filenames and compound
+// suffixes beat generic extensions), the install/fallback wiring
+// around the GetFileIcons bridge table, the light/dark motif rule,
+// and the committed fonts' byte budgets. The committed data.bin
+// artifact itself is gated Go-side (internal/fileicons: decoded
+// through the SAME first-party binpazer reader the runtime uses,
+// counts + shapes + pack-content pins + the font-cmap cross-check).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import data from "./fileicons/data.json";
-import { fileIcon, isLightBackground } from "./fileicons/fileicons";
-import { cmapCodepoints } from "./fileicons/tools/woff2cmap.mjs";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fileIcon,
+  initFileIcons,
+  installFileIcons,
+  isLightBackground,
+} from "./fileicons/fileicons";
 
 const glyph = (cp: number): string => String.fromCodePoint(cp);
 
+// A small fixture in the wire-table shape, mirroring the pack rules
+// the semantics tests exercised when the whole table lived here:
+// rule ORDER is pack priority order (first match wins).
+const fixture: FileIconsTable = {
+  fileRules: [
+    { font: "fi", cp: 60001, regex: "webpack\\.config\\.", flags: "i", dark: "#519aba", light: "#519aba" },
+    { font: "fi", cp: 128054, suffix: ".huskyrc.json", dark: "#e37933", light: "#945036" },
+    { font: "oct", cp: 61558, regex: "^Makefile" },
+    { font: "fi", cp: 60078, suffix: ".go", dark: "#6a9fb5", light: "#6a9fb5" },
+    { font: "mf", cp: 61737, suffix: ".js", dark: "#f5de19", light: "#b7a542" },
+    { font: "fi", cp: 60094, suffix: ".json", dark: "#f5de19", light: "#b7a542" },
+  ],
+  dirRules: [{ font: "oct", cp: 61450, suffix: ".github", dark: "#66757f", light: "#66757f" }],
+  defFile: { font: "oct", cp: 61457 },
+  defDir: { font: "oct", cp: 61462 },
+};
+
 describe("fileIcon matching", () => {
+  beforeAll(() => {
+    installFileIcons(fixture);
+  });
+
   it("resolves a simple extension rule with its colour pair", () => {
     const icon = fileIcon("main.go", false);
     expect(icon.font).toBe("fi");
@@ -50,6 +74,7 @@ describe("fileIcon matching", () => {
     const mk = fileIcon("Makefile", false);
     expect(mk.font).toBe("oct");
     expect(mk.glyph).toBe(glyph(61558));
+    expect(fileIcon("makefile.txt", false).glyph).toBe(glyph(61457));
   });
 
   it("unknown files get the uncolored octicons default", () => {
@@ -77,6 +102,78 @@ describe("fileIcon matching", () => {
 
   it("memoizes resolutions", () => {
     expect(fileIcon("repeat.css", false)).toBe(fileIcon("repeat.css", false));
+  });
+});
+
+describe("table install wiring", () => {
+  beforeAll(() => {
+    installFileIcons(fixture);
+  });
+
+  it("initFileIcons installs the bridge answer and clears the memo", async () => {
+    // Resolve once against the fixture, then swap tables through the
+    // bound-method path: the memo must not serve the stale icon.
+    expect(fileIcon("swap.go", false).glyph).toBe(glyph(60078));
+    const app = {
+      GetFileIcons: () =>
+        Promise.resolve({
+          fileRules: [{ font: "fi", cp: 60002, suffix: ".go" }],
+          dirRules: null,
+          defFile: { font: "oct", cp: 61457 },
+          defDir: { font: "oct", cp: 61462 },
+        }),
+    } as unknown as WailsAppBindings;
+    await initFileIcons(app);
+    expect(fileIcon("swap.go", false).glyph).toBe(glyph(60002));
+    installFileIcons(fixture); // restore for later describes
+  });
+
+  it("tolerates a rejecting bound method", async () => {
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const app = {
+        GetFileIcons: () => Promise.reject(new Error("no bridge")),
+      } as unknown as WailsAppBindings;
+      await initFileIcons(app);
+      expect(spy).toHaveBeenCalled();
+      // The previous table survives.
+      expect(fileIcon("keep.go", false).glyph).toBe(glyph(60078));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("refuses a table with malformed defaults", () => {
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      installFileIcons({
+        fileRules: [],
+        dirRules: [],
+        defFile: { font: "", cp: 0 },
+        defDir: { font: "oct", cp: 61462 },
+      });
+      expect(spy).toHaveBeenCalled();
+      expect(fileIcon("still.go", false).glyph).toBe(glyph(60078));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("skips malformed rules and tolerates null rule arrays", () => {
+    installFileIcons({
+      fileRules: [
+        { font: "fi", cp: 0x110000, suffix: ".bad" }, // codepoint out of range
+        { font: "fi", cp: 60078, regex: "(" }, // invalid regex
+        { font: "fi", cp: 60078, suffix: ".ok" },
+      ],
+      dirRules: null,
+      defFile: { font: "oct", cp: 61457 },
+      defDir: { font: "oct", cp: 61462 },
+    });
+    expect(fileIcon("a.bad", false).glyph).toBe(glyph(61457));
+    expect(fileIcon("a.ok", false).glyph).toBe(glyph(60078));
+    expect(fileIcon("anydir", true).glyph).toBe(glyph(61462));
+    installFileIcons(fixture);
   });
 });
 
@@ -126,26 +223,17 @@ describe("theme wiring", () => {
   });
 });
 
-/* --- committed-data integrity -------------------------------------- */
+/* --- committed fonts ------------------------------------------------ */
 
-interface RawRule {
-  i: [string, number];
-  r?: string;
-  f?: string;
-  s?: string;
-  c?: [string, string];
-}
-
+// Byte budgets: the committed sizes plus slack -- a re-vendor that
+// balloons a font trips here before it rides the embedded dist. (The
+// mapping artifact's budget lives with it, Go-side.)
 const fontFiles: Record<string, string> = {
   fi: "file-icons.woff2",
   fa: "fontawesome.woff2",
   mf: "mfixx.woff2",
   oct: "octicons.woff2",
 };
-
-// Byte budgets: the committed sizes plus slack -- a re-vendor that
-// balloons a font (or sneaks a fifth in through data.json) trips here
-// before it rides the embedded dist.
 const fontByteCap: Record<string, number> = {
   fi: 240000,
   fa: 90000,
@@ -154,67 +242,17 @@ const fontByteCap: Record<string, number> = {
 };
 const totalByteCap = 350000;
 
-// Paths resolve from the vitest root (frontend/) -- import.meta.url
-// is a rootless serve URL inside transformed test modules, so the
-// test-setup.ts fileURLToPath pattern does not apply here.
-const fileiconsDir = join(process.cwd(), "src", "fileicons");
-
-function fontBytes(name: string): Buffer {
-  return readFileSync(join(fileiconsDir, "fonts", name));
-}
-
-describe("committed data integrity", () => {
-  const cmaps = new Map<string, Set<number>>();
-  for (const [cls, file] of Object.entries(fontFiles)) {
-    cmaps.set(cls, cmapCodepoints(fontBytes(file)));
-  }
-
-  it("every rule's codepoint exists in its font's cmap", () => {
-    const rules = [
-      ...(data.fileRules as RawRule[]),
-      ...(data.dirRules as RawRule[]),
-    ];
-    const missing: string[] = [];
-    for (const r of rules) {
-      const [cls, cp] = r.i;
-      const cmap = cmaps.get(cls);
-      if (cmap === undefined) {
-        missing.push(`unknown font class ${cls}`);
-      } else if (!cmap.has(cp)) {
-        missing.push(`${cls} U+${cp.toString(16)} (${r.r ?? r.s ?? "?"})`);
-      }
-    }
-    expect(missing).toEqual([]);
-    for (const def of [data.defFile, data.defDir] as [string, number][]) {
-      expect(cmaps.get(def[0])?.has(def[1])).toBe(true);
-    }
-  });
-
-  it("rule counts and shapes match the vendoring receipts", () => {
-    expect((data.fileRules as RawRule[]).length).toBe(2158);
-    expect((data.dirRules as RawRule[]).length).toBe(42);
-    for (const r of [
-      ...(data.fileRules as RawRule[]),
-      ...(data.dirRules as RawRule[]),
-    ]) {
-      expect(r.r !== undefined || r.s !== undefined).toBe(true);
-      expect(Object.keys(fontFiles)).toContain(r.i[0]);
-    }
-  });
-
+describe("committed fonts", () => {
   it("fonts stay inside their byte budgets", () => {
+    // Paths resolve from the vitest root (frontend/) -- import.meta.url
+    // is a rootless serve URL inside transformed test modules.
+    const fontsDir = join(process.cwd(), "src", "fileicons", "fonts");
     let total = 0;
     for (const [cls, file] of Object.entries(fontFiles)) {
-      const n = fontBytes(file).length;
+      const n = readFileSync(join(fontsDir, file)).length;
       total += n;
       expect(n, file).toBeLessThan(fontByteCap[cls]);
     }
     expect(total).toBeLessThan(totalByteCap);
-  });
-
-  it("data.json is pure ASCII", () => {
-    const raw = readFileSync(join(fileiconsDir, "data.json"), "latin1");
-    // eslint-style char sweep: printable ASCII + newline only.
-    expect(/^[\n\x20-\x7e]*$/.test(raw)).toBe(true);
   });
 });

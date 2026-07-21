@@ -9,7 +9,6 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "noEmit": true,
-    "resolveJsonModule": true,
     "isolatedModules": true,
     "skipLibCheck": true
   },

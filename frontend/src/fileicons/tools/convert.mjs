@@ -1,10 +1,16 @@
 #!/usr/bin/env node
-// convert.mjs -- regenerates frontend/src/fileicons/{fonts/,data.json}
-// from pinned checkouts of file-icons/atom and primer/octicons (the
-// commits are recorded in ../README.md).
+// convert.mjs -- regenerates the vendored fileicons artifacts from
+// pinned checkouts of file-icons/atom and primer/octicons (the
+// commits are recorded in ../README.md): the four woff2 fonts into
+// <fileicons-dir>/fonts/ and the mapping artifact data.bin at
+// <data-bin-out> (the committed copy lives at
+// internal/fileicons/data.bin, beside its Go decoder). Emitting
+// data.bin needs the `binpazer` CLI on PATH (or $BINPAZER) -- see
+// tools/emitbin.mjs.
 //
 // Usage:
-//   node convert.mjs <file-icons-atom-checkout> <octicons-checkout> <fileicons-dir>
+//   node convert.mjs <file-icons-atom-checkout> <octicons-checkout> \
+//     <fileicons-dir> <data-bin-out>
 //
 // Pipeline (each parser fails loudly on anything it does not
 // recognize -- the inputs are pinned, so drift means re-verify):
@@ -29,16 +35,19 @@
 //      (woff2cmap.mjs) so no rule can reference a missing glyph.
 //   5. Defaults mirror the pack's Atom fallbacks: octicons file-text
 //      for files, octicons file-directory for directories, uncolored.
-//   6. Emits data.json (sorted, \u-escaped, pure-ASCII bytes) and
-//      copies the four licensed woff2 fonts.
+//   6. Emits data.bin -- the IconRules payload (emitbin.mjs encoding
+//      v1) packed into a binpazer container by the first-party
+//      `binpazer` CLI (pack + validate) -- and copies the four
+//      licensed woff2 fonts.
 
 import fs from "node:fs";
 import path from "node:path";
+import { encodeIconPayload, packIconTable } from "./emitbin.mjs";
 import { cmapCodepoints } from "./woff2cmap.mjs";
 
-const [, , atomDir, octiconsDir, outDir] = process.argv;
-if (!atomDir || !octiconsDir || !outDir) {
-  console.error("usage: node convert.mjs <file-icons-atom> <octicons> <fileicons-dir>");
+const [, , atomDir, octiconsDir, outDir, dataBinOut] = process.argv;
+if (!atomDir || !octiconsDir || !outDir || !dataBinOut) {
+  console.error("usage: node convert.mjs <file-icons-atom> <octicons> <fileicons-dir> <data-bin-out>");
   process.exit(2);
 }
 const read = (...p) => fs.readFileSync(path.join(...p), "utf8");
@@ -464,12 +473,7 @@ for (const [name, src] of Object.values(FONT_FILES)) {
 }
 
 const data = { fileRules, dirRules, defFile, defDir };
-const json =
-  JSON.stringify(data, null, 1).replace(
-    /[\u0080-\uffff]/g,
-    (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"),
-  ) + "\n";
-fs.writeFileSync(path.join(outDir, "data.json"), json, "ascii");
+packIconTable(encodeIconPayload(data), dataBinOut);
 
 console.log(
   `converted: ${fileRules.length} file rules + ${dirRules.length} dir rules ` +

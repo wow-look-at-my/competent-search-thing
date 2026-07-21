@@ -318,6 +318,12 @@ interface WailsAppBindings {
   // render.ts still tolerates it defensively). Batched per render
   // tick -- rows keep their glyph until the answer lands.
   ResolveIcons(keys: string[], size: number): Promise<Record<string, string>>;
+  // The per-file-type icon mapping table (internal/app fileicons.go
+  // over internal/fileicons: the embedded data.bin artifact decoded
+  // through the first-party binpazer reader). Fetched once at
+  // wire-up (fileicons.ts initFileIcons); never errors Go-side -- a
+  // decode failure degrades to the uncolored pack defaults.
+  GetFileIcons(): Promise<FileIconsTable>;
   // Report one activated result for the opt-in ranking telemetry log
   // (called beside AddHistory at the same activation-success sites,
   // fire-and-forget). Go re-validates the echoed report, joins the
@@ -417,6 +423,32 @@ interface WatchBackendEvent {
 // dash. Sizes are bytes, rates bytes/second, percentages 0..100.
 // Events fire only while the bar is visible, every ~1.5s, plus one at
 // summon and a ~300ms follow-up.
+// The per-file-type icon mapping table -- the GetFileIcons return.
+// Field names lockstep with internal/fileicons' json tags; Go nil
+// slices arrive as null. Rules carry exactly one of suffix/regex;
+// dark/light hex colours come as a pair or not at all.
+interface FileIconsIcon {
+  font: string;
+  cp: number;
+}
+
+interface FileIconsRule {
+  font: string;
+  cp: number;
+  suffix?: string;
+  regex?: string;
+  flags?: string;
+  dark?: string;
+  light?: string;
+}
+
+interface FileIconsTable {
+  fileRules: FileIconsRule[] | null;
+  dirRules: FileIconsRule[] | null;
+  defFile: FileIconsIcon;
+  defDir: FileIconsIcon;
+}
+
 interface StatsSnapshot {
   enabled: boolean;
   cpuPct: number;
