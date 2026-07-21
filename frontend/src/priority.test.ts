@@ -101,6 +101,51 @@ describe("priority zones", () => {
     }
   });
 
+  it("orders apps + tabs + sites deterministically when all promote at once", () => {
+    // All three prioritized sources (apps-search plus the two Firefox
+    // web sources) can earn priority 1 for the same query: every one
+    // of them renders in #priority-results above the file rows,
+    // ordered by max score desc then plugin id (priorities are equal).
+    const { priorityEl, fileEl } = zones();
+    const fileRows = renderResults(
+      fileEl,
+      [fileItem("tampermonkey.txt")],
+      handlers,
+    );
+    const apps = section("apps-search", 1, ["Tamper App"], 73);
+    const tabs = section("firefox-tabs", 1, ["Tampermonkey - Open tab"], 83);
+    const sites = section("firefox-frequent", 1, ["tampermonkey.net"], 83);
+    const wins = section("windows", 0, ["Tampermonkey window"], 85);
+
+    const split = splitByPriority([tabs, apps, wins, sites]);
+    expect(split.priority.map((s) => s.plugin)).toEqual([
+      "firefox-tabs",
+      "apps-search",
+      "firefox-frequent",
+    ]);
+    expect(split.normal.map((s) => s.plugin)).toEqual(["windows"]);
+
+    // Equal priority 1: max score desc (tabs/sites 83 over apps 73),
+    // score ties by plugin id ("firefox-frequent" < "firefox-tabs").
+    const ordered = [tabs, apps, sites].sort(compareSections);
+    expect(ordered.map((s) => s.plugin)).toEqual([
+      "firefox-frequent",
+      "firefox-tabs",
+      "apps-search",
+    ]);
+
+    // The rendered zone applies the same order, above the file rows.
+    const above = renderPluginSections(priorityEl, split.priority, handlers);
+    expect(above.refs.map((r) => r.pluginId)).toEqual([
+      "firefox-frequent",
+      "firefox-tabs",
+      "apps-search",
+    ]);
+    expect(precedes(above.rows[above.rows.length - 1], fileRows[0])).toBe(
+      true,
+    );
+  });
+
   it("splitByPriority partitions and compareSections orders deterministically", () => {
     const apps = section("apps-search", 1, ["Firefox"], 73);
     const tabs = section("firefox-tabs", 0, ["Fire tab"], 85);

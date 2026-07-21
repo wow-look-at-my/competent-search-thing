@@ -179,12 +179,14 @@ func TestAppsSearchExcludedFromTargetedApp(t *testing.T) {
 }
 
 func TestSourcePriorityMetadata(t *testing.T) {
-	// apps-search is the ONE prioritized source, and its priority is
+	// apps-search is a prioritized source, and its priority is
 	// TIER-GATED: promoted only when the emission's best row matched
 	// strong (word-start or better); substring/fuzzy bests keep it at
 	// 0, below the file results (the macOS "test" field report --
 	// scattered-subsequence app hits must not outrank a directory
-	// literally named "test"). Every other builtin -- and every
+	// literally named "test"). The two Firefox web sources share the
+	// same tier-gated promotion (pinned in
+	// builtin_web_priority_test.go); every other builtin -- and every
 	// external provider shape -- is 0 whatever the tier.
 	require.Equal(t, 1, sourcePriorityApps)
 	require.Equal(t, match.TierWordStart, strongTier, "the promotion line is word-start or better")
@@ -199,8 +201,6 @@ func TestSourcePriorityMetadata(t *testing.T) {
 		require.Zero(t, providerPriority(newAppsProvider(nil, nil), tier), "the targeted !app launcher")
 		require.Zero(t, providerPriority(newAppCommandProvider("v1"), tier))
 		require.Zero(t, providerPriority(newWindowsProvider(func() []WindowInfo { return nil }), tier))
-		require.Zero(t, providerPriority(newFirefoxProvider(func() []SiteInfo { return nil }, 0), tier))
-		require.Zero(t, providerPriority(newTabsProvider(func() []TabInfo { return nil }, 0), tier))
 	}
 
 	// External plugins can NEVER be prioritized: the wire Response has
