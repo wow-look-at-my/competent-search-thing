@@ -410,7 +410,7 @@ echo "granted cap_sys_admin,cap_dac_read_search to $bin"
 }
 
 // shellSingleQuote wraps s in single quotes, escaping any embedded
-// single quote the POSIX way ('\”).
+// single quote the standard POSIX way (see the code below).
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
