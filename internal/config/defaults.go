@@ -86,7 +86,7 @@ func Default() Config {
 		RescanIntervalMinutes: 0,
 		MaxResults:            DefaultMaxResults,
 		Search:                DefaultSearch(),
-		Watcher:               WatcherConfig{SweepEnabled: Bool(true)},
+		Watcher:               WatcherConfig{SweepEnabled: Bool(true), SetupEnabled: Bool(true)},
 		Theme:                 DefaultTheme,
 		Plugins:               PluginsConfig{Enabled: Bool(true), Entries: map[string]PluginEntry{}},
 		Bangs:                 BangsConfig{Sigils: DefaultBangSigils(), Aliases: map[string]string{}},

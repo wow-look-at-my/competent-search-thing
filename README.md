@@ -344,26 +344,52 @@ budget, and no privileges.
 ### Enable full-filesystem watching (recommended)
 
 A whole-filesystem tier is the one you want to be on: registration is
-near-instant, per-directory watch limits stop mattering, and
-freshness no longer depends on which directories happen to be in a
+near-instant, per-directory watch limits stop mattering, memory stays
+negligible (one kernel mark per filesystem, no per-directory watches),
+and freshness no longer depends on which directories happen to be in a
 watch budget. **macOS needs no setup at all** -- the FSEvents backend
-is whole-filesystem out of the box and `auto` selects it. On Linux,
-fanotify covers every directory of the roots' filesystems with a
-handful of kernel marks, but Linux gates it behind capabilities --
-`CAP_SYS_ADMIN` for the marks, `CAP_DAC_READ_SEARCH` for resolving
-event paths -- so an unprivileged launch physically cannot use it.
-Grant both on the installed binary:
+is whole-filesystem out of the box and `auto` selects it.
+
+**On Linux the app sets this up for you.** fanotify covers every
+directory of the roots' filesystems with a handful of kernel marks, but
+Linux gates it behind capabilities -- `CAP_SYS_ADMIN` for the marks,
+`CAP_DAC_READ_SEARCH` for resolving event paths -- so an unprivileged
+launch physically cannot use it. Rather than run degraded, the app
+probes at startup whether fanotify is merely blocked on those
+capabilities (versus genuinely unsupported here, like an old kernel or a
+container, where a grant cannot help). When it is grantable it prompts
+you for administrator privileges (a polkit/pkexec password dialog), runs
+a small script that grants the two capabilities with `setcap`, and
+restarts itself into the now-capable binary -- so it comes up on
+fanotify, first launch, with full coverage and negligible memory. The
+capabilities stick to the binary, so this happens once; a later upgrade
+that replaces the file re-offers.
+
+If you decline the prompt (or it cannot run -- no polkit agent, a
+headless session), the app remembers your choice and never asks again;
+it falls back to the per-directory hot set and shows how to enable full
+coverage later. To grant it on demand, run:
+
+```
+competent-search-thing setup-watch
+```
+
+(restart the app afterwards to use it). Or grant it yourself:
 
 ```
 sudo setcap cap_sys_admin,cap_dac_read_search+ep /usr/local/bin/competent-search-thing
 ```
 
-The app logs this exact command at every startup that runs without
-fanotify, with the RESOLVED real path filled in -- setcap refuses
-symlinks, so symlinked installs (Homebrew's `bin/` shim, Nix, stow)
-get the actual target printed. Re-run it after any upgrade that
-replaces the file (file capabilities live on the inode); the log says
-so right below the command.
+setcap refuses symlinks, so on symlinked installs (Homebrew's `bin/`
+shim, Nix, stow) use the RESOLVED real target -- the app prints it in
+the startup log, and `setup-watch` targets it for you. Re-run after any
+upgrade that replaces the file (file capabilities live on the inode).
+
+**Opting out.** Set `"watcher": { "setupEnabled": false }` in
+config.json to disable the automatic prompt permanently, or export
+`COMPETENT_SEARCH_NO_WATCH_SETUP=1` to disable it for one process (CI,
+scripts). Either way the app still works -- it just uses the
+per-directory fallback and the manual paths above.
 
 With the grant, a change anywhere under your roots reaches search
 results in about a second. Without it, the watcher falls back to the
@@ -377,7 +403,7 @@ whole-filesystem backend is never silent:
   strict mode disabled the fallback (next paragraph);
 - the startup log names the effective backend honestly (`inotify` on
   Linux, `kqueue` on macOS, `windows` on Windows) and, on Linux,
-  prints the setcap command above.
+  points at `setup-watch` (and the manual setcap command above).
 
 If a quiet per-directory fallback is not acceptable, pin the backend:
 `"watcher": { "backend": "fanotify" }` (Linux) or
@@ -443,7 +469,7 @@ unlimited budget prints as `unlimited`, never as a raw MaxInt:
 ```
 watch: backend inotify armed before the initial index build; changes during indexing are queued and applied when it completes
 watch: backend inotify: 41230/612009 dirs live-watched (budget 65536); sweep interval 20m0s; full rescan interval off
-watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /home/linuxbrew/.linuxbrew/Cellar/competent-search-thing/0.412.0/bin/competent-search-thing
+watch: enable full-filesystem watching by running 'competent-search-thing setup-watch' (or manually: sudo setcap cap_sys_admin,cap_dac_read_search+ep /home/linuxbrew/.linuxbrew/Cellar/competent-search-thing/0.412.0/bin/competent-search-thing)
 watch: file capabilities stick to that exact file -- re-run the setcap command after any upgrade that replaces the binary (e.g. brew upgrade)
 watch: note: file capabilities force secure-exec (GOTRACEBACK=none, non-dumpable) -- crashes report as one line; ambient caps keep full crash reports (see README / issue #58)
 watch: backend fsevents: whole-filesystem coverage active; per-directory watches not needed
@@ -466,6 +492,7 @@ The `watcher` section of config.json tunes the layer (see
 | `watcher.maxWatches` | `0` | The hot-set budget for the per-directory fallback. `0` = automatic: on Linux half of `fs.inotify.max_user_watches`, capped at 65536; on macOS a sixteenth of the process fd limit, capped at 8192 (kqueue costs one fd per watched dir PLUS one per direct child file, so the budget must leave fds for the app itself). Any negative value = explicitly unlimited (watch every indexed directory; on macOS this can exhaust the fd limit and break the process -- prefer the fsevents backend). Positive = exactly that many. Irrelevant while a whole-filesystem backend is active. |
 | `watcher.sweepMinutes` | `0` | Minutes between reconcile sweeps; `0` = the built-in 20 minutes. |
 | `watcher.sweepEnabled` | `true` | `false` turns the sweep tier off. Directories without a live watch then converge only at full rescans, and the app logs a loud warning at startup saying exactly that. Absent means enabled. |
+| `watcher.setupEnabled` | `true` | Linux only. Controls the automatic optimal-backend setup that runs before the GUI starts (see [Enable full-filesystem watching](#enable-full-filesystem-watching-recommended)): when fanotify is blocked only on capabilities, the app prompts for privileges (pkexec), grants them with `setcap`, and re-execs into the capable binary. `false` disables the prompt permanently (the per-directory fallback and the manual `setup-watch` command still work). The `COMPETENT_SEARCH_NO_WATCH_SETUP` env var is the per-process opt-out. Absent means enabled. |
 | `watcher.watchExcludes` | `[]` | Patterns (same syntax as `excludes`) applied to live watching ONLY: a matching directory -- and everything beneath it -- never holds a watch but stays fully indexed and swept, so its freshness bound becomes the sweep interval. Use it to keep high-churn trees you still want searchable from consuming watch budget. |
 
 ### Default excludes for high-churn directories

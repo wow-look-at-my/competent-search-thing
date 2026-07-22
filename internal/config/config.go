@@ -395,6 +395,19 @@ type WatcherConfig struct {
 	// startup and the frontend shows a notice chip whenever coverage
 	// is not full.
 	Backend string `json:"backend,omitempty"`
+	// SetupEnabled controls the automatic optimal-backend setup that
+	// runs before the GUI starts (see internal/watchsetup). On Linux the
+	// whole-filesystem fanotify backend needs capabilities the raw
+	// binary lacks; when they are missing but grantable, the app prompts
+	// for privilege escalation (pkexec), grants them with setcap, and
+	// re-execs into the capable binary so it comes up with full,
+	// low-memory coverage instead of the per-directory fallback. Absent
+	// (nil) = enabled, the default (Normalize repairs nil to true, the
+	// tray.enabled convention); false is the persistent per-user opt-out
+	// (no probe, no prompt, no re-exec). The COMPETENT_SEARCH_NO_WATCH_SETUP
+	// env var is the per-process opt-out. Irrelevant off Linux (the
+	// setup is a no-op there).
+	SetupEnabled *bool `json:"setupEnabled"`
 }
 
 // BangsConfig configures the bang system.
