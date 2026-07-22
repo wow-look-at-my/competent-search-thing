@@ -280,6 +280,9 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// global log output), io.Discard target, dropped non-TTY lines.
 	// Progress tests inject recording printers.
 	a.newProgress = func() *progress.Printer { return progress.New(io.Discard, false, nil) }
+	// Nil by default so SetupWatch never probes fanotify or spawns
+	// pkexec; watch-setup tests inject a recording fake.
+	a.newWatchSetup = func() watchSetupRunner { return nil }
 	return a, r
 }
 

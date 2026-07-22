@@ -249,6 +249,13 @@ type App struct {
 	newService func() serviceRegistrar
 	svcCancel  context.CancelFunc
 
+	// Watch-setup retry (see watchsetupcmd.go): the bound SetupWatch
+	// method behind the config editor's "Set up full-filesystem
+	// watching" button (the in-app retry for a declined startup prompt).
+	// newWatchSetup is a seam over buildWatchSetup so unit tests never
+	// probe fanotify or spawn pkexec.
+	newWatchSetup func() watchSetupRunner
+
 	// Startup progress printer (see progress.go in this package): the
 	// initial index build's "indexing..." line -- in-place on a TTY
 	// (where it also intercepts the standard logger until Shutdown
@@ -411,6 +418,7 @@ func New(m *index.Manager, opt Options) *App {
 	a.newIcons = a.buildIcons
 	a.newFfext = a.buildFfext
 	a.newService = a.buildService
+	a.newWatchSetup = a.buildWatchSetup
 	return a
 }
 

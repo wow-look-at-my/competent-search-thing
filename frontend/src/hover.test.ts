@@ -44,6 +44,7 @@ const fakeApp: WailsAppBindings = {
   RunPluginAction: () => Promise.resolve(),
   TestPreviewProvider: () => Promise.resolve({ ok: true, message: "ok" }),
   OpenExternalURL: () => Promise.resolve(),
+  SetupWatch: () => Promise.resolve(""),
   CheatSheet: () =>
     Promise.resolve({ plugin: "", name: "", gen: 0, results: [] }),
   GetHistory: () => Promise.resolve([]),

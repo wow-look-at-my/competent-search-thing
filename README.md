@@ -368,7 +368,10 @@ that replaces the file re-offers.
 If you decline the prompt (or it cannot run -- no polkit agent, a
 headless session), the app remembers your choice and never asks again;
 it falls back to the per-directory hot set and shows how to enable full
-coverage later. To grant it on demand, run:
+coverage later. To retry from the GUI, open the config editor
+(**!config**, or the tray's "Open config") and click **Set up
+full-filesystem watching** in the Watcher section -- it runs the same
+grant and applies at the next launch. From a terminal:
 
 ```
 competent-search-thing setup-watch

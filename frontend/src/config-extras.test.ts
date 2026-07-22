@@ -10,6 +10,13 @@ import { initConfig, linkSegments, providerTestRequest } from "./config";
 
 const schema = {
   properties: {
+    watcher: {
+      type: "object",
+      description: "The live-watch layer.",
+      properties: {
+        setupEnabled: { type: "boolean", description: "auto setup" },
+      },
+    },
     preview: {
       type: "object",
       description: "The preview pane.",
@@ -48,6 +55,8 @@ const docJson = JSON.stringify({
 const testedRequests: PreviewProviderTest[] = [];
 const openedUrls: string[] = [];
 let probeResult: PreviewProbeResult = { ok: true, message: "ok: probe" };
+let setupWatchCalls = 0;
+let setupWatchMsg = "Full-filesystem watching enabled. Restart the app.";
 
 function fakeEnv(): { app: WailsAppBindings; fire: (name: string) => void } {
   const events = new Map<string, (...data: unknown[]) => void>();
@@ -72,6 +81,10 @@ function fakeEnv(): { app: WailsAppBindings; fire: (name: string) => void } {
     OpenExternalURL: (url: string) => {
       openedUrls.push(url);
       return Promise.resolve();
+    },
+    SetupWatch: () => {
+      setupWatchCalls++;
+      return Promise.resolve(setupWatchMsg);
     },
   } as unknown as WailsAppBindings;
   const rt = {
@@ -261,5 +274,22 @@ describe("editor provider extras (DOM)", () => {
       .getElementById("config-sec-preview.kagi")
       ?.querySelector<HTMLElement>(".config-test-row .config-help");
     expect(hint?.textContent).toContain("1 Kagi API credit");
+  });
+
+  it("runs the watch-setup grant from the watcher section button", async () => {
+    const before = setupWatchCalls;
+    const btn = document.getElementById(
+      "cfg-watchsetup",
+    ) as HTMLButtonElement;
+    expect(btn).not.toBeNull();
+    btn.click();
+    await tick();
+    expect(setupWatchCalls).toBe(before + 1);
+    const result = document
+      .getElementById("config-sec-watcher")
+      ?.querySelector<HTMLSpanElement>(".config-test-result");
+    expect(result?.hidden).toBe(false);
+    expect(result?.textContent).toBe(setupWatchMsg);
+    expect(btn.disabled).toBe(false);
   });
 });

@@ -54,7 +54,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/DomReady/
   Shutdown/QueryPlugins/RunPluginAction/CheatSheet/GetHistory/
   AddHistory/GetStats/ResolveIcons/GetFileIcons/RecordPick/
-  FPSEnabled/RecordFPSSample). Bound methods
+  FPSEnabled/RecordFPSSample/SetupWatch). Bound methods
   appear in JS as `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
   saves the runtime ctx, brings up the global hotkey once through a
   session-dependent backend plan (hotkey.go: empty spec = skip, parse
@@ -1151,9 +1151,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   reexec_other.go errors, never reached). Marker cleared on success,
   written on decline/failure with a retry hint pointing at `setup-watch`.
   `Attempt(ctx, out)` is the forced twin the CLI `setup-watch` command
-  uses: same escalation, ignores the marker + setupEnabled, prints to
-  out, clears the marker on success, NEVER re-execs (caps stick to the
-  binary and apply at the next launch). Imports only stdlib +
+  AND the app's SetupWatch bound method (the config editor's
+  "Set up full-filesystem watching" button, internal/app
+  watchsetupcmd.go) use: same escalation, ignores the marker +
+  setupEnabled, prints to out, clears the marker on success, NEVER
+  re-execs (caps stick to the binary and apply at the next launch) --
+  the in-app retry for a user who declined the startup prompt. Imports only stdlib +
   golang.org/x/sys/unix + internal/platform (no config/watch cycle).
 - `internal/match` -- THE shared matching engine, pure (stdlib only),
   consumed by internal/index AND internal/plugin: ONE fold definition
@@ -3765,7 +3768,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   candidate values (providerTestRequest -- unsaved edits testable),
   calls TestPreviewProvider, disables itself while in flight, and
   renders the honest ok/error outcome inline beside the button (the
-  Kagi hint names the 1-credit cost); array-of-string = one-per-line textarea
+  Kagi hint names the 1-credit cost) -- and the watcher section appends
+  a "Set up full-filesystem watching" action row (appendWatchSetupRow,
+  #cfg-watchsetup) that calls the SetupWatch bound method (the in-app
+  retry for a declined fanotify-capability prompt; Go runs pkexec+setcap
+  and returns a human message, applied at the next launch) and shows the
+  outcome inline; array-of-string = one-per-line textarea
   (trimmed, blanks dropped); object whose patternProperties values
   are all strings = key/value row editor with add/remove
   (bangs.aliases); EVERYTHING else (plugins.entries, rewrites, any
