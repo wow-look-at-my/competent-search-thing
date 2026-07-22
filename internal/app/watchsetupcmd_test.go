@@ -3,8 +3,9 @@ package app
 import (
 	"context"
 	"io"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/watchsetup"
 )
@@ -37,25 +38,16 @@ func TestSetupWatchMessages(t *testing.T) {
 		a, _ := newTestApp(t, nil, Options{})
 		fake := &fakeWatchSetup{res: c.res}
 		a.newWatchSetup = func() watchSetupRunner { return fake }
-		got := a.SetupWatch()
-		if !strings.Contains(got, c.want) {
-			t.Fatalf("action %v reason %q: got %q, want substring %q", c.res.Action, c.res.Reason, got, c.want)
-		}
-		if fake.called != 1 {
-			t.Fatalf("Attempt should run exactly once, got %d", fake.called)
-		}
+		require.Contains(t, a.SetupWatch(), c.want, "action %v reason %q", c.res.Action, c.res.Reason)
+		require.Equal(t, 1, fake.called, "Attempt should run exactly once")
 	}
 }
 
 func TestSetupWatchUnavailable(t *testing.T) {
 	a, _ := newTestApp(t, nil, Options{})
 	// newTestApp stubs newWatchSetup to a func returning nil.
-	if got := a.SetupWatch(); !strings.Contains(got, "unavailable") {
-		t.Fatalf("nil runner: got %q", got)
-	}
+	require.Contains(t, a.SetupWatch(), "unavailable", "nil runner")
 	// A nil seam entirely must also be safe.
 	a.newWatchSetup = nil
-	if got := a.SetupWatch(); !strings.Contains(got, "unavailable") {
-		t.Fatalf("nil seam: got %q", got)
-	}
+	require.Contains(t, a.SetupWatch(), "unavailable", "nil seam")
 }
