@@ -882,6 +882,7 @@ function renderSection(
     }
   }
   appendTestRow(sec, path.join("."));
+  appendWatchSetupRow(sec, path.join("."));
   return sec;
 }
 
@@ -990,6 +991,65 @@ function appendTestRow(sec: HTMLElement, dotted: string): void {
   top.append(btn, result);
   row.append(top);
   row.append(descNode("config-help", testButtonHint(dotted)));
+  sec.append(row);
+}
+
+/* --- watcher: enable full-filesystem watching -------------------------- */
+
+// appendWatchSetupRow adds an action row to the watcher section: a
+// button that grants the Linux capabilities enabling whole-filesystem
+// (fanotify) watching. It is the in-app retry for anyone who declined
+// the automatic startup prompt (internal/watchsetup) -- Go prompts for
+// privileges (pkexec), runs setcap, and reports the outcome inline. The
+// capabilities apply at the next launch, so nothing is restarted here.
+// Fires only for the "watcher" section; on non-Linux the button is
+// honest ("Linux-only; nothing to do") rather than hidden.
+function appendWatchSetupRow(sec: HTMLElement, dotted: string): void {
+  if (dotted !== "watcher") {
+    return;
+  }
+  const row = el("div", "config-row config-test-row");
+  row.dataset.search =
+    "watcher full filesystem watching fanotify setup capabilities setcap";
+  const top = el("div", "config-row-top");
+  const btn = el(
+    "button",
+    "config-btn config-test-btn",
+    "Set up full-filesystem watching",
+  );
+  btn.type = "button";
+  btn.id = "cfg-watchsetup";
+  const result = el("span", "config-test-result");
+  result.hidden = true;
+  btn.addEventListener("click", () => {
+    if (app === null) {
+      return;
+    }
+    btn.disabled = true;
+    result.hidden = false;
+    result.className = "config-test-result";
+    result.textContent = "working... (you may be prompted for your password)";
+    app
+      .SetupWatch()
+      .then((msg) => {
+        result.textContent = msg;
+      })
+      .catch((err: unknown) => {
+        result.textContent = String(err);
+        result.classList.add("config-test-err");
+      })
+      .finally(() => {
+        btn.disabled = false;
+      });
+  });
+  top.append(btn, result);
+  row.append(top);
+  row.append(
+    descNode(
+      "config-help",
+      "Linux only. Grants the capabilities that let the app watch the whole filesystem through fanotify -- full coverage at negligible memory cost -- instead of the bounded per-directory fallback. You will be prompted for your password. Takes effect the next time you start the app.",
+    ),
+  );
   sec.append(row);
 }
 

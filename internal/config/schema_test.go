@@ -79,6 +79,7 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 			MaxWatches:    -1,
 			SweepMinutes:  45,
 			SweepEnabled:  Bool(false),
+			SetupEnabled:  Bool(false),
 			WatchExcludes: []string{"node_modules", "/home/*/scratch"},
 			Backend:       WatcherBackendFanotify,
 		},

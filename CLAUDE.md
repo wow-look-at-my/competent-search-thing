@@ -54,7 +54,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (Search/Open/Reveal/Hide/GetTheme/GetCustomCSS/Startup/DomReady/
   Shutdown/QueryPlugins/RunPluginAction/CheatSheet/GetHistory/
   AddHistory/GetStats/ResolveIcons/GetFileIcons/RecordPick/
-  FPSEnabled/RecordFPSSample). Bound methods
+  FPSEnabled/RecordFPSSample/SetupWatch). Bound methods
   appear in JS as `window.go.app.App.<Method>`. Holds the `index.Manager`; `Startup`
   saves the runtime ctx, brings up the global hotkey once through a
   session-dependent backend plan (hotkey.go: empty spec = skip, parse
@@ -319,8 +319,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   full `logFanotifyGrant()` first logs -- once per App, linux only
   (plat.goos), the grant lines BEFORE the emit (tests synchronize on
   the recorded event, then read the log) -- "watch: enable
-  full-filesystem watching with: sudo setcap
-  cap_sys_admin,cap_dac_read_search+ep <path>" with the path through
+  full-filesystem watching by running 'competent-search-thing
+  setup-watch' (or manually: sudo setcap
+  cap_sys_admin,cap_dac_read_search+ep <path>)" -- this is the manual
+  fallback hint that fires when the automatic internal/watchsetup path
+  did not enable fanotify (declined, disabled, or unsupported); the
+  path is through
   platform.ResolvedExecutable (the REAL file: setcap refuses
   symlinks, and the brew bin/ shim IS one -- the field failure; only
   when resolution fails does it fall back to the old
@@ -850,7 +854,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   frames (cobra out is os.Stdout, so diagnostics go to the stderr
   logger, NEVER cmd.OutOrStdout(); env.hostIn/hostOut inject the
   stdio in tests, which drive a full relay round-trip against an
-  in-process ffext.Server). The CLI
+  in-process ffext.Server). setup-watch (setupwatch.go) is the manual
+  retry for the automatic fanotify-capability setup (internal/watchsetup):
+  it never boots the GUI and never touches the single-instance socket --
+  it calls watchsetup.New(config).Attempt(ctx, out) (forced: ignores the
+  decline marker + watcher.setupEnabled, prompts via pkexec, runs setcap,
+  reports; NEVER re-execs -- caps apply at the next launch), ActionAttemptFailed
+  = exit 1 (SilenceErrors, the reason already printed by Attempt); the
+  env.setupWatch seam injects a fake in tests so no real pkexec/probe
+  runs. The CLI
   branches ONLY on ipc.Reply fields (checkReply/summonReply/
   configReply/classifyInstance over Parsed/OK/NotReady/
   UnknownCommand/Version/Build); ALL
@@ -1098,6 +1110,54 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Exhaustively unit-tested (scripted exact-argv runners, temp homes,
   the full matrix per OS in ensure_test.go incl. the
   never-starts-anything negatives).
+- `internal/watchsetup` -- the automatic optimal-watch setup that runs
+  BEFORE the GUI (main.go's runGUI calls `New(Config{Backend, Enabled,
+  ConfigDir}).Ensure()` before wails.Run), so a fresh Linux install
+  comes up on the whole-filesystem fanotify backend (full coverage,
+  negligible memory) instead of the per-directory fallback -- the goal
+  being "put itself in its best state," not log a setcap hint and run
+  degraded. Pure decision matrix over seam fields (New fills production;
+  tests inject fakes), exhaustively headless-tested (watchsetup_test.go,
+  85%+). `Ensure()` gate order: not-linux / EnvDisable
+  (COMPETENT_SEARCH_NO_WATCH_SETUP, both CI scripts set it) /
+  !setupEnabled / backend inotify|fsevents (respect the user's choice;
+  auto+fanotify proceed) / headless (no DISPLAY and no WAYLAND_DISPLAY)
+  -> skip; then the `probe` seam (fanoprobe_linux.go: one
+  unix.FanotifyInit with internal/watch's exact FAN_REPORT_DFID_NAME
+  flags, immediately closed -- err==nil = StateReady (caps already
+  present -> ActionOptimal, tidy any stale marker), EPERM =
+  StateNeedsCaps (grantable), else = StateUnsupported (old
+  kernel/container, caps cannot help -> one honest log line);
+  fanoprobe_other.go returns StateUnsupported). On StateNeedsCaps:
+  `resolve` (prodResolve: os.Executable -> platform.ResolvedExecutable
+  -- the REAL file, setcap refuses symlinks -- plus a path|mtime|size
+  identity) then the loop guard (envAttempted
+  COMPETENT_SEARCH_WATCH_SETUP_ATTEMPTED set on the re-exec'd child: caps
+  STILL missing = setcap did not take (noxattr/overlayfs) -> marker +
+  honest log, never a second attempt) then the decline marker
+  (<configDir>/watch-setup-state.json, {v,identity,reason,at}: matching
+  identity = declined/failed before for THIS binary -> silent skip; a
+  binary upgrade changes the identity and re-offers), else
+  grantAndRestart: `writeScript` (prodWriteScript: a 0700 temp-dir
+  grantScript that locates setcap, runs `setcap
+  cap_sys_admin,cap_dac_read_search+ep <exe>`, verifies with getcap; the
+  exe single-quote-escaped though it is our own path) run under
+  `escalate` (prodEscalate: `pkexec /bin/sh <script>` bounded by
+  escalateTimeout 3m; escalateError maps pkexec 126=dismissed /
+  127=auth-fail / other=script-exit + stderr tail), then on success
+  `reExec` (reexec_linux.go: syscall.Exec of the resolved capable binary
+  with os.Args + envAttempted=1 -- the leftover single-instance socket
+  fd closes on exec, the child's ipc.Listen self-heal recovers it;
+  reexec_other.go errors, never reached). Marker cleared on success,
+  written on decline/failure with a retry hint pointing at `setup-watch`.
+  `Attempt(ctx, out)` is the forced twin the CLI `setup-watch` command
+  AND the app's SetupWatch bound method (the config editor's
+  "Set up full-filesystem watching" button, internal/app
+  watchsetupcmd.go) use: same escalation, ignores the marker +
+  setupEnabled, prints to out, clears the marker on success, NEVER
+  re-execs (caps stick to the binary and apply at the next launch) --
+  the in-app retry for a user who declined the startup prompt. Imports only stdlib +
+  golang.org/x/sys/unix + internal/platform (no config/watch cycle).
 - `internal/match` -- THE shared matching engine, pure (stdlib only),
   consumed by internal/index AND internal/plugin: ONE fold definition
   (FoldTable/FoldRune/FoldPattern, the per-string ASCII+rune helpers;
@@ -1425,8 +1485,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   fanotify (linux) and fsevents (darwin) = STRICT, no per-dir
   fallback, and "kqueue" is deliberately NOT a config value (runtime
   label only); Normalize trims+lowercases and repairs
-  empty/unknown to "auto", schema enum in lockstep) -- main.go copies
-  all five into app.Options
+  empty/unknown to "auto", schema enum in lockstep), setupEnabled
+  (*bool, ON by default -- the tray.enabled convention, nil repaired to
+  true; false is the persistent opt-out from the automatic
+  fanotify-capability setup, internal/watchsetup, read by main.go's
+  runGUI BEFORE wails.Run, NOT copied into app.Options) -- main.go copies
+  the first five into app.Options
   {WatchMaxWatches, SweepInterval, SweepDisabled (inverted),
   WatchExcludes,
   WatchBackend}},
@@ -1474,8 +1538,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   inside it, next to config.json). The app's OTHER env knobs live with their owners:
   `COMPETENT_SEARCH_SOCKET` (internal/ipc, the single-instance socket
   path), `COMPETENT_SEARCH_HOTKEY_BACKEND` (internal/app hotkey.go,
-  backend override) and `COMPETENT_SEARCH_NO_SERVICE` (internal/app
-  service.go, the login-service auto-registration gate) -- all four
+  backend override), `COMPETENT_SEARCH_NO_SERVICE` (internal/app
+  service.go, the login-service auto-registration gate) and
+  `COMPETENT_SEARCH_NO_WATCH_SETUP` (internal/watchsetup, the per-process
+  gate on the automatic fanotify-capability setup; the persistent
+  per-user opt-out is config watcher.setupEnabled=false) -- all five
   are documented in the README. Default
   roots are the WHOLE FILESYSTEM (migrate.go: defaultRootsFor -- "/"
   on linux/darwin, %SystemDrive% with C:\ fallback on windows; goos +
@@ -3701,7 +3768,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   candidate values (providerTestRequest -- unsaved edits testable),
   calls TestPreviewProvider, disables itself while in flight, and
   renders the honest ok/error outcome inline beside the button (the
-  Kagi hint names the 1-credit cost); array-of-string = one-per-line textarea
+  Kagi hint names the 1-credit cost) -- and the watcher section appends
+  a "Set up full-filesystem watching" action row (appendWatchSetupRow,
+  #cfg-watchsetup) that calls the SetupWatch bound method (the in-app
+  retry for a declined fanotify-capability prompt; Go runs pkexec+setcap
+  and returns a human message, applied at the next launch) and shows the
+  outcome inline; array-of-string = one-per-line textarea
   (trimmed, blanks dropped); object whose patternProperties values
   are all strings = key/value row editor with add/remove
   (bangs.aliases); EVERYTHING else (plugins.entries, rewrites, any

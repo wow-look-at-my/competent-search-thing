@@ -282,10 +282,14 @@ async function launchApp(extraEnv: Record<string, string>): Promise<Proc> {
   // COMPETENT_SEARCH_NO_SERVICE keeps the app's automatic
   // login-service registration (internal/app service.go) off the
   // runner: CI must never write systemd user units for a throwaway
-  // process.
+  // process. COMPETENT_SEARCH_NO_WATCH_SETUP keeps the automatic
+  // optimal-watch setup (internal/watchsetup) off: the unprivileged
+  // runner has a DISPLAY (Xvfb) but no polkit agent, so the fanotify
+  // capability prompt would just fail slowly and add noise.
   const app = spawnLogged("app", bin, [], {
     COMPETENT_SEARCH_CONFIG_DIR: cfgDir,
     COMPETENT_SEARCH_NO_SERVICE: "1",
+    COMPETENT_SEARCH_NO_WATCH_SETUP: "1",
     ...extraEnv,
   });
   await pollFor("hotkey registration + initial index", 20000, 250, async () => {

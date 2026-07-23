@@ -268,6 +268,11 @@ function startApp(name: string, roots: string[], extraCfg: Record<string, unknow
     // so without the gate every boot would write a LaunchAgent plist
     // into the runner user's ~/Library/LaunchAgents.
     COMPETENT_SEARCH_NO_SERVICE: "1",
+    // Keep the automatic optimal-watch setup (internal/watchsetup)
+    // off. fanotify is Linux-only, so this is a no-op on macOS, but
+    // set it for parity and to guarantee no privilege prompt ever runs
+    // in CI.
+    COMPETENT_SEARCH_NO_WATCH_SETUP: "1",
   };
   const fd = fs.openSync(logFile, "a");
   // Zero args = the GUI path (internal/cli bare invocation).

@@ -359,7 +359,7 @@ func (a *App) logFanotifyGrant() {
 			}
 			exe = platform.StableExecutable(exe, args0)
 		}
-		log.Printf("watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep %s", exe)
+		log.Printf("watch: enable full-filesystem watching by running 'competent-search-thing setup-watch' (or manually: sudo setcap cap_sys_admin,cap_dac_read_search+ep %s)", exe)
 		log.Printf("watch: file capabilities stick to that exact file -- re-run the setcap command after any upgrade that replaces the binary (e.g. brew upgrade)")
 		// The crash-visibility tradeoff (issue #58, "secure-exec
 		// facts", verified): file caps set AT_SECURE, under which the

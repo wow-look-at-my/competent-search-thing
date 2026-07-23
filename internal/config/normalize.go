@@ -28,7 +28,8 @@ import (
 // aliases become empty maps, and an empty sigil list gets the default
 // sigils. The affirmative *bool switches (search.fuzzyEnabled,
 // search.frecency/priors/arbiter.enabled, watcher.sweepEnabled,
-// plugins.enabled, plugins.entries.<id>.enabled, tray.enabled,
+// watcher.setupEnabled, plugins.enabled,
+// plugins.entries.<id>.enabled, tray.enabled,
 // history.persistEnabled, stats.enabled, and -- since v8 --
 // preview.enabled) repair a nil pointer -- the
 // key absent from config.json -- to explicit true, their default, so
@@ -100,6 +101,7 @@ func (c *Config) Normalize() {
 		&c.Search.Priors.Enabled,
 		&c.Search.Arbiter.Enabled,
 		&c.Watcher.SweepEnabled,
+		&c.Watcher.SetupEnabled,
 		&c.Plugins.Enabled,
 		&c.Tray.Enabled,
 		&c.History.PersistEnabled,

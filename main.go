@@ -34,6 +34,7 @@ import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/cli"
 	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/index"
+	"github.com/wow-look-at-my/competent-search-thing/internal/watchsetup"
 )
 
 //go:embed all:frontend/dist
@@ -53,6 +54,22 @@ func runGUI(opts cli.RunOptions) error {
 	if err != nil {
 		log.Printf("config: %v (continuing with the returned config)", err)
 	}
+	// Before building the GUI, put filesystem monitoring in its optimal
+	// state (internal/watchsetup): on Linux the whole-filesystem fanotify
+	// backend gives full live coverage at negligible memory cost, but it
+	// needs capabilities the raw binary lacks. When they are missing but
+	// grantable, this prompts for privilege escalation (pkexec), grants
+	// them with setcap, and re-execs into the now-capable binary -- so
+	// the app comes up on fanotify instead of the memory-hungry
+	// per-directory fallback. It is a no-op when already optimal,
+	// unsupported here, disabled, or previously declined; on the grant
+	// path it re-execs and never returns.
+	configDir, _ := config.Dir()
+	watchsetup.New(watchsetup.Config{
+		Backend:   cfg.Watcher.Backend,
+		Enabled:   config.Enabled(cfg.Watcher.SetupEnabled),
+		ConfigDir: configDir,
+	}).Ensure()
 	mgr := index.NewManager(cfg.Roots, cfg.Excludes, cfg.MaxResults)
 	mgr.SetFuzzyDisabled(!config.Enabled(cfg.Search.FuzzyEnabled))
 	// The window size is fixed at construction (DisableResize), so it

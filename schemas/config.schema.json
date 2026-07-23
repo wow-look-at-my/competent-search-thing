@@ -256,6 +256,11 @@
           "enum": ["auto", "fanotify", "inotify", "fsevents"],
           "default": "auto",
           "description": "Notification backend selection. 'auto' (the default) uses a whole-filesystem backend where one exists -- fanotify marks on Linux (needs CAP_SYS_ADMIN; see the README's 'Enable full-filesystem watching') or the FSEvents stream on macOS (automatic, no privileges) -- and falls back to the per-directory hot set otherwise (inotify on Linux, kqueue on macOS; 'kqueue' is a runtime label, not a config value). 'fanotify' and 'fsevents' are STRICT: when the named backend cannot start (including on the wrong OS), live watching is disabled outright -- no per-directory fallback; reconcile sweeps keep the index converging -- announced loudly in-app and in the log. 'inotify' skips the whole-filesystem probe and pins the per-directory hot set on every OS (debugging). The app repairs an empty or unknown value to 'auto'."
+        },
+        "setupEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Controls the automatic optimal-backend setup that runs before the GUI starts (Linux only). The whole-filesystem fanotify backend gives full live coverage at negligible memory cost but needs capabilities the raw binary lacks; when they are missing but grantable, the app prompts for privilege escalation (pkexec), grants them with setcap, and re-execs into the capable binary so it comes up on fanotify instead of the per-directory fallback. Absent means enabled -- the default. false is the persistent per-user opt-out (no probe, no prompt, no re-exec). The COMPETENT_SEARCH_NO_WATCH_SETUP environment variable is the per-process opt-out."
         }
       },
       "additionalProperties": false
@@ -716,7 +721,8 @@
         "sweepMinutes": 0,
         "sweepEnabled": true,
         "watchExcludes": [],
-        "backend": "auto"
+        "backend": "auto",
+        "setupEnabled": true
       },
       "theme": "dark",
       "plugins": {

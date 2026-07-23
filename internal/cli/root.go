@@ -7,6 +7,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -60,6 +61,10 @@ type env struct {
 	// (which MUST script ipc.ListenOptions.Kill: in-process fake
 	// daemons report the test's own pid as the socket owner).
 	listenFn func(path string) (*ipc.Server, error)
+	// setupWatch overrides the `setup-watch` command's action in tests;
+	// nil uses the production internal/watchsetup path (which prompts
+	// for privileges and runs setcap).
+	setupWatch func(context.Context, io.Writer) error
 }
 
 // stdout returns the notice writer, defaulting to os.Stdout when none

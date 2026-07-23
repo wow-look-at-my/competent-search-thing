@@ -333,7 +333,7 @@ func TestStartWatchEmitsBackendNoticeAndGrantHint(t *testing.T) {
 	// and the hint falls back to the stable spelling -- the pre-fix
 	// behavior, pinned as the fallback contract.
 	require.Contains(t, buf.String(),
-		"watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep /test/bin/competent-search-thing",
+		"watch: enable full-filesystem watching by running 'competent-search-thing setup-watch' (or manually: sudo setcap cap_sys_admin,cap_dac_read_search+ep /test/bin/competent-search-thing)",
 		"an unresolvable executable path falls back to the stable spelling")
 	require.Contains(t, buf.String(),
 		"watch: file capabilities stick to that exact file -- re-run the setcap command after any upgrade that replaces the binary (e.g. brew upgrade)",
@@ -371,7 +371,7 @@ func TestLogFanotifyGrantResolvesSymlinkedExecutable(t *testing.T) {
 
 	out := buf.String()
 	require.Contains(t, out,
-		"watch: enable full-filesystem watching with: sudo setcap cap_sys_admin,cap_dac_read_search+ep "+wantReal,
+		"watch: enable full-filesystem watching by running 'competent-search-thing setup-watch' (or manually: sudo setcap cap_sys_admin,cap_dac_read_search+ep "+wantReal+")",
 		"the grant command names the resolved real file, not the symlink")
 	require.NotContains(t, out, "+ep "+link+"\n",
 		"the symlink spelling setcap refuses must not be printed")

@@ -402,6 +402,13 @@ interface WailsAppBindings {
   // openurl.go; open_url-grade validation, the webview never
   // navigates).
   OpenExternalURL(url: string): Promise<void>;
+  // Grant the Linux capabilities that enable whole-filesystem
+  // (fanotify) watching -- the config editor's "Set up full-filesystem
+  // watching" button and the in-app retry for a declined startup prompt
+  // (internal/app watchsetupcmd.go over internal/watchsetup). Go prompts
+  // for privileges (pkexec) and runs setcap; the promise resolves with a
+  // human-readable outcome. The capabilities apply at the next launch.
+  SetupWatch(): Promise<string>;
   // Drag-edge window resizing (internal/app resize.go, driven by
   // resize.ts). ResizeDrag applies one rAF-coalesced drag frame
   // (clamped, centered, never persisted); ResizeCommit applies the
