@@ -68,7 +68,10 @@ notanumber:some/mime:*.zz
 		{"no match at all", "README", ""},
 		{"empty name", "", ""},
 		{"whole name is the suffix", ".pdf", "application/pdf"},
-		{"fold changes byte length safely", "xK.gz", "application/gzip"},
+		// U+212A KELVIN SIGN: its simple lowercase is ASCII "k", so the
+		// fold shortens the byte length. Written as an escape to keep the
+		// source ASCII; the value is identical to the literal character.
+		{"fold changes byte length safely", "x\u212A.gz", "application/gzip"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

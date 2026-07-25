@@ -93,8 +93,15 @@ func wrapperExe(content []byte) string {
 	return string(m[2])
 }
 
-// shQuote single-quotes s for POSIX sh (embedded single quotes become
-// the standard '\'' splice).
+// shQuote single-quotes s for POSIX sh: an embedded single quote is
+// closed, backslash-escaped, and reopened -- the standard splice, spelled
+// out in the code below.
+//
+// Deliberately worded without that splice sequence. gofmt applies
+// typographic substitution inside doc comments and rewrites a doubled
+// straight quote into a curly one, which would put a non-ASCII byte in
+// the source (the repo is ASCII-only) and leave the tree non-canonical
+// for whichever gofmt build runs next.
 func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, `'`, `'\''`) + "'"
 }

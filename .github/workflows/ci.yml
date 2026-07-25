@@ -18,6 +18,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check sources are ASCII-only
+        # CLAUDE.md requires ASCII in every source file, and that rule
+        # has been broken twice by the same mechanism: gofmt applies
+        # typographic substitution inside DOC COMMENTS, so a comment
+        # containing a doubled straight quote gets rewritten to a curly
+        # one. The tree then carries a non-ASCII byte, and whichever
+        # gofmt build runs next may disagree about canonical form and
+        # fail the build with no obvious cause. A prose-only rule did
+        # not catch it; this does.
+        uses: wow-look-at-my/actions@typescript#latest
+        with:
+          script: |
+            const textExt = new Set([
+              '.go', '.ts', '.tsx', '.js', '.mjs', '.css', '.html',
+              '.json', '.yml', '.yaml', '.md', '.sh', '.c', '.h', '.m',
+            ]);
+            const out = await $`git ls-files -z`.silent();
+            const files = out.stdout.split('\0').filter(Boolean);
+            const bad = [];
+            for (const f of files) {
+              if (!textExt.has(path.extname(f))) continue;
+              const buf = fs.readFileSync(f);
+              for (let i = 0; i < buf.length; i++) {
+                if (buf[i] > 0x7f) {
+                  const line = buf.subarray(0, i).toString('utf8').split('\n').length;
+                  bad.push(`${f}:${line}: non-ASCII byte 0x${buf[i].toString(16)}`);
+                  break;
+                }
+              }
+            }
+            if (bad.length) {
+              for (const b of bad) core.error(b);
+              core.setFailed(
+                `${bad.length} source file(s) contain non-ASCII bytes. ` +
+                `Use plain --, ..., and " instead; write intentional ` +
+                `non-ASCII test data as a \\uXXXX escape.`);
+              return;
+            }
+            core.info(`checked ${files.length} tracked files: all ASCII`);
+
       - name: Install Linux webview build dependencies
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev xvfb xdotool imagemagick x11-utils openbox
 

@@ -253,6 +253,39 @@ func (s *Store) scanNames(pat string, ascii bool, lo, hi int, h *topK, marks []u
 	return s.scanRangeFold(pat, lo, hi, h, marks)
 }
 
+// entryProbeSteps is how far entryAt walks forward before paying for a
+// binary search. Blob hits arrive in increasing position order and the
+// cursor only moves forward, so a dense query's next hit is almost
+// always within a step or two -- and a sequential walk over the offset
+// table is cache-friendly, unlike a binary search that jumps around a
+// multi-megabyte array. Eight keeps the wasted probes negligible for
+// sparse queries (they pay at most eight extra reads per hit, against
+// a match count small by definition).
+const entryProbeSteps = 8
+
+// entryAt maps an absolute blob position to the entry that owns it:
+// the unique e in [cur, hi) with nameOff[e] <= pos < nameOff[e+1].
+// Callers guarantee nameOff[cur] <= pos and that such an e exists.
+//
+// This is the per-HIT step of every blob scan (four call sites), so on
+// a dense query over a large store it runs hundreds of thousands of
+// times per keystroke. A plain binary search over the whole remaining
+// shard cost ~log2(shard) closure calls each time regardless of how
+// close the answer was; probing forward first makes the common case
+// one comparison.
+func (s *Store) entryAt(cur, hi int, pos uint32) int {
+	for probe := 0; probe < entryProbeSteps; probe++ {
+		if s.nameOff[cur+1] > pos {
+			return cur
+		}
+		cur++
+		if cur >= hi {
+			return hi - 1
+		}
+	}
+	return cur + sort.Search(hi-cur, func(k int) bool { return s.nameOff[cur+k+1] > pos })
+}
+
 // scanRange scans entries [lo, hi) for the pre-folded ASCII pattern and
 // feeds live matches into h. The shard boundaries fall on name
 // boundaries by construction, and because neither names nor pat contain
@@ -275,7 +308,7 @@ func (s *Store) scanRange(pat string, lo, hi int, h *topK, marks []uint64) int {
 		pos := base + uint32(rel)
 		// Map the hit position to its entry: the unique e in [cur, hi)
 		// with nameOff[e] <= pos < nameOff[e+1].
-		e := cur + sort.Search(hi-cur, func(k int) bool { return s.nameOff[cur+k+1] > pos })
+		e := s.entryAt(cur, hi, pos)
 		if s.flags[e]&flagTombstone == 0 {
 			h.add(s.makeCand(int32(e), pos, len(pat)))
 			count++
