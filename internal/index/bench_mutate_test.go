@@ -64,6 +64,32 @@ func BenchmarkRemoveByPathMissing(b *testing.B) {
 	}
 }
 
+// BenchmarkAddEntryOneDir measures filling ONE directory through
+// AddEntry -- the duplicate-checking path the watcher uses
+// (Manager.Add, and scanNewDir's per-file call when a directory
+// appears in a watched tree). AddEntry must find an existing
+// (parent, name) before appending, so the cost per directory has to
+// stay near-linear in its size; a linear child scan makes it
+// quadratic, and directories with tens of thousands of entries are
+// ordinary (mail spools, caches, photo libraries, an unpacked
+// tarball).
+func BenchmarkAddEntryOneDir(b *testing.B) {
+	for _, n := range []int{1_000, 10_000, 50_000} {
+		b.Run(fmt.Sprintf("entries=%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				st := NewStore()
+				for k := 0; k < n; k++ {
+					if _, err := st.AddEntry("/d", "file_"+itoa(k)+".dat", false); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+			b.ReportMetric(float64(n)*float64(b.N)/b.Elapsed().Seconds(), "entries/s")
+		})
+	}
+}
+
 // defaultishExcludes mirrors the shape config actually ships (see
 // config's baseExcludes + noiseExcludes + system trees): base names and
 // absolute system paths, every one of them a literal. This is the

@@ -55,6 +55,23 @@ type Store struct {
 	flags    []byte             // entry -> flag bits
 	children map[uint32][]int32 // dir id -> entry ids (live and tombstoned)
 
+	// childIdx is a name -> entry id lookup for ONE directory: the last
+	// one findChild was asked about, and only once that directory grew
+	// past childIndexMin. AddEntry has to find an existing (parent,
+	// name) before appending, and the watch layer fills a directory one
+	// entry at a time (scanNewDir on a directory new to the index,
+	// reconcileDir on a changed one), so a linear child scan made
+	// filling one directory quadratic -- 3.9 s for 50k entries, held
+	// under the Manager's write lock that blocks every query.
+	//
+	// One directory is enough because those callers work through a
+	// single directory at a time; switching directories rebuilds. That
+	// bounds the memory to the largest recently-looked-up directory
+	// instead of the per-directory maps a general index would need.
+	childIdx   map[string]int32
+	childIdxID uint32
+	childIdxOK bool
+
 	// entryless holds the dir ids interned WITHOUT a directory entry of
 	// their own -- the walk roots, plus the transient window where a
 	// file event interns its parent before that parent's own directory
@@ -197,6 +214,7 @@ func (s *Store) appendEntry(pid uint32, name, dirPath string, isDir bool) int32 
 	}
 	s.flags = append(s.flags, f)
 	s.children[pid] = append(s.children[pid], id)
+	s.noteChildIndex(pid, name, id)
 	s.live++
 	return id
 }
@@ -224,15 +242,75 @@ func appendName(blob []byte, offs []uint32, name string) ([]byte, []uint32) {
 	return blob, append(offs, uint32(len(blob)))
 }
 
+// childIndexMin is the directory size past which findChild builds the
+// name lookup instead of scanning. Below it the scan wins outright: it
+// touches a few cache lines, while the map costs a hash plus the
+// rebuild whenever the directory changes.
+const childIndexMin = 64
+
 // findChild returns the entry id (live or tombstoned) named name under
 // dir id pid, or -1. Matching is on the original name, byte-exact.
+//
+// Small directories scan. Large ones go through childIdx, which keeps
+// the FIRST id for a duplicated name so the answer is identical to the
+// scan's (names are unique per directory in practice -- os.ReadDir
+// guarantees it for the walker and AddEntry dedups for everyone else --
+// so this only pins the tie-break).
+//
+// NOTE: this MUTATES the store (it may build the cache), so it must
+// stay on write paths only. Its two callers, AddEntry and
+// RemoveByPath, both run under the Manager's write lock.
 func (s *Store) findChild(pid uint32, name string) int32 {
-	for _, id := range s.children[pid] {
-		if string(s.nameBytes(id)) == name {
-			return id
+	kids := s.children[pid]
+	if len(kids) < childIndexMin {
+		for _, id := range kids {
+			if string(s.nameBytes(id)) == name {
+				return id
+			}
 		}
+		return -1
+	}
+	if !s.childIdxOK || s.childIdxID != pid {
+		s.buildChildIndex(pid, kids)
+	}
+	if id, ok := s.childIdx[name]; ok {
+		return id
 	}
 	return -1
+}
+
+// buildChildIndex points childIdx at dir id pid. Called only when a
+// lookup lands on a different large directory than the cached one, so
+// its O(children) cost is amortized over that directory's lookups.
+func (s *Store) buildChildIndex(pid uint32, kids []int32) {
+	if s.childIdx == nil {
+		s.childIdx = make(map[string]int32, len(kids))
+	} else {
+		clear(s.childIdx)
+	}
+	for _, id := range kids {
+		// First occurrence wins, matching the linear scan.
+		if n := s.Name(id); !mapHas(s.childIdx, n) {
+			s.childIdx[n] = id
+		}
+	}
+	s.childIdxID, s.childIdxOK = pid, true
+}
+
+// noteChildIndex keeps the cached lookup in step with an append into
+// the directory it describes; appends elsewhere leave it alone.
+func (s *Store) noteChildIndex(pid uint32, name string, id int32) {
+	if !s.childIdxOK || s.childIdxID != pid {
+		return
+	}
+	if !mapHas(s.childIdx, name) {
+		s.childIdx[name] = id
+	}
+}
+
+func mapHas(m map[string]int32, k string) bool {
+	_, ok := m[k]
+	return ok
 }
 
 // RemoveByPath tombstones the entry at path. If path is a directory
