@@ -1459,7 +1459,24 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   and any interned dir under the removed root either chains to it
   through entries or its chain breaks at a by-definition entryless
   dir. `internDir` is the flavor for a directory that has (or is
-  gaining) its own entry and clears the mark;
+  gaining) its own entry and clears the mark; `entryless` staying tiny
+  is what keeps the walk cheap (tombstoneSubtree scans it linearly), so
+  TestWalkLeavesOnlyRootsEntryless pins that a walk leaves exactly the
+  roots in it. `Add`'s `AddEntry` must find an existing (parent, name)
+  before appending, and `findChild` scans children only up to
+  childIndexMin (64); past that it uses `childIdx`, a name -> id lookup
+  for ONE directory (the last one asked about) -- enough because
+  scanNewDir and reconcileDir each work through a single directory at a
+  time, and it bounds the memory to the largest recently-looked-up
+  directory instead of a map per directory. Filling one directory was
+  O(n^2) before, under the write lock (50k entries: 3,913 ms -> 34.4
+  ms; the rate holds at ~1.5-2.3M entries/s instead of collapsing to
+  13k/s). The lookup keeps the FIRST id for a duplicated name so its
+  answer is identical to the scan's, and findChild MUTATES the store
+  (it may build the cache), so it must stay write-path only -- both
+  callers, AddEntry and RemoveByPath, run under the write lock.
+  childindex_test.go drives both sides of the threshold against the
+  scan plus every way the cached directory can change underneath it;
   `LiveDirsPage(start, max)` pages through the live (non-tombstoned)
   indexed directories releasing the read lock between pages
   (DefaultLiveDirsPage = 4096), and `ChildrenOf(dir)` returns a
