@@ -80,9 +80,9 @@ func BenchmarkAddEntryOneDir(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				st := NewStore()
 				for k := 0; k < n; k++ {
-					if _, err := st.AddEntry("/d", "file_"+itoa(k)+".dat", false); err != nil {
-						b.Fatal(err)
-					}
+					_, err := st.AddEntry("/d", "file_"+itoa(k)+".dat", false)
+					require.Nil(b, err)
+
 				}
 			}
 			b.ReportMetric(float64(n)*float64(b.N)/b.Elapsed().Seconds(), "entries/s")
@@ -133,9 +133,8 @@ func BenchmarkExcluderMatch(b *testing.B) {
 		"/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp",
 	}
 	ex, err := NewExcluder(patterns)
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.Nil(b, err)
+
 	names := []string{"report.go", "README.md", "node_modules", "data.json", ".git"}
 	fulls := []string{
 		"/home/u/src/report.go", "/home/u/src/README.md",
@@ -156,9 +155,8 @@ func BenchmarkExcluderMatch(b *testing.B) {
 	// The glob-only set must keep working at the same semantics; it is
 	// the slow path both above avoid.
 	exGlob, err := NewExcluder([]string{"*.tmp", "*.swp", "/home/*/secret"})
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.Nil(b, err)
+
 	b.Run("glob", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
