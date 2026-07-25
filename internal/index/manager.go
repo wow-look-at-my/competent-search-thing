@@ -16,9 +16,12 @@ const DefaultMaxResults = 50
 // queries take the read lock, mutations the write lock. It also holds
 // the indexing knobs (roots, excludes, default result limit).
 //
-// The watcher phase drives Add/Remove for live filesystem events and
-// watches TombstoneRatio to decide when a rebuild is worthwhile;
-// BuildFromDisk doubles as the periodic full rescan.
+// The watcher phase drives Add/Remove for live filesystem events;
+// BuildFromDisk doubles as the periodic full rescan. Removals only set
+// a tombstone bit, so the watch layer's Sweeper polls TombstoneRatio
+// after each completed pass and asks the Rescanner for a rebuild once
+// the dead entries dominate (watch/sweep.go maybeCompact) -- that
+// rebuild is the ONLY thing that reclaims their bytes.
 type Manager struct {
 	mu    sync.RWMutex
 	store *Store
@@ -170,7 +173,8 @@ func (m *Manager) LiveCount() int {
 
 // TombstoneRatio returns the fraction of entries that are tombstoned
 // (0 when the store is empty). A high ratio means a rebuild would
-// reclaim noticeable memory and scan time.
+// reclaim noticeable memory and scan time; the Sweeper checks it after
+// every completed pass (watch/sweep.go maybeCompact).
 func (m *Manager) TombstoneRatio() float64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

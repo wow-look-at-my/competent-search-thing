@@ -2969,7 +2969,27 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   cancelled passes redo the window; mtime-BACKDATED mutations (tar
   --preserve) are the documented miss, converging via full re-list /
   rescan / !rescan. SweepStats{Completed, Cancelled, Running,
-  LastStart, LastDuration, Swept, Relisted}. `Rescanner` (rescan.go):
+  LastStart, LastDuration, Swept, Relisted}. COMPACTION
+  (maybeCompact, run after every COMPLETED pass): index removals only
+  set a tombstone bit, and the name bytes plus the offset/parent/flag
+  columns and the children slot come back ONLY through a rebuild into
+  a fresh store -- with rescanIntervalMinutes defaulting to 0 the only
+  post-startup rebuild was a manual !rescan, so a machine churning
+  DISTINCT names (build artifacts, package installs, temp files) grew
+  the index for as long as the app ran (re-creating the SAME name
+  resurrects its entry, so stable-name churn never mattered). A
+  completed pass now reads Manager.TombstoneRatio -- the field that
+  was documented as the rebuild trigger and had NO caller -- and asks
+  the Rescanner (via the Watcher's requester, already wired because
+  the app builds the rescanner first) for a rebuild past
+  SweepOptions.CompactRatio (0.30) once the store passes
+  CompactMinEntries (20000); a negative ratio disables it and no
+  Rescanner means no request. The gates are deliberately high and
+  self-limiting: a rebuild resets the ratio to zero, so re-triggering
+  needs another 30% of the index deleted. Note sweepEnabled=false
+  therefore also turns compaction off (no Sweeper to run the check).
+  compact_test.go pins the trigger, both gates, the disable, and the
+  no-Rescanner-is-inert case. `Rescanner` (rescan.go):
   serialized full rebuilds -- `Manager.BuildFromDisk` (fresh-store
   swap; queries never block) then budget-aware `syncWatches` --
   triggered by an optional interval ticker (config

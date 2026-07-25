@@ -505,6 +505,15 @@ func (w *Watcher) setRescanRequester(fn func()) {
 	w.mu.Unlock()
 }
 
+// rescanRequester returns the wired full-rebuild request callback, or
+// nil when no Rescanner exists. The Sweeper uses it to ask for a
+// compaction rebuild (see Sweeper.maybeCompact).
+func (w *Watcher) rescanRequester() func() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.requestRescan
+}
+
 // setSweepRequester wires the overflow -> sweep request path;
 // NewSweeper calls it before either side starts. When set, it takes
 // precedence over the rescan requester for overflow recovery: a

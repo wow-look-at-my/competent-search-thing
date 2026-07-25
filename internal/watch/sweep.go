@@ -26,6 +26,22 @@ const (
 	// granularity and small skew between the sweep's clock and the
 	// filesystem's.
 	sweepMtimeSlack = 2 * time.Second
+	// defaultCompactRatio and defaultCompactMinEntries gate the
+	// compaction rebuild (see Sweeper.maybeCompact). Removals only set
+	// a tombstone bit -- the name bytes, the offset/parent/flag columns
+	// and the children slot are reclaimed only by a rebuild into a
+	// fresh store -- so without this the index grows forever on a
+	// machine that churns DISTINCT file names (build artifacts,
+	// package installs, temp files). Re-creating the SAME name
+	// resurrects its entry, so steady-state churn over a stable name
+	// set costs nothing and never trips this.
+	//
+	// The gates are deliberately high: a rebuild re-walks the disk, and
+	// after one the ratio resets to zero, so reaching the threshold
+	// again takes another 30% of the index being deleted. That makes
+	// the trigger self-limiting rather than periodic.
+	defaultCompactRatio      = 0.30
+	defaultCompactMinEntries = 20000
 )
 
 // SweepOptions tunes a Sweeper. The zero value selects all defaults.
@@ -47,6 +63,15 @@ type SweepOptions struct {
 	// 50000): the sweep is a background janitor and must never
 	// monopolize the disk.
 	StatsPerSec int
+
+	// CompactRatio is the tombstone fraction past which a completed
+	// pass asks the Rescanner for a compaction rebuild, and
+	// CompactMinEntries the store size below which it never bothers
+	// (defaults 0.30 and 20000; <= 0 selects the default). A negative
+	// CompactRatio disables the check entirely. Nothing happens
+	// without a Rescanner wired.
+	CompactRatio      float64
+	CompactMinEntries int
 
 	// mounts lists the current mount table's mountpoints (real,
 	// walkable filesystems only -- virtual and network types never
@@ -136,6 +161,12 @@ func NewSweeper(m *index.Manager, w *Watcher, opt SweepOptions) *Sweeper {
 	}
 	if opt.StatsPerSec <= 0 {
 		opt.StatsPerSec = defaultSweepStatsPerSec
+	}
+	if opt.CompactRatio == 0 {
+		opt.CompactRatio = defaultCompactRatio
+	}
+	if opt.CompactMinEntries <= 0 {
+		opt.CompactMinEntries = defaultCompactMinEntries
 	}
 	s := &Sweeper{
 		mgr:       m,
@@ -275,6 +306,39 @@ func (s *Sweeper) sweep(ctx context.Context) {
 	s.watermark = start
 	log.Printf("watch: sweep complete: %d dirs checked, %d reconciled in %s",
 		swept, relisted, time.Since(start).Round(time.Millisecond))
+	s.maybeCompact()
+}
+
+// maybeCompact asks the Rescanner for a full rebuild once tombstones
+// dominate the store. Removals only set a bit, so the name bytes and
+// the per-entry columns of every deleted file stay resident until a
+// rebuild walks into a FRESH store and swaps it in; a machine that
+// churns distinct names would otherwise grow the index for as long as
+// the app runs. Requests coalesce and are spaced by the Rescanner's
+// own MinGap, and queries keep answering from the old store for the
+// whole rebuild, so the only cost is one background walk.
+//
+// Nothing happens without a Rescanner wired, which is also what keeps
+// a Sweeper-only test setup inert.
+func (s *Sweeper) maybeCompact() {
+	if s.opt.CompactRatio < 0 {
+		return
+	}
+	total := s.mgr.Len()
+	if total < s.opt.CompactMinEntries {
+		return
+	}
+	ratio := s.mgr.TombstoneRatio()
+	if ratio < s.opt.CompactRatio {
+		return
+	}
+	request := s.w.rescanRequester()
+	if request == nil {
+		return
+	}
+	log.Printf("watch: %.0f%% of the index is deleted entries (%d of %d); requesting a rebuild to reclaim them",
+		ratio*100, total-s.mgr.LiveCount(), total)
+	request()
 }
 
 // pass is one sweep: the mount-table diff first, then the roots, then
