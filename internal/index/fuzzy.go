@@ -48,7 +48,6 @@ package index
 // off the hot path. Tests pin score ORDERINGS, not absolute values.
 
 import (
-	"sort"
 	"sync"
 	"unicode/utf8"
 
@@ -144,7 +143,7 @@ func (s *Store) scanRangeFuzzy(pat string, anchor byte, lo, hi int, h *topK, mar
 			return
 		}
 		pos := base + uint32(rel)
-		e := cur + sort.Search(hi-cur, func(k int) bool { return s.nameOff[cur+k+1] > pos })
+		e := s.entryAt(cur, hi, pos)
 		if s.flags[e]&flagTombstone == 0 && !entryMarked(marks, e) {
 			nb := s.nameBytes(int32(e))
 			if fuzzySubseqASCII(nb, pat) {

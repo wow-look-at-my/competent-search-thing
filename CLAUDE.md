@@ -1217,7 +1217,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   testFold helper) but keep independent stdlib-strings matching.
   `Store.Query`: case-insensitive substring
   search, sharded across NumCPU goroutines with per-shard bounded
-  top-K heaps; ranking exact > prefix > substring > fuzzy, dirs before
+  top-K heaps; every blob scan maps a hit position back to its entry
+  through the shared `entryAt(cur, hi, pos)` (search.go, all four scan
+  sites) -- hits arrive in increasing position order and the cursor
+  only moves forward, so it walks up to entryProbeSteps (8) entries
+  sequentially before falling back to the binary search it replaced,
+  making the dense case one comparison instead of ~log2(shard) closure
+  calls into a multi-megabyte offset table (1M-entry store: "a" 13.31
+  -> 9.61 ms, "re" 10.80 -> 9.29 ms; sparse queries unchanged, they
+  have few hits to pay for). entryat_test.go pins it against that
+  binary search over every legal (cur, pos) pair;
+  ranking exact > prefix > substring > fuzzy, dirs before
   files, shorter then numeric-aware lexicographic paths (aligned
   digit runs DESC -- numorder.go, below). QueryWith dispatches by
   match.Terms: whitespace-only = nil, ONE term = the pre-multi engine
@@ -1346,7 +1356,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   pool + LIFO queue) with exclude patterns (`Excluder`: bare pattern
   = base name, pattern with separator = full path; Match =
   MatchBase || MatchFull exactly, split plus HasFullPatterns for the
-  walker hot path), symlinks indexed
+  walker hot path; each half splits AGAIN by
+  `isLiteralPattern` -- no `*?[\` metacharacter means filepath.Match
+  degenerates to equality -- so literals answer from a map in one
+  lookup and only real globs walk the matcher: the shipped defaults are
+  ~13 base + ~6 full patterns, ALL literal, and every walked entry pays
+  the base check while every file entry pays the full one, so this was
+  tens of millions of filepath.Match calls per build (MatchBase 394 ->
+  10.7 ns, MatchFull 175 -> 14.5 ns; exclude checking went from +47% to
+  +6% of walk time, exclude_test.go pins both halves against a plain
+  filepath.Match loop as reference), symlinks indexed
   but never descended, permission errors counted not fatal, throttled
   progress callbacks. WALK ALLOCATION DIET (2026-07, recon-measured
   438 B / 4.26 allocs per entry before): base-name excludes are
@@ -1362,7 +1381,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   loop, so walk-built children slices end at cap == len (the
   append-ladder's measured 1.32x overshoot and copy churn are gone;
   pinned by TestWalkChildrenPresized, the scratch path by
-  TestWalkFullPathPatternOnFiles + TestAppendJoinDir). WALK STRESS
+  TestWalkFullPathPatternOnFiles + TestAppendJoinDir). The scratch
+  buffer generalized into `walkBufs` (2026-07): the per-directory
+  walkItem batch and subdirs slices are per-WORKER too now (walkQueue
+  .push copies into the queue's own slice, so reuse is safe), with
+  `keep` zeroing the written elements so a buffer never pins the
+  previous directory's name strings and handing back any buffer past
+  walkBufMaxEntries so one pathological directory cannot pin an
+  oversized batch for the rest of the walk -- 13% less allocated per
+  walk (BenchmarkWalkExcludes, which unlike BenchmarkWalk passes the
+  excludes a real install carries: 1.59M -> 2.29M entries/s with the
+  Excluder literal split above). WALK STRESS
   GATE (walkstress_test.go, the v395 field-crash regression rig:
   intermittent "growslice: len out of range" in appendName plus GC
   scanstack SIGSEGVs during startup indexing -- memory-corruption
@@ -1413,7 +1442,41 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (non-virtual/network/FUSE) filesystems under (or equal to) the
   given roots, linux-only/nil elsewhere -- consumed by the watch
   sweeper's mount-diff and the fanotify notifier's extra-mount marks.
-  `Add`/`Remove` are the watcher-phase entry points;
+  `Add`/`Remove` are the watcher-phase entry points -- and `Remove`'s
+  `Store.RemoveByPath` walks DOWN through `children` (each directory
+  entry names its own subdirectory, interned under that joined path)
+  via `tombstoneSubtree`, so a removal costs the subtree it actually
+  tombstones. It used to scan the ENTIRE interned dir table per call
+  with an allocating isWithin, i.e. one allocation per directory in
+  the whole index for every deleted directory, under the write lock
+  that blocks every query, once per vanished child from reconcileDir
+  (removing one empty directory in a 50k-dir store: 2,750,592 ns /
+  2.4 MB / 50,000 allocs -> 396 ns / 0 B / 0 allocs, and now flat in
+  store size). Exactness rests on `entryless`, the dir ids interned
+  WITHOUT an entry of their own (the walk roots via
+  `internParentDir`, plus the window where a file event is reconciled
+  before its parent directory's own event): those seed the walk too,
+  and any interned dir under the removed root either chains to it
+  through entries or its chain breaks at a by-definition entryless
+  dir. `internDir` is the flavor for a directory that has (or is
+  gaining) its own entry and clears the mark; `entryless` staying tiny
+  is what keeps the walk cheap (tombstoneSubtree scans it linearly), so
+  TestWalkLeavesOnlyRootsEntryless pins that a walk leaves exactly the
+  roots in it. `Add`'s `AddEntry` must find an existing (parent, name)
+  before appending, and `findChild` scans children only up to
+  childIndexMin (64); past that it uses `childIdx`, a name -> id lookup
+  for ONE directory (the last one asked about) -- enough because
+  scanNewDir and reconcileDir each work through a single directory at a
+  time, and it bounds the memory to the largest recently-looked-up
+  directory instead of a map per directory. Filling one directory was
+  O(n^2) before, under the write lock (50k entries: 3,913 ms -> 34.4
+  ms; the rate holds at ~1.5-2.3M entries/s instead of collapsing to
+  13k/s). The lookup keeps the FIRST id for a duplicated name so its
+  answer is identical to the scan's, and findChild MUTATES the store
+  (it may build the cache), so it must stay write-path only -- both
+  callers, AddEntry and RemoveByPath, run under the write lock.
+  childindex_test.go drives both sides of the threshold against the
+  scan plus every way the cached directory can change underneath it;
   `LiveDirsPage(start, max)` pages through the live (non-tombstoned)
   indexed directories releasing the read lock between pages
   (DefaultLiveDirsPage = 4096), and `ChildrenOf(dir)` returns a
@@ -2906,7 +2969,27 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   cancelled passes redo the window; mtime-BACKDATED mutations (tar
   --preserve) are the documented miss, converging via full re-list /
   rescan / !rescan. SweepStats{Completed, Cancelled, Running,
-  LastStart, LastDuration, Swept, Relisted}. `Rescanner` (rescan.go):
+  LastStart, LastDuration, Swept, Relisted}. COMPACTION
+  (maybeCompact, run after every COMPLETED pass): index removals only
+  set a tombstone bit, and the name bytes plus the offset/parent/flag
+  columns and the children slot come back ONLY through a rebuild into
+  a fresh store -- with rescanIntervalMinutes defaulting to 0 the only
+  post-startup rebuild was a manual !rescan, so a machine churning
+  DISTINCT names (build artifacts, package installs, temp files) grew
+  the index for as long as the app ran (re-creating the SAME name
+  resurrects its entry, so stable-name churn never mattered). A
+  completed pass now reads Manager.TombstoneRatio -- the field that
+  was documented as the rebuild trigger and had NO caller -- and asks
+  the Rescanner (via the Watcher's requester, already wired because
+  the app builds the rescanner first) for a rebuild past
+  SweepOptions.CompactRatio (0.30) once the store passes
+  CompactMinEntries (20000); a negative ratio disables it and no
+  Rescanner means no request. The gates are deliberately high and
+  self-limiting: a rebuild resets the ratio to zero, so re-triggering
+  needs another 30% of the index deleted. Note sweepEnabled=false
+  therefore also turns compaction off (no Sweeper to run the check).
+  compact_test.go pins the trigger, both gates, the disable, and the
+  no-Rescanner-is-inert case. `Rescanner` (rescan.go):
   serialized full rebuilds -- `Manager.BuildFromDisk` (fresh-store
   swap; queries never block) then budget-aware `syncWatches` --
   triggered by an optional interval ticker (config
@@ -3999,7 +4082,19 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 ## Conventions
 
 - ASCII only in every file (code, docs, YAML): plain `--`, `...`, `"`.
-  No em-dashes, no smart quotes, no unicode glyphs.
+  No em-dashes, no smart quotes, no unicode glyphs. ENFORCED by the
+  `Check sources are ASCII-only` CI step (ci.yml, linux job: every
+  tracked text-extension file, reported as file:line). The recurring
+  trap is gofmt's typographic substitution inside DOC COMMENTS: a
+  comment containing a doubled straight quote (the `'\''` shell splice
+  is the one that keeps happening) is rewritten to a curly quote, which
+  both violates this rule and leaves the tree non-canonical for
+  whichever gofmt build runs next -- word such comments so no quote
+  pair appears (see internal/ffext manifest.go shQuote and
+  internal/watchsetup shellSingleQuote, both worded around it).
+  Intentional non-ASCII TEST DATA is written as a `\uXXXX` escape
+  (internal/icons mimedb_test.go's U+212A case), which keeps the value
+  identical and the source ASCII.
 - Strict frontend file-type separation: TS/JS only in `.ts`/`.js`, CSS
   only in `.css`, HTML only in `.html`. No inline `<style>`/`<script>`
   bodies.

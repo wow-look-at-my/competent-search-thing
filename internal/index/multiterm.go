@@ -36,8 +36,6 @@ package index
 // same sharding and semantics (the documented rune-regime cost).
 
 import (
-	"sort"
-
 	"github.com/wow-look-at-my/competent-search-thing/internal/match"
 )
 
@@ -119,7 +117,7 @@ func (s *Store) scanRangeMultiSub(terms []match.Term, driver int, pats [][]int32
 			return count
 		}
 		pos := base + uint32(rel)
-		e := cur + sort.Search(hi-cur, func(k int) bool { return s.nameOff[cur+k+1] > pos })
+		e := s.entryAt(cur, hi, pos)
 		if s.flags[e]&flagTombstone == 0 {
 			markEntry(marks, e)
 			nb := s.nameBytes(int32(e))
@@ -178,7 +176,7 @@ func (s *Store) scanRangeMultiFuzzy(terms []match.Term, driver int, pats [][]int
 			return
 		}
 		pos := base + uint32(rel)
-		e := cur + sort.Search(hi-cur, func(k int) bool { return s.nameOff[cur+k+1] > pos })
+		e := s.entryAt(cur, hi, pos)
 		if s.flags[e]&flagTombstone == 0 && !entryMarked(marks, e) {
 			nb := s.nameBytes(int32(e))
 			if fuzzySubseqASCII(nb, terms[driver].Pat) {

@@ -461,6 +461,10 @@ The consistency model in practice:
   `tar --preserve` into an existing directory) hide from the sweep's
   mtime check and converge at the next full rescan (`!rescan`, or the
   `rescanIntervalMinutes` timer if you set one).
+- Deleting a file only marks its index entry; the bytes return when
+  the index is rebuilt. A sweep that finds the index mostly deleted
+  entries requests that rebuild on its own, so heavy file churn over
+  a long uptime cannot grow memory without bound.
 
 Startup arms the backend before the index walk (the `armed` line),
 then announces the active tier and its numbers -- the fsevents form
