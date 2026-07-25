@@ -91,19 +91,34 @@ type walkState struct {
 	errs    atomic.Int64
 }
 
+// walkBufs holds one worker's reusable scratch space. Every field is
+// refilled from scratch per directory and never escapes processDir, so
+// the walker allocates per WORKER instead of per directory -- at
+// whole-filesystem scale that is the difference between a handful of
+// buffers and three allocations for each of a million directories.
+type walkBufs struct {
+	// path is the joined full-path buffer for file entries: they need
+	// one only for the full-pattern exclude check, and materializing a
+	// real string per entry was the walk's single largest allocation
+	// source (~90-100 transient bytes per entry).
+	path []byte
+	// batch holds the directory's entries while the store lock is not
+	// held; drained inside the lock and reset before returning.
+	batch []walkItem
+	// subdirs holds the child directories to enqueue. walkQueue.push
+	// copies its argument into the queue's own slice, so reusing this
+	// across directories is safe.
+	subdirs []string
+}
+
 func (w *walkState) run() {
-	// scratch is this worker's reusable full-path buffer: file entries
-	// only ever need their joined path for the full-pattern exclude
-	// check, and materializing a real string for every one of them was
-	// the walk's single largest allocation source (~90-100 transient
-	// bytes per entry at whole-filesystem scale).
-	var scratch []byte
+	var bufs walkBufs
 	for {
 		dir, ok := w.q.pop()
 		if !ok {
 			return
 		}
-		scratch = w.processDir(dir, scratch)
+		w.processDir(dir, &bufs)
 		w.q.taskDone()
 	}
 }
@@ -118,17 +133,17 @@ type walkItem struct {
 	isDir bool
 }
 
-func (w *walkState) processDir(dir string, scratch []byte) []byte {
+func (w *walkState) processDir(dir string, bufs *walkBufs) {
 	entries, err := readDirFn(dir)
 	if err != nil {
 		w.errs.Add(1)
-		return scratch
+		return
 	}
 	w.dirs.Add(1)
 
 	checkFull := w.ex.HasFullPatterns()
-	batch := make([]walkItem, 0, len(entries))
-	var subdirs []string
+	batch := bufs.batch[:0]
+	subdirs := bufs.subdirs[:0]
 	for _, de := range entries {
 		name := de.Name()
 		if w.ex.MatchBase(name) {
@@ -152,8 +167,8 @@ func (w *walkState) processDir(dir string, scratch []byte) []byte {
 			// filepath.Match a transient view -- nothing down that
 			// call retains or mutates it, so no per-entry string is
 			// allocated.
-			scratch = appendJoinDir(scratch[:0], dir, name)
-			if w.ex.MatchFull(unsafeString(scratch)) {
+			bufs.path = appendJoinDir(bufs.path[:0], dir, name)
+			if w.ex.MatchFull(unsafeString(bufs.path)) {
 				continue
 			}
 		}
@@ -162,7 +177,11 @@ func (w *walkState) processDir(dir string, scratch []byte) []byte {
 
 	if len(batch) > 0 {
 		w.mu.Lock()
-		pid := w.st.internDir(dir)
+		// internParentDir: the walk roots have no entry of their own, so
+		// they must seed tombstoneSubtree's walk. Every non-root dir is
+		// already interned by its parent's appendEntry, so this is a
+		// plain map hit that leaves the entryless set alone.
+		pid := w.st.internParentDir(dir)
 		// One exact-size grow instead of the 1->2->4 append ladder:
 		// kills the copy churn and the ~1.32x measured cap overshoot.
 		w.st.growChildren(pid, len(batch))
@@ -173,8 +192,33 @@ func (w *walkState) processDir(dir string, scratch []byte) []byte {
 		w.prog.add(len(batch))
 		w.indexed.Add(int64(len(batch)))
 	}
+	// push COPIES into the queue's own slice, so subdirs is free to be
+	// reused right after.
 	w.q.push(subdirs...)
-	return scratch
+	bufs.keep(batch, subdirs)
+}
+
+// walkBufMaxEntries bounds what a worker carries between directories.
+// One pathological directory (a build cache with a million siblings)
+// would otherwise leave every worker pinning a batch that large for the
+// rest of the walk; past this size the buffer is handed back to the GC
+// and the next directory starts fresh.
+const walkBufMaxEntries = 8192
+
+// keep returns the (possibly regrown) buffers to the worker for the
+// next directory. The written elements are zeroed so the buffer never
+// pins the previous directory's name strings -- which also maintains
+// the invariant that everything past len is already zero.
+func (b *walkBufs) keep(batch []walkItem, subdirs []string) {
+	clear(batch)
+	clear(subdirs)
+	if cap(batch) > walkBufMaxEntries {
+		batch = nil
+	}
+	if cap(subdirs) > walkBufMaxEntries {
+		subdirs = nil
+	}
+	b.batch, b.subdirs = batch[:0], subdirs[:0]
 }
 
 // appendJoinDir appends joinDir(dir, name) to buf without allocating

@@ -55,6 +55,16 @@ type Store struct {
 	flags    []byte             // entry -> flag bits
 	children map[uint32][]int32 // dir id -> entry ids (live and tombstoned)
 
+	// entryless holds the dir ids interned WITHOUT a directory entry of
+	// their own -- the walk roots, plus the transient window where a
+	// file event interns its parent before that parent's own directory
+	// event is reconciled. Every other interned directory is reachable
+	// from its parent through children, which is what lets
+	// tombstoneSubtree walk a subtree instead of scanning the whole dir
+	// table. Normally one or two ids (the roots); deliberately not part
+	// of Footprint, like byteFreq.
+	entryless map[uint32]struct{}
+
 	live int // number of non-tombstoned entries
 
 	// byteFreq counts every byte in the names blob (updated on append,
@@ -68,18 +78,47 @@ type Store struct {
 // NewStore returns an empty store.
 func NewStore() *Store {
 	return &Store{
-		dirIndex: make(map[string]uint32),
-		nameOff:  []uint32{0},
-		children: make(map[uint32][]int32),
+		dirIndex:  make(map[string]uint32),
+		nameOff:   []uint32{0},
+		children:  make(map[uint32][]int32),
+		entryless: make(map[uint32]struct{}),
 	}
 }
 
 // internDir returns the dir id for path, creating it on demand. The
-// path must already be absolute and clean.
+// path must already be absolute and clean. Use this flavor when the
+// directory has (or is about to get) its own entry under its parent --
+// that is what makes it reachable by tombstoneSubtree's walk.
 func (s *Store) internDir(path string) uint32 {
+	id, ok := s.dirIndex[path]
+	if !ok {
+		return s.newDirID(path)
+	}
+	if len(s.entryless) > 0 {
+		// It was interned as somebody's parent first and is gaining its
+		// own entry now.
+		delete(s.entryless, id)
+	}
+	return id
+}
+
+// internParentDir returns the dir id for a directory interned only as
+// some entry's PARENT: the walk roots, and the window where a file
+// event is reconciled before its parent directory's own event. A dir
+// id created here has no entry linking it to its parent, so
+// tombstoneSubtree seeds its walk from these ids as well.
+func (s *Store) internParentDir(path string) uint32 {
 	if id, ok := s.dirIndex[path]; ok {
 		return id
 	}
+	id := s.newDirID(path)
+	s.entryless[id] = struct{}{}
+	return id
+}
+
+// newDirID appends a brand-new dir id for path (which must not already
+// be interned).
+func (s *Store) newDirID(path string) uint32 {
 	id := uint32(len(s.dirs))
 	s.dirs = append(s.dirs, path)
 	s.dirIndex[path] = id
@@ -116,7 +155,7 @@ func (s *Store) AddEntry(parentDir, name string, isDir bool) (int32, error) {
 		return -1, fmt.Errorf("index: parent dir %q is not absolute", parentDir)
 	}
 	parentDir = filepath.Clean(parentDir)
-	pid := s.internDir(parentDir)
+	pid := s.internParentDir(parentDir)
 	if id := s.findChild(pid, name); id >= 0 {
 		if s.flags[id]&flagTombstone != 0 {
 			s.flags[id] &^= flagTombstone
@@ -213,12 +252,50 @@ func (s *Store) RemoveByPath(path string) int {
 	}
 	// The subtree, if path is an interned directory.
 	if _, ok := s.dirIndex[path]; ok {
-		for did, dirPath := range s.dirs {
-			if !isWithin(dirPath, path) {
-				continue
-			}
-			for _, id := range s.children[uint32(did)] {
-				removed += s.tombstone(id)
+		removed += s.tombstoneSubtree(path)
+	}
+	return removed
+}
+
+// tombstoneSubtree tombstones every entry whose parent directory is at
+// or below root (an interned, cleaned directory path) and returns the
+// number newly tombstoned.
+//
+// It walks DOWN through children -- each directory entry names its own
+// subdirectory, which is interned under that joined path -- so the cost
+// scales with the removed subtree instead of with the total number of
+// directories in the index. The previous spelling scanned the whole
+// dir table per call, which on a whole-filesystem index meant tens of
+// milliseconds and one allocation per directory for EVERY deletion,
+// all of it under the Manager's write lock.
+//
+// Directories interned without an entry of their own (entryless: the
+// walk roots, plus the file-event-before-its-parent window) are not
+// reachable that way, so they seed the walk too. That keeps the result
+// exactly equal to the old full scan: any interned directory under
+// root either chains to root through entries, or its chain breaks at a
+// directory that is by definition entryless.
+func (s *Store) tombstoneSubtree(root string) int {
+	stack := []string{root}
+	for id := range s.entryless {
+		if d := s.dirs[id]; d != root && isWithin(d, root) {
+			stack = append(stack, d)
+		}
+	}
+	removed := 0
+	for len(stack) > 0 {
+		dir := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		did, ok := s.dirIndex[dir]
+		if !ok {
+			continue
+		}
+		for _, id := range s.children[did] {
+			removed += s.tombstone(id)
+			if s.flags[id]&flagDir != 0 {
+				// Names are non-empty and separator-free, so the joined
+				// path is strictly longer than dir: the walk terminates.
+				stack = append(stack, joinDirBytes(dir, s.nameBytes(id)))
 			}
 		}
 	}
@@ -343,6 +420,25 @@ func (s *Store) ChildrenOf(dir string) []ChildInfo {
 	return out
 }
 
+// joinDirBytes is joinDir for a name still held as a blob subslice: it
+// builds the joined path in ONE allocation instead of the two a
+// string(nameBytes) conversion plus a concatenation would cost.
+func joinDirBytes(dir string, name []byte) string {
+	var b strings.Builder
+	sep := !strings.HasSuffix(dir, string(filepath.Separator))
+	n := len(dir) + len(name)
+	if sep {
+		n++
+	}
+	b.Grow(n)
+	b.WriteString(dir)
+	if sep {
+		b.WriteByte(filepath.Separator)
+	}
+	b.Write(name)
+	return b.String()
+}
+
 // joinDir joins a clean absolute directory path and a child name. Only
 // a filesystem root ("/", or a drive root on Windows) keeps a trailing
 // separator after filepath.Clean, so the separator is inserted unless
@@ -356,12 +452,22 @@ func joinDir(dir, name string) string {
 
 // isWithin reports whether path equals dir or lies underneath it. Both
 // must be clean absolute paths.
+//
+// Deliberately allocation-free: the earlier spelling appended a
+// separator to dir (`dir += "/"`), which allocated a fresh string on
+// EVERY call. RemoveByPath used to call this once per interned
+// directory, so a single directory deletion burned one allocation per
+// directory in the whole index.
 func isWithin(path, dir string) bool {
 	if path == dir {
 		return true
 	}
-	if !strings.HasSuffix(dir, string(filepath.Separator)) {
-		dir += string(filepath.Separator)
+	if strings.HasSuffix(dir, string(filepath.Separator)) {
+		// A filesystem root ("/", "C:\"): children follow immediately.
+		return strings.HasPrefix(path, dir)
 	}
-	return strings.HasPrefix(path, dir)
+	// path must be exactly dir + separator + something.
+	return len(path) > len(dir) &&
+		path[len(dir)] == filepath.Separator &&
+		path[:len(dir)] == dir
 }

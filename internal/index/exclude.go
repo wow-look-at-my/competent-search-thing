@@ -20,9 +20,35 @@ import (
 // The zero/nil Excluder matches nothing. Excluder is immutable after
 // construction and safe for concurrent use; the watcher phase reuses it
 // to filter fsnotify events with identical semantics.
+//
+// Patterns are split once more, by whether they contain any
+// filepath.Match metacharacter. A metacharacter-free pattern matches
+// exactly the strings equal to it, so those go into a set and cost one
+// map lookup for the whole group instead of one glob-matcher call
+// each. That matters because the shipped default excludes are ~13
+// base-name and ~6 full-path patterns, ALL literal, and every walked
+// entry pays the base check while every file entry pays the full one:
+// a whole-filesystem build ran filepath.Match tens of millions of
+// times to answer "no".
 type Excluder struct {
-	base []string // matched against entry base names
-	full []string // matched against full absolute paths
+	baseLit  map[string]struct{} // literal base-name patterns
+	fullLit  map[string]struct{} // literal full-path patterns
+	baseGlob []string            // base-name patterns with metacharacters
+	fullGlob []string            // full-path patterns with metacharacters
+}
+
+// patternMeta lists the bytes that make filepath.Match do more than
+// compare for equality. '\\' is an escape character on every platform
+// except Windows, where it is the separator instead; treating it as a
+// metacharacter everywhere just routes those patterns to the glob path,
+// which is always correct.
+const patternMeta = `*?[\`
+
+// isLiteralPattern reports whether p matches exactly one string --
+// itself. filepath.Match walks a metacharacter-free pattern byte for
+// byte and requires both sides to end together, which is equality.
+func isLiteralPattern(p string) bool {
+	return !strings.ContainsAny(p, patternMeta)
 }
 
 // NewExcluder validates the patterns and splits them by kind. Empty
@@ -37,10 +63,22 @@ func NewExcluder(patterns []string) (*Excluder, error) {
 		if _, err := filepath.Match(p, "probe"); err != nil {
 			return nil, fmt.Errorf("index: bad exclude pattern %q: %w", p, err)
 		}
-		if strings.ContainsRune(p, '/') || strings.ContainsRune(p, filepath.Separator) {
-			e.full = append(e.full, p)
-		} else {
-			e.base = append(e.base, p)
+		full := strings.ContainsRune(p, '/') || strings.ContainsRune(p, filepath.Separator)
+		switch {
+		case !isLiteralPattern(p) && full:
+			e.fullGlob = append(e.fullGlob, p)
+		case !isLiteralPattern(p):
+			e.baseGlob = append(e.baseGlob, p)
+		case full:
+			if e.fullLit == nil {
+				e.fullLit = make(map[string]struct{})
+			}
+			e.fullLit[p] = struct{}{}
+		default:
+			if e.baseLit == nil {
+				e.baseLit = make(map[string]struct{})
+			}
+			e.baseLit[p] = struct{}{}
 		}
 	}
 	return e, nil
@@ -60,7 +98,10 @@ func (e *Excluder) MatchBase(base string) bool {
 	if e == nil {
 		return false
 	}
-	for _, p := range e.base {
+	if _, ok := e.baseLit[base]; ok {
+		return true
+	}
+	for _, p := range e.baseGlob {
 		if ok, _ := filepath.Match(p, base); ok {
 			return true
 		}
@@ -74,7 +115,10 @@ func (e *Excluder) MatchFull(full string) bool {
 	if e == nil {
 		return false
 	}
-	for _, p := range e.full {
+	if _, ok := e.fullLit[full]; ok {
+		return true
+	}
+	for _, p := range e.fullGlob {
 		if ok, _ := filepath.Match(p, full); ok {
 			return true
 		}
@@ -87,5 +131,5 @@ func (e *Excluder) MatchFull(full string) bool {
 // (the walker, for every file entry) skip that work entirely when
 // there are none.
 func (e *Excluder) HasFullPatterns() bool {
-	return e != nil && len(e.full) > 0
+	return e != nil && (len(e.fullLit) > 0 || len(e.fullGlob) > 0)
 }
