@@ -9,7 +9,6 @@ package app
 // app_test.go.
 
 import (
-	"bytes"
 	"context"
 	"log"
 	"os"
@@ -29,7 +28,7 @@ func TestBuildIndexArmsWatchBeforeWalkAndAdoptsIt(t *testing.T) {
 	// BEFORE the initial walk (the armed line precedes the build
 	// completion line), and the completion path ADOPTS that very
 	// watcher instance instead of building a second one.
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log"
@@ -175,7 +174,7 @@ func TestLaunchWatchCtxCancelledByShutdown(t *testing.T) {
 }
 
 func TestAnnounceLaunch(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -187,7 +186,7 @@ func TestAnnounceLaunch(t *testing.T) {
 	require.True(t, prepared)
 	// Drain a's async layers before touching the shared buffer: the
 	// always-on priors/arbiter/telemetry goroutines log through the
-	// global logger, and a bytes.Buffer read or Reset racing one of
+	// global logger, and an unsynchronized buffer read or Reset racing one of
 	// those writes corrupts the buffer (a Reset can even resurrect
 	// pre-Reset content). Shutdown waits all of them out and is
 	// idempotent under the Cleanup-registered second call.

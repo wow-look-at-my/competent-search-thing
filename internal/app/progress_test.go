@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -29,7 +28,7 @@ import (
 // startup-complete summary fires only after the watch layer is up.
 // Not parallel: it rewires the process-global log output.
 func TestBuildIndexRendersProgressAndStartupSummary(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
@@ -85,7 +84,7 @@ func TestBuildIndexRendersProgressAndStartupSummary(t *testing.T) {
 // printer's stream. Not parallel: it rewires the process-global log
 // output.
 func TestInstallProgressLogRoutesThroughTTYPrinter(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 	installProgressLog(progress.New(&buf, true, nil))
@@ -98,7 +97,7 @@ func TestInstallProgressLogRoutesThroughTTYPrinter(t *testing.T) {
 // contract: non-TTY printers (and nil) never touch the logger, so
 // tests capturing log output are never clobbered. Not parallel.
 func TestInstallProgressLogLeavesNonTTYAlone(t *testing.T) {
-	var direct, printer bytes.Buffer
+	var direct, printer logBuffer
 	log.SetOutput(&direct)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
@@ -113,7 +112,7 @@ func TestInstallProgressLogLeavesNonTTYAlone(t *testing.T) {
 // Startup installs the TTY printer as the log output, Shutdown clears
 // it and hands the logger back to stderr. Not parallel.
 func TestShutdownRestoresLoggerFromTTYPrinter(t *testing.T) {
-	var tty bytes.Buffer
+	var tty logBuffer
 	a, _ := newTestApp(t, nil, Options{}) // nil manager: no build goroutine
 	p := progress.New(&tty, true, nil)
 	a.newProgress = func() *progress.Printer { return p }

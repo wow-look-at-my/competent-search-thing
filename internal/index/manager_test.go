@@ -281,7 +281,12 @@ func TestManagerBuildErrorKeepsOldStore(t *testing.T) {
 // detector when the toolchain enables it).
 func TestManagerConcurrentQueryAndMutate(t *testing.T) {
 	m := NewManager(nil, nil, 20)
-	const writes = 1500
+	writes, rebuildInterval, wantRebuilds, readerQueries := 1500, 500, 3, -1
+	if raceEnabled {
+		// Keep readers, mutations, removals, and a full store swap under
+		// race instrumentation without exceeding the fixed package timeout.
+		writes, rebuildInterval, wantRebuilds, readerQueries = 150, 100, 1, 12
+	}
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
@@ -290,7 +295,7 @@ func TestManagerConcurrentQueryAndMutate(t *testing.T) {
 		go func(r int) {
 			defer wg.Done()
 			queries := []string{"file", "chunk7", "nomatch-zz", "dir"}
-			for i := 0; ; i++ {
+			for i := 0; readerQueries < 0 || i < readerQueries; i++ {
 				select {
 				case <-stop:
 					return
@@ -309,7 +314,7 @@ func TestManagerConcurrentQueryAndMutate(t *testing.T) {
 		if i%7 == 0 {
 			m.Remove(joinDir(dir, fmt.Sprintf("file%04d.txt", i)))
 		}
-		if i%500 == 250 {
+		if i%rebuildInterval == rebuildInterval/2 {
 			// Occasional full swap while queries are in flight.
 			_, _, err := m.BuildFromDisk(context.Background(), nil)
 			require.NoError(t, err)
@@ -319,7 +324,7 @@ func TestManagerConcurrentQueryAndMutate(t *testing.T) {
 	close(stop)
 	wg.Wait()
 
-	require.Equal(t, 3, rebuilds)
+	require.Equal(t, wantRebuilds, rebuilds)
 	// After the last rebuild (roots are empty) the store restarts from
 	// zero; only writes after that point remain.
 	require.Greater(t, m.LiveCount(), 0)

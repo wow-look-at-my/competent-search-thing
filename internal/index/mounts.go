@@ -15,19 +15,13 @@ import (
 // filesystems (a walk over NFS/CIFS/sshfs hangs on server stalls and
 // hammers the wire). Mountpoints of those types are computed fresh at
 // every BuildFromDisk -- mounts change between rebuilds -- and fed to
-// the walk as full-path exclude patterns, so the walker prunes the
-// mountpoint directory entry exactly like a configured exclude.
+// the walk as trusted exact paths, so legal glob metacharacters in a
+// mountpoint cannot defeat pruning or affect an unrelated path.
 //
 // Escape hatch: a mountpoint that IS one of the configured roots is
 // never skipped -- listing a network mount as an explicit root is the
 // documented way to index it anyway (the walker dedupes nested roots,
 // so the entry costs nothing; it only keeps the skip off).
-
-// mountSkipCap bounds the skip list; a mount table bigger than this is
-// pathological (containers with thousands of binds) and everything
-// past the cap walks normally rather than growing the pattern list
-// without bound.
-const mountSkipCap = 256
 
 // mountSkips is BuildFromDisk's seam over SystemMountSkips; tests
 // inject fake skip lists through it.
@@ -72,11 +66,10 @@ func skipFSType(fstype string) bool {
 // Octal escapes in mountpoints (\040 for space etc.) are decoded. The
 // root filesystem entry ("/") is never returned, a mountpoint equal to
 // a configured root is never returned (the index-it-anyway escape
-// hatch), and a mountpoint containing filepath.Match metacharacters is
-// dropped -- the skips are consumed as match patterns, and a mount
-// path with glob characters in it is not worth escaping machinery.
-// The list is capped at mountSkipCap entries. Malformed lines are
-// ignored; the function never fails.
+// hatch). Mountpoints are returned as exact paths, including legal
+// filepath.Match metacharacters; BuildFromDisk keeps them out of the
+// user-pattern channel. Malformed lines are ignored; the function never
+// fails.
 func ParseMountSkips(r io.Reader, roots []string) []string {
 	cleanRoots := make([]string, 0, len(roots))
 	for _, root := range roots {
@@ -86,7 +79,7 @@ func ParseMountSkips(r io.Reader, roots []string) []string {
 	}
 	var skips []string
 	sc := bufio.NewScanner(r)
-	for sc.Scan() && len(skips) < mountSkipCap {
+	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
 		if len(fields) < 3 || !skipFSType(fields[2]) {
 			continue
@@ -96,9 +89,6 @@ func ParseMountSkips(r io.Reader, roots []string) []string {
 			continue
 		}
 		mp = filepath.Clean(mp)
-		if strings.ContainsAny(mp, `*?[\`) {
-			continue // never a valid filepath.Match literal; dropped
-		}
 		under := false
 		for _, cr := range cleanRoots {
 			if mp == cr {

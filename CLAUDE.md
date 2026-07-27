@@ -289,7 +289,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   cancel/failure paths Stop-and-detach it (takeEarlyWatcher; Shutdown
   and restartIndexLayer's in-flight branch do the same, the latter
   because the early watcher runs the PREVIOUS config), never leaking
-  its marks; the BuildFromDisk window runs under a lowered GOGC
+  its marks; Startup/retry wraps buildIndex with a buildDone channel,
+  and Shutdown cancels then drains it for up to 2s (late logging,
+  watcher setup, and config/temp access cannot escape ordinary
+  teardown, while a truly stuck filesystem call cannot hang quit);
+  the BuildFromDisk window runs under a lowered GOGC
   (gcbound.go: boundBuildGC over the plat.setGCPercent seam,
   production debug.SetGCPercent, buildGCPercent 40, restored
   immediately after BuildFromDisk returns on every path -- walk churn
@@ -1433,10 +1437,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   `ParseMountSkips` returns mountpoints strictly under the roots whose
   fstype is kernel-virtual or network -- all fuse/fuse.* skipped,
   overlay deliberately KEPT (container roots) -- octal escapes
-  decoded, "/" never returned, glob-metachar mountpoints dropped,
-  capped at 256, a mountpoint equal to a configured root never
-  skipped = the index-it-anyway escape hatch), appending it to the
-  excludes as full-path patterns and logging the list; the `mountSkips`
+  decoded, "/" never returned, glob-metachar mountpoints preserved as
+  exact paths, every qualifying mount returned (no unsafe truncation),
+  a mountpoint equal to a configured root never skipped = the
+  index-it-anyway escape hatch), adding it to the walk as trusted
+  full-path literals and logging a bounded preview; the `mountSkips`
   package var is the test seam; `RealMountpoints(roots)` / pure
   `ParseMountpoints` are the inverse view -- mountpoints of WALKABLE
   (non-virtual/network/FUSE) filesystems under (or equal to) the
@@ -2953,14 +2958,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   always-on convergence tier -- NewSweeper(m, w != nil, SweepOptions
   {Interval 20m default, MinGap 1m, InitialWatermark (zero = first
   pass re-lists EVERY dir; the app passes build-completion time),
-  StatsPerSec 50000 sleep-throttle, unexported `mounts` seam
-  (default index.RealMountpoints over the roots)}). One pass:
-  mount-table snapshot
-  under the roots diffed vs the previous pass (symmetric difference
-  force-reconciled -- mount-onto-existing-dir moves no mtime,
-  unmounts restore content silently; an APPEARED mountpoint gets
-  Watcher.markMount first, so a fanotify backend marks the new
-  filesystem before its content is indexed), then the roots (no index entry
+  StatsPerSec 50000 sleep-throttle, unexported `mounts` /
+  `mountSkips` seams (defaults index.RealMountpoints /
+  index.SystemMountSkips over the roots)}). One pass: classified
+  mount-table snapshot under the roots diffed vs the previous pass
+  (presence OR safe/unsafe class changes force convergence --
+  mount-onto-existing-dir moves no mtime, unmounts restore content
+  silently; an APPEARED walkable mountpoint gets Watcher.markMount
+  first, so a fanotify backend marks the new filesystem before its
+  content is indexed; an APPEARED network/virtual/FUSE mount is
+  tombstoned with NO lstat/readdir, and its departure force-restores
+  the local directory exposed underneath), then the roots (no index entry
   of their own: routed to reconcileDir directly, a full reconcile
   would invent one), then every live indexed dir via
   Manager.LiveDirsPage(4096): lstat each; gone or mtime >= watermark

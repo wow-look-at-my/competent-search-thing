@@ -89,7 +89,8 @@ type Options struct {
 	// summon shortcut), read at Start and refreshed on every
 	// (re-)registration with a host; "" means title-only. May be nil.
 	// (GNOME's AppIndicator extension does not render SNI tooltips at
-	// all -- the property exists for hosts that do, like KDE.)
+	// all -- the property exists for hosts that do, like KDE.) It can
+	// be called from the watch goroutine and must be goroutine-safe.
 	Tooltip func() string
 	// Menu is the static menu, top to bottom.
 	Menu []MenuItem

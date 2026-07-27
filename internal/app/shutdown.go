@@ -8,7 +8,14 @@ import (
 	"context"
 	"log"
 	"os"
+	"time"
 )
+
+// initialBuildShutdownTimeout keeps quit bounded even if a local
+// filesystem call ignores cancellation. Ordinary walks observe the
+// cancelled context promptly; draining them prevents late log writes,
+// watcher setup, and temp/config access after Shutdown returns.
+const initialBuildShutdownTimeout = 2 * time.Second
 
 // Shutdown is wired to the Wails OnShutdown hook. It closes the
 // single-instance IPC server first (no new summons during teardown;
@@ -28,13 +35,14 @@ import (
 // first (it may be mid-rescan and calls back into the watcher to
 // resync watches), then the sweeper (its passes reconcile through the
 // watcher too, so it must stop before it), then the watcher, then the
-// theme hot-reload watcher. Every step is bounded: an in-flight
-// rescan, sweep pass, or watch resync is cancelled, never waited out,
-// so quit stays fast even mid-walk on a huge index. Safe to call at
-// any point, even before the watch layer came up; the shuttingDown
-// flag keeps a racing startWatch from starting it afterwards. The
-// very last step clears the TTY progress line and restores the
-// standard logger to stderr (non-TTY printers never touched it).
+// theme hot-reload watcher. Every step is bounded: rescan/sweep/watch
+// loops stop through their cancellation paths, and the initial build
+// gets at most initialBuildShutdownTimeout to drain before quit
+// continues. Safe to call at any point, even before the watch layer
+// came up; the shuttingDown flag keeps a racing startWatch from
+// starting it afterwards. The very last step clears the TTY progress
+// line and restores the standard logger to stderr (non-TTY printers
+// never touched it).
 func (a *App) Shutdown(_ context.Context) {
 	if a.opt.IPC != nil {
 		if err := a.opt.IPC.Close(); err != nil {
@@ -114,6 +122,7 @@ func (a *App) Shutdown(_ context.Context) {
 	a.shuttingDown = true
 	buildCancel := a.buildCancel
 	a.buildCancel = nil
+	buildDone := a.buildDone
 	w, r, sw, tw := a.watcher, a.rescanner, a.sweeper, a.themeW
 	a.watcher, a.rescanner, a.sweeper, a.themeW = nil, nil, nil, nil
 	ew := a.earlyWatcher
@@ -139,6 +148,13 @@ func (a *App) Shutdown(_ context.Context) {
 	}
 	if tw != nil {
 		tw.stop()
+	}
+	if buildDone != nil {
+		select {
+		case <-buildDone:
+		case <-time.After(initialBuildShutdownTimeout):
+			log.Printf("index: initial build did not stop within %s; shutdown continues", initialBuildShutdownTimeout)
+		}
 	}
 
 	// Drain the frecency layer's short-lived goroutines (one state

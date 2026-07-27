@@ -84,6 +84,24 @@ func NewExcluder(patterns []string) (*Excluder, error) {
 	return e, nil
 }
 
+// addFullLiterals adds trusted exact full paths without interpreting
+// filepath.Match metacharacters. Mount-derived excludes use this path:
+// '*' and '[' are legal filename bytes on Unix, and turning a mountpoint
+// into a glob could either miss that mount or prune an unrelated path.
+func (e *Excluder) addFullLiterals(paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	if e.fullLit == nil {
+		e.fullLit = make(map[string]struct{}, len(paths))
+	}
+	for _, path := range paths {
+		if path != "" {
+			e.fullLit[path] = struct{}{}
+		}
+	}
+}
+
 // Match reports whether an entry with the given base name and full
 // absolute path is excluded. Exactly MatchBase || MatchFull; the walk
 // hot path calls the halves separately so it can skip materializing

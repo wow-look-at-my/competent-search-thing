@@ -3,6 +3,7 @@ package tray
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -106,8 +107,9 @@ func TestItemPropertiesGetAll(t *testing.T) {
 }
 
 func TestTooltipRefreshOnReregistration(t *testing.T) {
-	text := "one"
-	rig := startedTray(t, Options{Tooltip: func() string { return text }})
+	var text atomic.Value
+	text.Store("one")
+	rig := startedTray(t, Options{Tooltip: func() string { return text.Load().(string) }})
 
 	props := rig.getAll(t, itemPath, itemIface)
 	var tt tooltip
@@ -124,7 +126,7 @@ func TestTooltipRefreshOnReregistration(t *testing.T) {
 
 	// A watcher restart re-registers; the re-registration re-reads the
 	// tooltip (a portal shortcut may have bound long after startup).
-	text = "two"
+	text.Store("two")
 	rig.watcher.Release()
 	w2 := newFakeWatcher(t, rig.addr)
 	w2.Await(awaitTimeout)

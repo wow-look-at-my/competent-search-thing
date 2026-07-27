@@ -42,16 +42,17 @@ func TestParseMountSkips(t *testing.T) {
 		"/home/me/.gvfs",
 		"/mnt/app",
 		"/mnt/with space", // \040 decoded
+		"/mnt/glob[1]",
 	}, got)
 
 	// The dropped cases, spelled out: local filesystems are kept
 	// (ext4/xfs/btrfs never appear), overlay is deliberately not a
 	// skip type (container roots are overlay mounts), "/" is never
 	// returned, /proc//sys//run are outside the given roots, the
-	// glob-metachar mountpoint is dropped, the mountpoint configured
-	// as an explicit root is the escape hatch, and malformed lines are
-	// ignored.
-	for _, absent := range []string{"/", "/proc", "/sys", "/run", "/data", "/pool", "/big", "/mnt/glob[1]", "/outside/tree", "/mnt/explicit"} {
+	// glob-metachar mountpoints are preserved as exact paths, the
+	// mountpoint configured as an explicit root is the escape hatch,
+	// and malformed lines are ignored.
+	for _, absent := range []string{"/", "/proc", "/sys", "/run", "/data", "/pool", "/big", "/outside/tree", "/mnt/explicit"} {
 		require.NotContains(t, got, absent)
 	}
 }
@@ -68,13 +69,16 @@ func TestParseMountSkipsWholeFilesystemRoot(t *testing.T) {
 		"with the whole-filesystem root, every virtual/network mount is under it")
 }
 
-func TestParseMountSkipsCap(t *testing.T) {
+func TestParseMountSkipsDoesNotDropLargeMountTables(t *testing.T) {
+	const mountCount = 306
 	var b strings.Builder
-	for i := 0; i < mountSkipCap+50; i++ {
+	for i := 0; i < mountCount; i++ {
 		fmt.Fprintf(&b, "server:/x /mnt/nfs%04d nfs rw 0 0\n", i)
 	}
 	got := ParseMountSkips(strings.NewReader(b.String()), []string{"/"})
-	require.Len(t, got, mountSkipCap, "the skip list is capped; everything past it walks normally")
+	require.Len(t, got, mountCount, "every unsafe mount must be pruned")
+	require.Equal(t, "/mnt/nfs0305", got[len(got)-1],
+		"mounts after the old 256-entry cap must not leak into the walk")
 }
 
 func TestSkipFSType(t *testing.T) {
@@ -178,15 +182,18 @@ func TestBuildFromDiskPrunesMountSkips(t *testing.T) {
 	root := t.TempDir()
 	keep := filepath.Join(root, "keep")
 	mnt := filepath.Join(root, "mnt")
+	globMnt := filepath.Join(root, "mount[1]")
 	require.NoError(t, os.MkdirAll(filepath.Join(keep, "inner"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(mnt, "remote"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(globMnt, "remote"), 0o755))
 	writeFile(t, filepath.Join(keep, "kept.txt"))
 	writeFile(t, filepath.Join(mnt, "unreachable.txt"))
+	writeFile(t, filepath.Join(globMnt, "also-unreachable.txt"))
 
 	orig := mountSkips
 	mountSkips = func(roots []string) []string {
 		require.Equal(t, []string{root}, roots, "the manager's configured roots feed the skip computation")
-		return []string{mnt}
+		return []string{mnt, globMnt}
 	}
 	t.Cleanup(func() { mountSkips = orig })
 
@@ -196,8 +203,11 @@ func TestBuildFromDiskPrunesMountSkips(t *testing.T) {
 	require.Equal(t, 3, count, "keep/, keep/inner and keep/kept.txt; the mnt subtree is pruned entirely")
 
 	require.Empty(t, m.Query("unreachable", 0), "files under the skipped mountpoint never enter the index")
+	require.Empty(t, m.Query("also-unreachable", 0),
+		"a mountpoint containing glob metacharacters is still an exact skip")
 	require.Empty(t, m.Query("remote", 0))
 	require.Empty(t, m.Query("mnt", 0), "the mountpoint entry itself is pruned")
+	require.Empty(t, m.Query("mount", 0))
 	require.NotEmpty(t, m.Query("kept", 0))
 	require.Equal(t, []string{".git"}, m.Excludes(), "the configured excludes are never mutated by the merge")
 
@@ -207,4 +217,16 @@ func TestBuildFromDiskPrunesMountSkips(t *testing.T) {
 	_, _, err = m.BuildFromDisk(context.Background(), nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, m.Query("unreachable", 0), "a vanished mount is walked again on the next rebuild")
+	require.NotEmpty(t, m.Query("also-unreachable", 0))
+}
+
+func TestMountSkipLogSummaryIsBounded(t *testing.T) {
+	skips := make([]string, mountSkipLogLimit+3)
+	for i := range skips {
+		skips[i] = fmt.Sprintf("/mnt/remote-%d", i)
+	}
+	got := mountSkipLogSummary(skips)
+	require.Contains(t, got, skips[mountSkipLogLimit-1])
+	require.NotContains(t, got, skips[mountSkipLogLimit])
+	require.Contains(t, got, "... (3 more)")
 }

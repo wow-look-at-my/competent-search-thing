@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -54,8 +55,9 @@ func NewManager(roots, excludes []string, maxResults int) *Manager {
 // the number of entries indexed and the wall time spent.
 //
 // Every rebuild recomputes the mount-derived skip list (mounts change
-// between rebuilds; see mounts.go) and appends it to the configured
-// excludes as full-path patterns, so network and virtual filesystem
+// between rebuilds; see mounts.go) and adds it as trusted exact full
+// paths, so legal filename characters such as '*' and '[' are never
+// interpreted as glob syntax. Network and virtual filesystem
 // mountpoints under the roots are pruned exactly like excludes. The
 // skipped mountpoints never enter the index, so the watch layer never
 // watches them either.
@@ -65,12 +67,12 @@ func (m *Manager) BuildFromDisk(ctx context.Context, progress ProgressFunc) (int
 	// Roots and excludes are mutable now (SetRoots/SetExcludes); latch
 	// one consistent copy for the whole walk.
 	roots, excludes := m.Roots(), m.Excludes()
-	if skips := mountSkips(roots); len(skips) > 0 {
+	skips := mountSkips(roots)
+	if len(skips) > 0 {
 		log.Printf("index: skipping %d mounted filesystems (network/virtual): %s",
-			len(skips), strings.Join(skips, ", "))
-		excludes = append(excludes, skips...)
+			len(skips), mountSkipLogSummary(skips))
 	}
-	stats, err := Walk(ctx, fresh, roots, excludes, progress)
+	stats, err := walk(ctx, fresh, roots, excludes, skips, progress)
 	if err != nil {
 		return 0, time.Since(start), err
 	}
@@ -78,6 +80,18 @@ func (m *Manager) BuildFromDisk(ctx context.Context, progress ProgressFunc) (int
 	m.store = fresh
 	m.mu.Unlock()
 	return stats.Indexed, time.Since(start), nil
+}
+
+const mountSkipLogLimit = 8
+
+// mountSkipLogSummary keeps a container with thousands of mounts from
+// producing a multi-megabyte log line while retaining useful diagnostics.
+func mountSkipLogSummary(skips []string) string {
+	if len(skips) <= mountSkipLogLimit {
+		return strings.Join(skips, ", ")
+	}
+	return fmt.Sprintf("%s, ... (%d more)",
+		strings.Join(skips[:mountSkipLogLimit], ", "), len(skips)-mountSkipLogLimit)
 }
 
 // SetFuzzyDisabled turns the fuzzy (subsequence) name-match tier off

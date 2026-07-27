@@ -175,6 +175,7 @@ type App struct {
 	earlyWatcher *watch.Watcher
 	themeW       *themeWatcher
 	buildCancel  context.CancelFunc // cancels the initial build's walk
+	buildDone    chan struct{}      // closed after the initial/retry build fully returns
 	shuttingDown bool
 	// watchCfg is the LIVE watch-layer configuration startWatch
 	// consumes (seeded from Options in New, swapped by the config
@@ -513,10 +514,15 @@ func (a *App) Startup(ctx context.Context) {
 	}
 	a.buildOnce.Do(func() {
 		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
 		a.watchMu.Lock()
 		a.buildCancel = cancel
+		a.buildDone = done
 		a.watchMu.Unlock()
-		go a.buildIndex(ctx)
+		go func() {
+			defer close(done)
+			a.buildIndex(ctx)
+		}()
 	})
 }
 

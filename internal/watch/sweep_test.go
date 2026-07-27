@@ -260,6 +260,67 @@ func TestSweeperMountDiffForceDirty(t *testing.T) {
 	require.True(t, hasPath(m, paths["mnt/"]), "the mountpoint directory itself stays indexed")
 }
 
+// TestSweeperUnsafeMountTransitionsNeverWalk pins the safety side of
+// mount convergence: changing a walkable mount into NFS/FUSE removes
+// its stale index subtree without readdir, and removing that unsafe
+// mount restores the local directory exposed underneath.
+func TestSweeperUnsafeMountTransitionsNeverWalk(t *testing.T) {
+	root := t.TempDir()
+	paths := mkTree(t, root, "mnt/", "mnt/local-before.txt")
+	mnt := paths["mnt/"]
+	m := buildManager(t, root, nil)
+	w := newTestWatcher(t, m, newFakeNotifier())
+	startWatcherRegistered(t, w)
+
+	var mu sync.Mutex
+	walkable := []string{mnt}
+	var unsafe []string
+	snapshot := func(src *[]string) func() []string {
+		return func() []string {
+			mu.Lock()
+			defer mu.Unlock()
+			return append([]string(nil), (*src)...)
+		}
+	}
+	setMounts := func(safe, skipped []string) {
+		mu.Lock()
+		defer mu.Unlock()
+		walkable = append([]string(nil), safe...)
+		unsafe = append([]string(nil), skipped...)
+	}
+
+	s := newTestSweeper(t, m, w, SweepOptions{
+		InitialWatermark: time.Now(),
+		mounts:           snapshot(&walkable),
+		mountSkips:       snapshot(&unsafe),
+	})
+	startSweeper(t, s)
+	sweepOnce(t, s) // seed the previous walkable state
+
+	remote := filepath.Join(mnt, "remote.txt")
+	require.NoError(t, os.WriteFile(remote, nil, 0o644))
+	backdate(t, mnt)
+	setMounts(nil, []string{mnt})
+	sweepOnce(t, s)
+	require.False(t, hasPath(m, mnt), "the unsafe mountpoint and its stale subtree are removed")
+	require.False(t, hasPath(m, remote), "unsafe content is never read into the index")
+	_, accepted := w.wantEvent(fsnotify.Event{Name: remote, Op: fsnotify.Create})
+	require.False(t, accepted, "queued child events cannot reintroduce an unsafe mount subtree")
+
+	// Simulate the unmount exposing different local content. Its old
+	// mtime proves the mount-state transition, not the ordinary mtime
+	// phase, drives restoration.
+	require.NoError(t, os.Remove(remote))
+	require.NoError(t, os.Remove(paths["mnt/local-before.txt"]))
+	localAfter := filepath.Join(mnt, "local-after.txt")
+	require.NoError(t, os.WriteFile(localAfter, nil, 0o644))
+	backdate(t, mnt)
+	setMounts(nil, nil)
+	sweepOnce(t, s)
+	require.True(t, hasPath(m, mnt), "the revealed local mountpoint is restored")
+	require.True(t, hasPath(m, localAfter), "the revealed local subtree is force-reconciled")
+}
+
 // TestOverflowDegradationSweepReconcilesEndToEnd is the sweep-path
 // port of the overflow recovery contract: overflow -> degraded ->
 // sweep request -> the lost changes appear, with NO Rescanner in the

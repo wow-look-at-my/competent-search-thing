@@ -5,7 +5,6 @@ package app
 // seams (see configapply_test.go for the engine-shape tests).
 
 import (
-	"bytes"
 	"context"
 	"log"
 	"os"
@@ -287,7 +286,7 @@ func TestApplyWindowSizePreStartupStoresOnly(t *testing.T) {
 }
 
 func TestApplyTranslucentIsNextLaunch(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -411,7 +410,7 @@ func TestApplyExcludesRevivesFailedBuild(t *testing.T) {
 }
 
 func TestApplyWatcherKnobsRebuildTheTrio(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
