@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,7 +72,7 @@ func TestFetchBlankQueryEmitsError(t *testing.T) {
 }
 
 func TestFetchWithoutKeysNamesTheConfigKeys(t *testing.T) {
-	d, ch := newTestDispatcher(t) // no keys: webFn/aiFn stay nil
+	d, ch := newTestDispatcher(t) // nothing configured: webFn/aiFn stay nil
 	require.False(t, d.WebConfigured())
 	require.False(t, d.AIConfigured())
 
@@ -83,7 +84,7 @@ func TestFetchWithoutKeysNamesTheConfigKeys(t *testing.T) {
 	d.FetchAI("q", 2)
 	p = waitPayload(t, ch)
 	require.Equal(t, KindError, p.Kind)
-	require.Equal(t, "openai: no API key (preview.openai.apiKey or OPENAI_API_KEY)", p.Err)
+	require.Equal(t, "ai: no API base URL (preview.ai.baseUrl)", p.Err)
 }
 
 func TestFetchProviderErrorEmitsErrorPayload(t *testing.T) {
@@ -173,22 +174,31 @@ func TestNewWiresProvidersFromKeys(t *testing.T) {
 	require.True(t, d.WebConfigured())
 	require.False(t, d.AIConfigured())
 
-	d = New(context.Background(), Options{OpenAIAPIKey: "o", OpenAIModel: "m", OpenAIMaxOutputTokens: 8})
+	// The AI provider needs an ENDPOINT and a model; the key is
+	// optional (keyless local servers), and a key alone configures
+	// nothing -- there is no default endpoint to send it to.
+	d = New(context.Background(), Options{AIAPIKey: "o", AIMaxOutputTokens: 8})
+	require.False(t, d.AIConfigured(), "a key without an endpoint is not a provider")
+
+	d = New(context.Background(), Options{AIBaseURL: "https://ai.example/v1", AIMaxOutputTokens: 8})
+	require.False(t, d.AIConfigured(), "an endpoint without a model is unusable")
+
+	d = New(context.Background(), Options{AIBaseURL: "https://ai.example/v1", AIModel: "m", AIMaxOutputTokens: 8})
 	require.False(t, d.WebConfigured())
-	require.True(t, d.AIConfigured())
+	require.True(t, d.AIConfigured(), "endpoint plus model, keyless: usable")
 }
 
 // TestFetchAIEndToEndWithCache drives the PRODUCTION aiFn wiring New
-// builds -- OpenAI client + persistent cache -- against an httptest
-// server reached through the OpenAIBaseURL knob: the first fetch
-// dials and persists, the second is served from the cache file with
-// zero network and Cached=true.
+// builds -- the chat-completions client + persistent cache -- against
+// an httptest server reached through the AIBaseURL knob: the first
+// fetch dials and persists, the second is served from the cache file
+// with zero network and Cached=true.
 func TestFetchAIEndToEndWithCache(t *testing.T) {
 	var hits atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
-		_, _ = w.Write([]byte(`{"status":"completed","model":"m-resolved",
-			"output":[{"type":"message","content":[{"type":"output_text","text":"cached answer"}]}]}`))
+		_, _ = w.Write([]byte(`{"model":"m-resolved",
+			"choices":[{"finish_reason":"stop","message":{"content":"cached answer"}}]}`))
 	}))
 	defer srv.Close()
 
@@ -197,12 +207,12 @@ func TestFetchAIEndToEndWithCache(t *testing.T) {
 	t.Cleanup(cancel)
 	ch := make(chan Payload, 8)
 	d := New(ctx, Options{
-		Emit:                  func(p Payload) { ch <- p },
-		OpenAIAPIKey:          "sk-test",
-		OpenAIBaseURL:         srv.URL,
-		OpenAIModel:           "m",
-		OpenAIMaxOutputTokens: 16,
-		AICachePath:           cachePath,
+		Emit:              func(p Payload) { ch <- p },
+		AIAPIKey:          "sk-test",
+		AIBaseURL:         srv.URL,
+		AIModel:           "m",
+		AIMaxOutputTokens: 16,
+		AICachePath:       cachePath,
 	})
 	require.True(t, d.AIConfigured())
 
@@ -224,11 +234,25 @@ func TestFetchAIEndToEndWithCache(t *testing.T) {
 	require.Equal(t, int64(1), hits.Load(), "the cache hit never dialed")
 
 	// A FRESH cache over the same file (a new app run) still hits --
-	// under the provider-qualified key (see aiprovider.go installAI).
+	// under the endpoint-qualified key (see aiprovider.go installAI),
+	// so the same model name pointed at a different server can never
+	// serve that server's answers.
+	host := mustHost(t, srv.URL)
 	cache2 := NewAICache(cachePath)
-	answer, ok := cache2.Get("openai/m", "q")
+	answer, ok := cache2.Get("m@"+host, "q")
 	require.True(t, ok)
 	require.Equal(t, "cached answer", answer)
+	_, ok = cache2.Get("m@other.example", "q")
+	require.False(t, ok, "a different endpoint is a different cache key")
+}
+
+// mustHost extracts a URL's hostname (the cache key's endpoint half;
+// the HOST only, never userinfo).
+func mustHost(t *testing.T, raw string) string {
+	t.Helper()
+	u, err := url.Parse(raw)
+	require.NoError(t, err)
+	return u.Hostname()
 }
 
 // TestNormalizeBaseURL pins the base-URL preparation contract: empty
@@ -275,13 +299,13 @@ func TestNormalizeBaseURL(t *testing.T) {
 func TestNewRejectsInvalidBaseURLs(t *testing.T) {
 	ch := make(chan Payload, 4)
 	d := New(context.Background(), Options{
-		Emit:                  func(p Payload) { ch <- p },
-		KagiAPIKey:            "k",
-		KagiBaseURL:           "not a url",
-		OpenAIAPIKey:          "o",
-		OpenAIBaseURL:         "ftp://answers.example",
-		OpenAIModel:           "m",
-		OpenAIMaxOutputTokens: 8,
+		Emit:              func(p Payload) { ch <- p },
+		KagiAPIKey:        "k",
+		KagiBaseURL:       "not a url",
+		AIAPIKey:          "o",
+		AIBaseURL:         "ftp://answers.example",
+		AIModel:           "m",
+		AIMaxOutputTokens: 8,
 	})
 	require.False(t, d.WebConfigured(), "an invalid base never installs a client")
 	require.False(t, d.AIConfigured(), "an invalid base never installs a client")
@@ -295,7 +319,29 @@ func TestNewRejectsInvalidBaseURLs(t *testing.T) {
 	d.FetchAI("q", 2)
 	p = waitPayload(t, ch)
 	require.Equal(t, KindError, p.Kind)
-	require.Equal(t, "openai: invalid baseUrl (preview.openai.baseUrl / OPENAI_BASE_URL)", p.Err)
+	require.Equal(t, "ai: invalid baseUrl (preview.ai.baseUrl)", p.Err)
+	require.NotContains(t, p.Err, "answers.example", "the configured value is never emitted")
+}
+
+// TestFetchAIWithoutEndpointNamesTheKnob: the shipped default is no
+// endpoint at all, and the fetch path says exactly which knob is
+// missing rather than dialing somebody's server.
+func TestFetchAIWithoutEndpointNamesTheKnob(t *testing.T) {
+	ch := make(chan Payload, 4)
+	d := New(context.Background(), Options{Emit: func(p Payload) { ch <- p }})
+	d.FetchAI("q", 1)
+	p := waitPayload(t, ch)
+	require.Equal(t, KindError, p.Kind)
+	require.Equal(t, "ai: no API base URL (preview.ai.baseUrl)", p.Err)
+
+	d = New(context.Background(), Options{
+		Emit:      func(p Payload) { ch <- p },
+		AIBaseURL: "https://ai.example/v1",
+	})
+	d.FetchAI("q", 2)
+	p = waitPayload(t, ch)
+	require.Equal(t, KindError, p.Kind)
+	require.Equal(t, "ai: no model (preview.ai.model)", p.Err)
 }
 
 // TestNewWiresKagiBaseURLToClient proves the configured base reaches

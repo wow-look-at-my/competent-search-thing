@@ -242,16 +242,14 @@ interface FPSSample {
 }
 
 // GetPreviewConfig answer (internal/app PreviewConfigInfo): whether
-// the pane is on, whether the web/AI providers have credentials
-// (config key or environment variable), which AI provider is selected
-// (preview.aiProvider -- the strip-button hint names its config keys
-// with it), and the pixel width the left results column keeps while
-// the pane is on (the flag-off bar width, config window.width). The
-// key values themselves never cross to the frontend.
+// the pane is on, whether the web search has a key and the AI
+// endpoint is usable (preview.ai.baseUrl + model), and the pixel
+// width the left results column keeps while the pane is on (the
+// flag-off bar width, config window.width). Key values themselves
+// never cross to the frontend.
 interface PreviewConfigInfo {
   enabled: boolean;
   kagiConfigured: boolean;
-  aiProvider: string;
   aiConfigured: boolean;
   resultsWidth: number;
 }
@@ -263,7 +261,7 @@ interface PreviewConfigInfo {
 // and resolves empty fields through the same environment fallbacks
 // the live dispatcher uses.
 interface PreviewProviderTest {
-  provider: "kagi" | "openai" | "anthropic" | "custom";
+  provider: "kagi" | "ai";
   apiKey: string;
   baseUrl: string;
   model: string;
@@ -391,6 +389,13 @@ interface WailsAppBindings {
   GetConfigForEdit(): Promise<ConfigForEdit>;
   SaveConfig(raw: string): Promise<ConfigSaveResult>;
   OpenConfigFile(): Promise<void>;
+  // Which UI this process is (internal/app configwindow.go):
+  // "search" = the searchbar, "config" = the settings window, whose
+  // frontend wires the editor alone. Asked FIRST, before any wiring.
+  GetStartupMode(): Promise<string>;
+  // Close the settings window (its Esc / Close button). Ignored in
+  // the searchbar process, where Esc must never quit the app.
+  CloseConfigWindow(): Promise<void>;
   // One minimal REAL request against a provider's candidate settings
   // (the editor's Test buttons; internal/app testpreview.go over
   // internal/preview ProbeProvider). Synchronous from the frontend's

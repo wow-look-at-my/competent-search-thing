@@ -59,48 +59,20 @@ type Options struct {
 	KagiBaseURL string
 	// KagiMaxResults caps one web search (non-positive = 8).
 	KagiMaxResults int
-	// AIProvider picks which client answers FetchAI: "openai" (the
-	// default, incl. ""), "anthropic", or "custom" (see
-	// aiprovider.go). Only the selected provider's option group below
-	// is consulted.
-	AIProvider string
-	// OpenAIAPIKey enables the OpenAI answer provider; empty leaves
-	// it unconfigured (FetchAI answers with a no-key error).
-	// Never logged or emitted.
-	OpenAIAPIKey string
-	// OpenAIBaseURL overrides the answer API origin; empty = the
-	// official endpoint. Same normalization and invalid-value
-	// handling as KagiBaseURL (the app layer resolves the config
-	// value / OPENAI_BASE_URL before it lands here).
-	OpenAIBaseURL string
-	// OpenAIModel names the answering model.
-	OpenAIModel string
-	// OpenAIMaxOutputTokens caps one answer.
-	OpenAIMaxOutputTokens int
-	// AnthropicAPIKey enables the Anthropic answer provider (the app
-	// layer resolves config / ANTHROPIC_API_KEY first). Never logged
-	// or emitted.
-	AnthropicAPIKey string
-	// AnthropicBaseURL overrides the Anthropic API origin; empty =
-	// the official endpoint (the app layer resolves config /
-	// ANTHROPIC_BASE_URL first). Same normalization rules.
-	AnthropicBaseURL string
-	// AnthropicModel names the answering model.
-	AnthropicModel string
-	// AnthropicMaxOutputTokens caps one answer.
-	AnthropicMaxOutputTokens int
-	// CustomAPIKey is the custom endpoint's key -- OPTIONAL (local
+	// AIAPIKey is the answer endpoint's key -- OPTIONAL (local
 	// servers usually need none; empty sends no Authorization
 	// header). Never logged or emitted.
-	CustomAPIKey string
-	// CustomBaseURL names the custom OpenAI-compatible endpoint --
-	// REQUIRED for the custom provider (no official fallback exists).
-	CustomBaseURL string
-	// CustomModel names the answering model -- required (no default
-	// is invented for an unknown server).
-	CustomModel string
-	// CustomMaxOutputTokens caps one answer.
-	CustomMaxOutputTokens int
+	AIAPIKey string
+	// AIBaseURL names the OpenAI-compatible chat-completions endpoint
+	// -- REQUIRED: there is no default endpoint, so nothing is sent
+	// anywhere until the user names one. Same normalization and
+	// invalid-value handling as KagiBaseURL.
+	AIBaseURL string
+	// AIModel names the answering model -- required (no default is
+	// invented for an unknown server).
+	AIModel string
+	// AIMaxOutputTokens caps one answer.
+	AIMaxOutputTokens int
 	// AICachePath is the persistent AI answer cache file ("" =
 	// memory-only for this run).
 	AICachePath string

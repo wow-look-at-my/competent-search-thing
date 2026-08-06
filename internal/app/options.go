@@ -49,10 +49,13 @@ type Options struct {
 	// ShowOnStartup asks for the bar to be shown as soon as the
 	// frontend is ready (set when a CLI toggle/show started the app).
 	ShowOnStartup bool
-	// OpenConfigOnStartup asks for the bar to open straight into the
-	// config editor once the frontend is ready (set when the CLI
-	// config subcommand started the app); it implies ShowOnStartup.
-	OpenConfigOnStartup bool
+	// ConfigWindow runs this process as the SETTINGS WINDOW instead of
+	// the searchbar (the CLI config subcommand): Startup brings up
+	// nothing but the config surface -- no index, no watcher, no
+	// hotkey, no tray -- and the frontend renders the editor alone.
+	// The window itself (ordinary, resizable, visible at start) is
+	// configured by main.go.
+	ConfigWindow bool
 	// TrayDisabled turns the tray icon off (wire the INVERSE of
 	// config's tray.enabled here, via !config.Enabled); the default
 	// zero value keeps it on.

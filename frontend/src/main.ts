@@ -16,7 +16,7 @@
 // the opt-in preview pane lives in preview.ts (wired below through
 // GetPreviewConfig + the selection/query hooks).
 
-import { configModeActive, initConfig } from "./config";
+import { initConfig, openConfigWindow } from "./config";
 import { initFileIcons } from "./fileicons/fileicons";
 import { initFPSMeter } from "./fpsmeter";
 import { initResize } from "./resize";
@@ -645,12 +645,6 @@ function hideBar(app: WailsAppBindings): void {
 }
 
 function onKeydown(app: WailsAppBindings, ev: KeyboardEvent): void {
-  if (configModeActive()) {
-    // config.ts owns the keys in editor mode (its own window handler
-    // covers Esc and Ctrl+S; everything else keeps its default so
-    // form controls behave like form controls).
-    return;
-  }
   switch (ev.key) {
     case "ArrowDown":
       ev.preventDefault();
@@ -712,17 +706,10 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
     // The bar always summons empty: the pre-hide text is deliberately
     // dropped (press Up to get past searches back), and any history
     // browsing is reset. The pipeline re-run renders the empty-query
-    // cheat sheet and doubles as the plugin cancel signal. This reset
-    // runs even when the config editor is being RESTORED (the bar hid
-    // while the editor was up -- config.ts keeps the mode; see its
-    // app:shown handler): it keeps the search layer underneath fresh
-    // for the eventual Esc-out. Only the focus steal is skipped --
-    // the restored editor re-asserts its own focused control.
+    // cheat sheet and doubles as the plugin cancel signal.
     inputEl.value = "";
     state.histCursor = -1;
-    if (!configModeActive()) {
-      inputEl.focus();
-    }
+    inputEl.focus();
     scheduleSearch(app);
     // Instant cached snapshot (the summon's fresh samples follow as
     // stats:update events moments later).
@@ -796,6 +783,18 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
   });
 }
 
+// wireConfigWindow is the whole frontend of the SETTINGS WINDOW
+// process (Go's GetStartupMode answers "config"): themes plus the
+// editor, opened immediately and never left -- Esc and Close quit the
+// window instead of dropping to a searchbar this process does not
+// have. Nothing else is wired: no search pipeline, no plugins, no
+// stats, no preview, no hotkeys.
+function wireConfigWindow(app: WailsAppBindings, rt: WailsRuntime): void {
+  initTheme(app, rt);
+  initConfig(app, rt);
+  openConfigWindow();
+}
+
 function wire(app: WailsAppBindings, rt: WailsRuntime): void {
   initTheme(app, rt);
   // The per-file-type icon table (fileicons.ts): fetched once from
@@ -856,10 +855,7 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
     );
   }
   window.addEventListener("blur", () => {
-    // The blur auto-hide is suppressed in config mode: users alt-tab
-    // away to check things mid-edit, and losing the editor (plus its
-    // unsaved changes' visibility) on focus loss would be hostile.
-    if (state.visible && !configModeActive()) {
+    if (state.visible) {
       hideBar(app);
     }
   });
@@ -887,7 +883,24 @@ function waitForBindings(): void {
   const app = bindings();
   const rt = window.runtime;
   if (app !== null && rt !== undefined) {
-    wire(app, rt);
+    // Which UI is this process? The searchbar and the settings window
+    // share one bundle; the Go side decides (internal/app
+    // configwindow.go). A binding old enough not to answer, or an
+    // outright failure, means the searchbar -- the only mode that
+    // existed before.
+    app
+      .GetStartupMode()
+      .then((mode) => {
+        if (mode === "config") {
+          wireConfigWindow(app, rt);
+        } else {
+          wire(app, rt);
+        }
+      })
+      .catch((err: unknown) => {
+        console.warn("startup mode fetch failed: " + String(err));
+        wire(app, rt);
+      });
     return;
   }
   window.setTimeout(waitForBindings, 50);

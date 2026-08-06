@@ -16,10 +16,10 @@ import (
 	"github.com/wow-look-at-my/competent-search-thing/internal/preview"
 )
 
-// previewTestOptions enables the pane with small caps. The provider
-// models mirror Normalize's guarantee (real configs never carry an
-// empty openai/anthropic model); AIProvider stays the raw zero value
-// so tests exercise the ""-means-openai path.
+// previewTestOptions enables the pane with small caps. The AI section
+// carries only the token cap: base URL and model stay empty, the
+// shipped default, so the AI provider is unconfigured until a test
+// names an endpoint -- nothing is ever dialed by accident.
 func previewTestOptions() Options {
 	return Options{Preview: config.PreviewConfig{
 		Enabled:       config.Bool(true),
@@ -28,14 +28,7 @@ func previewTestOptions() Options {
 		TextMaxKB:     4,
 		ImageMaxEdge:  100,
 		DirMaxEntries: 10,
-		OpenAI: config.PreviewOpenAIConfig{
-			Model:           config.DefaultPreviewOpenAIModel,
-			MaxOutputTokens: 16,
-		},
-		Anthropic: config.PreviewAnthropicConfig{
-			Model:           config.DefaultPreviewAnthropicModel,
-			MaxOutputTokens: 16,
-		},
+		AI:            config.PreviewAIConfig{MaxOutputTokens: 16},
 	}}
 }
 
@@ -143,17 +136,38 @@ func TestGetPreviewConfigConfiguredDetection(t *testing.T) {
 	require.True(t, info.KagiConfigured, "a config key counts as configured")
 	require.False(t, info.AIConfigured)
 
-	// Environment variables count too (newTestApp pins getenv to "").
+	// The Kagi env variable counts too (newTestApp pins getenv to "").
 	b, _ := newTestApp(t, nil, Options{})
 	b.plat.getenv = func(key string) string {
-		if key == envOpenAIAPIKey {
-			return "sk-from-env"
+		if key == envKagiAPIKey {
+			return "kagi-from-env"
 		}
 		return ""
 	}
 	info = b.GetPreviewConfig()
-	require.False(t, info.KagiConfigured)
-	require.True(t, info.AIConfigured, "the env fallback counts as configured")
+	require.True(t, info.KagiConfigured, "the env fallback counts as configured")
+	require.False(t, info.AIConfigured)
+
+	// AI usability is base URL PLUS model -- the key is optional
+	// (local servers need none), so a key alone configures nothing
+	// and either half alone is still unusable.
+	c, _ := newTestApp(t, nil, Options{Preview: config.PreviewConfig{
+		Enabled: config.Bool(true),
+		AI:      config.PreviewAIConfig{APIKey: "sk-only"},
+	}})
+	require.False(t, c.GetPreviewConfig().AIConfigured, "a key without an endpoint configures nothing")
+
+	d, _ := newTestApp(t, nil, Options{Preview: config.PreviewConfig{
+		Enabled: config.Bool(true),
+		AI:      config.PreviewAIConfig{BaseURL: "http://localhost:1234/v1"},
+	}})
+	require.False(t, d.GetPreviewConfig().AIConfigured, "a base URL without a model is unusable")
+
+	e, _ := newTestApp(t, nil, Options{Preview: config.PreviewConfig{
+		Enabled: config.Bool(true),
+		AI:      config.PreviewAIConfig{BaseURL: "http://localhost:1234/v1", Model: "llama3"},
+	}})
+	require.True(t, e.GetPreviewConfig().AIConfigured, "base URL plus model, keyless: usable")
 }
 
 func TestFetchPreviewDisabledIsNoOp(t *testing.T) {
@@ -168,9 +182,9 @@ func TestFetchPreviewDisabledIsNoOp(t *testing.T) {
 }
 
 func TestFetchPreviewWithoutKeysEmitsNamedErrors(t *testing.T) {
-	// newTestApp pins getenv to "" and the options carry no API keys,
-	// so both providers are unconfigured. The no-key answer is
-	// synchronous: no goroutine, no network.
+	// newTestApp pins getenv to "" and the options carry no API key
+	// and no AI endpoint, so both providers are unconfigured. The
+	// answer is synchronous: no goroutine, no network.
 	a, r := newTestApp(t, nil, previewTestOptions())
 	a.Startup(context.Background())
 	d := a.previewDispatcher()
@@ -192,7 +206,7 @@ func TestFetchPreviewWithoutKeysEmitsNamedErrors(t *testing.T) {
 	p = events[1].payload[0].(preview.Payload)
 	require.Equal(t, 4, p.Gen)
 	require.Equal(t, preview.KindError, p.Kind)
-	require.Equal(t, "openai: no API key (preview.openai.apiKey or OPENAI_API_KEY)", p.Err)
+	require.Equal(t, "ai: no API base URL (preview.ai.baseUrl)", p.Err)
 }
 
 func TestFetchPreviewBlankQueryEmitsError(t *testing.T) {
@@ -208,15 +222,19 @@ func TestFetchPreviewBlankQueryEmitsError(t *testing.T) {
 }
 
 func TestStartPreviewResolvesKeysLikeGetPreviewConfig(t *testing.T) {
-	// Environment fallbacks resolve through the getenv seam.
+	// Environment fallbacks resolve through the getenv seam. The AI
+	// endpoint still needs its config-only base URL and model -- only
+	// the key has an environment fallback.
 	opt := previewTestOptions()
+	opt.Preview.AI.BaseURL = "https://ai.example/v1"
+	opt.Preview.AI.Model = "m"
 	a, _ := newTestApp(t, nil, opt)
 	a.plat.getenv = func(key string) string {
 		switch key {
 		case envKagiAPIKey:
 			return "kagi-from-env"
-		case envOpenAIAPIKey:
-			return "openai-from-env"
+		case envAIAPIKey:
+			return "ai-from-env"
 		}
 		return ""
 	}
@@ -224,7 +242,7 @@ func TestStartPreviewResolvesKeysLikeGetPreviewConfig(t *testing.T) {
 	d := a.previewDispatcher()
 	require.NotNil(t, d)
 	require.True(t, d.WebConfigured(), "the KAGI_API_KEY fallback configures the provider")
-	require.True(t, d.AIConfigured(), "the OPENAI_API_KEY fallback configures the provider")
+	require.True(t, d.AIConfigured())
 	info := a.GetPreviewConfig()
 	require.True(t, info.KagiConfigured, "GetPreviewConfig agrees with the dispatcher")
 	require.True(t, info.AIConfigured)
@@ -311,54 +329,50 @@ func lastPreviewPayload(t *testing.T, r *seamRecorder, n int) preview.Payload {
 	return events[len(events)-1].payload[0].(preview.Payload)
 }
 
-func TestStartPreviewResolvesOpenAIBaseURL(t *testing.T) {
-	// Keep the AI answer cache out of the real config dir.
+func TestStartPreviewUsesConfiguredAIEndpoint(t *testing.T) {
+	// The configured endpoint is the ONLY one ever dialed, it is
+	// reached at {base}/chat/completions, and the optional key
+	// resolves config-first then COMPETENT_SEARCH_AI_API_KEY.
 	t.Setenv(config.EnvConfigDir, t.TempDir())
-	answerWith := func(text string) *httptest.Server {
-		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte(`{"status":"completed","model":"m","output":[{"type":"message","content":[{"type":"output_text","text":"` + text + `"}]}]}`))
-		}))
-	}
-	cfgSrv := answerWith("from-config")
-	defer cfgSrv.Close()
-	envSrv := answerWith("from-env")
-	defer envSrv.Close()
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"model":"m","choices":[{"finish_reason":"stop","message":{"content":"answered"}}]}`))
+	}))
+	defer srv.Close()
 
 	baseOpts := func() Options {
 		o := previewTestOptions()
-		o.Preview.OpenAI.APIKey = "sk-test"
-		o.Preview.OpenAI.Model = "m"
-		o.Preview.OpenAI.MaxOutputTokens = 16
+		o.Preview.AI.BaseURL = srv.URL + "/v1"
+		o.Preview.AI.Model = "m"
 		return o
 	}
-	envGetenv := func(key string) string {
-		if key == envOpenAIBaseURL {
-			return envSrv.URL
-		}
-		return ""
-	}
 
-	// The config value wins over the environment (which answers
-	// differently and must not be dialed).
 	opt := baseOpts()
-	opt.Preview.OpenAI.BaseURL = cfgSrv.URL
+	opt.Preview.AI.APIKey = "sk-config"
 	a, ra := newTestApp(t, nil, opt)
-	a.plat.getenv = envGetenv
 	a.Startup(context.Background())
 	a.FetchAIPreview("q config", 1)
 	p := lastPreviewPayload(t, ra, 1)
 	require.Equal(t, preview.KindAI, p.Kind)
-	require.Equal(t, "from-config", p.AI.Answer)
+	require.Equal(t, "answered", p.AI.Answer)
+	require.Equal(t, "/v1/chat/completions", gotPath)
+	require.Equal(t, "Bearer sk-config", gotAuth, "the config key wins")
 
-	// An empty config value falls back to OPENAI_BASE_URL through the
-	// getenv seam.
+	// An empty config key falls back to the environment through the
+	// getenv seam (a DIFFERENT query, so the answer cache is missed).
 	b, rb := newTestApp(t, nil, baseOpts())
-	b.plat.getenv = envGetenv
+	b.plat.getenv = func(key string) string {
+		if key == envAIAPIKey {
+			return "sk-env"
+		}
+		return ""
+	}
 	b.Startup(context.Background())
 	b.FetchAIPreview("q env", 1)
 	p = lastPreviewPayload(t, rb, 1)
 	require.Equal(t, preview.KindAI, p.Kind)
-	require.Equal(t, "from-env", p.AI.Answer)
+	require.Equal(t, "Bearer sk-env", gotAuth, "the env fallback reaches the client")
 }
 
 func TestStartPreviewPassesKagiBaseURL(t *testing.T) {
@@ -385,8 +399,8 @@ func TestStartPreviewInvalidBaseURLKeepsTerseFetchError(t *testing.T) {
 	opt := previewTestOptions()
 	opt.Preview.Kagi.APIKey = "k"
 	opt.Preview.Kagi.BaseURL = "kagi.example" // no scheme
-	opt.Preview.OpenAI.APIKey = "o"
-	opt.Preview.OpenAI.BaseURL = "gopher://answers.example"
+	opt.Preview.AI.Model = "m"
+	opt.Preview.AI.BaseURL = "gopher://answers.example"
 	a, r := newTestApp(t, nil, opt)
 	a.Startup(context.Background())
 	d := a.previewDispatcher()
@@ -394,7 +408,8 @@ func TestStartPreviewInvalidBaseURLKeepsTerseFetchError(t *testing.T) {
 	require.False(t, d.WebConfigured(), "an invalid base never installs a client")
 	require.False(t, d.AIConfigured(), "an invalid base never installs a client")
 
-	// The keys are present, so the frontend buttons stay enabled --
+	// Both are configured as far as the editor can tell (a key, and a
+	// base URL plus a model), so the frontend buttons stay enabled --
 	// clicking explains the actual problem, naming the knob but never
 	// the value.
 	info := a.GetPreviewConfig()
@@ -414,7 +429,7 @@ func TestStartPreviewInvalidBaseURLKeepsTerseFetchError(t *testing.T) {
 	require.Len(t, events, 2)
 	p = events[1].payload[0].(preview.Payload)
 	require.Equal(t, preview.KindError, p.Kind)
-	require.Equal(t, "openai: invalid baseUrl (preview.openai.baseUrl / OPENAI_BASE_URL)", p.Err)
+	require.Equal(t, "ai: invalid baseUrl (preview.ai.baseUrl)", p.Err)
 	require.NotContains(t, p.Err, "answers.example")
 }
 

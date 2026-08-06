@@ -1,9 +1,10 @@
-// Config editor mode: a schema-driven settings UI over the single bar
-// window, entered via the Go side's "config:open" event (the `config`
-// CLI/IPC command, the !config builtin, and the tray item all funnel
-// there; a cold-start `competent-search-thing config` emits it at
-// DomReady, where a missed event -- the app:shown race -- degrades to
-// the normal bar). The editor renders ENTIRELY from the embedded
+// The settings editor: a schema-driven settings UI, and the whole UI
+// of the SETTINGS WINDOW -- a separate process with an ordinary
+// resizable window (`competent-search-thing config`; the !config
+// builtin and the tray item spawn it too). main.ts's wireConfigWindow
+// calls openConfigWindow here and wires nothing else, so the editor is
+// entered once and left only by closing the window.
+// The editor renders ENTIRELY from the embedded
 // config.schema.json (GetConfigSchema) over a working copy of the
 // current configuration (GetConfigForEdit): leaves become typed
 // controls (toggle/select/number/text, password for the SECRET-marked
@@ -34,22 +35,13 @@
 // schema min/max reach the inputs as UX only) and the result --
 // applied sections, the honest per-knob next-launch notes, apply
 // errors -- is surfaced verbatim; the editor then re-fetches so the
-// Normalize-repaired truth is what stays on screen. Mode mechanics:
-// main.ts gates its keydown, blur->Hide, and app:shown query-focus
-// handlers on configModeActive(); this module owns Esc (dirty-aware
-// close) and Ctrl/Cmd+S via its own window keydown handler (the
-// preview.ts pattern). HIDE/SHOW RESTORE: hiding the bar while the
-// editor is up (hotkey toggle, IPC hide, tray, the darwin Space
-// switch -- every hide path; Esc/Close are the only mode EXITS)
-// leaves `active` latched, so the next "app:shown" RESTORES the
-// editor exactly -- mode, controls-column scroll position, focused
-// control (tracked by a focusin listener, re-asserted next frame),
-// ToC highlight, and any unsaved dirty edits -- in memory for the
-// app run. Exiting via Esc/Close clears the latch: the next summon
-// is a fresh search bar, with an unsaved working copy still
-// PRESERVED and restored on the next config:open in the same run.
-// All DOM building is text-node-only; styling lives in
-// config.css over the existing --sb-* tokens.
+// Normalize-repaired truth is what stays on screen. A save reaches a
+// RUNNING searchbar the same way a hand edit does -- through its
+// config-file watcher -- which is also why the settings window works
+// with no app running. Key ownership: this module owns Esc
+// (dirty-aware close) and Ctrl/Cmd+S via its own window keydown
+// handler (the preview.ts pattern). All DOM building is text-node-only;
+// styling lives in config.css over the existing --sb-* tokens.
 
 import "./config.css";
 import { applyPreviewConfig } from "./preview";
@@ -114,6 +106,10 @@ interface Notice {
 
 let app: WailsAppBindings | null = null;
 let active = false; // config mode currently on screen
+// standalone: this process IS the settings window (main.ts's
+// wireConfigWindow), so the editor never exits to a searchbar -- Esc
+// and Close quit the window.
+let standalone = false;
 let dirty = false; // unsaved edits in the working copy
 let doc: Record<string, unknown> | null = null; // the working copy
 let schema: SchemaNode | null = null; // cached (embedded, immutable)
@@ -124,7 +120,6 @@ let lastSummary: Notice[] = []; // save / external-reload outcome lines
 let escArmedAt = 0; // first dirty-Esc timestamp (discard arm)
 let flashHandle: number | undefined;
 let tocEntries: TocEntry[] = []; // ToC registry, rebuilt per render
-let lastFocusId = ""; // last focused #config-pane element id (restore)
 let tocSyncQueued = false; // rAF-coalesced scroll-sync flag
 
 // Unparseable controls (raw JSON that does not parse, non-numeric
@@ -136,7 +131,6 @@ let filterEl: HTMLInputElement;
 let noticesEl: HTMLDivElement;
 let bodyEl: HTMLDivElement;
 let tocEl: HTMLElement;
-let paneEl: HTMLDivElement;
 let flashEl: HTMLSpanElement;
 let dirtyNoteEl: HTMLSpanElement;
 let saveBtn: HTMLButtonElement;
@@ -144,9 +138,8 @@ let closeBtn: HTMLButtonElement;
 let openFileBtn: HTMLButtonElement;
 let queryEl: HTMLInputElement;
 
-// configModeActive gates main.ts's keydown and blur->Hide handlers:
-// while the editor is up, Esc/arrows/Enter belong to it and an
-// alt-tab away must NOT hide the bar.
+// configModeActive reports whether the editor is up -- the test
+// suites' observable for "openConfigWindow rendered".
 export function configModeActive(): boolean {
   return active;
 }
@@ -160,7 +153,6 @@ export function initConfig(a: WailsAppBindings, rt: WailsRuntime): void {
   noticesEl = document.getElementById("config-notices") as HTMLDivElement;
   bodyEl = document.getElementById("config-body") as HTMLDivElement;
   tocEl = document.getElementById("config-toc") as HTMLElement;
-  paneEl = document.getElementById("config-pane") as HTMLDivElement;
   flashEl = document.getElementById("config-flash") as HTMLSpanElement;
   dirtyNoteEl = document.getElementById("config-dirty-note") as HTMLSpanElement;
   saveBtn = document.getElementById("config-save-btn") as HTMLButtonElement;
@@ -175,15 +167,6 @@ export function initConfig(a: WailsAppBindings, rt: WailsRuntime): void {
   // entry whose section sits at the viewport top (rAF-coalesced; the
   // math itself is pure, see toc.ts).
   bodyEl.addEventListener("scroll", scheduleTocSync);
-  // The hide/show restore needs to know which control held focus:
-  // track the last focused id-carrying element inside the pane
-  // (controls are cfg-<path>, ToC entries config-toc-<dotted>).
-  paneEl.addEventListener("focusin", (ev: FocusEvent) => {
-    const t = ev.target;
-    if (t instanceof HTMLElement && t.id !== "") {
-      lastFocusId = t.id;
-    }
-  });
   saveBtn.addEventListener("click", () => {
     doSave();
   });
@@ -220,43 +203,6 @@ export function initConfig(a: WailsAppBindings, rt: WailsRuntime): void {
       ev.preventDefault();
       doSave();
     }
-  });
-
-  rt.EventsOn("config:open", () => {
-    void enterMode();
-  });
-
-  // HIDE/SHOW RESTORE: `active` still true at app:shown time means
-  // the bar hid WHILE the editor was up (hotkey toggle, IPC hide,
-  // tray, darwin Space switch -- app:shown only ever fires on a
-  // hidden->shown transition, and Esc/Close are the paths that clear
-  // `active`). Restore the editor exactly instead of dropping to a
-  // fresh search bar: the DOM was never torn down, so the mode,
-  // scroll position, dirty edits, and ToC state are all still there
-  // -- re-assert the scroll and the focused control one frame later
-  // (main.ts skips its query-focus steal while the mode is active,
-  // but the platform may have moved focus during the hide). Esc out
-  // of a restored editor lands on the normal fresh summoned bar
-  // (main.ts's app:shown reset ran underneath). A hide from SEARCH
-  // mode arms nothing: `active` was already false.
-  rt.EventsOn("app:shown", () => {
-    if (!active) {
-      return;
-    }
-    escArmedAt = 0; // a re-summon is a fresh Esc-discard state
-    const scrollTop = bodyEl.scrollTop;
-    nextFrame(() => {
-      if (!active) {
-        return; // exited before the frame (unlikely, but cheap)
-      }
-      bodyEl.scrollTop = scrollTop;
-      const el =
-        lastFocusId === "" ? null : document.getElementById(lastFocusId);
-      if (el !== null && el.isConnected && paneEl.contains(el)) {
-        (el as HTMLElement).focus();
-      }
-      updateTocActive();
-    });
   });
 
   rt.EventsOn("config:changed", (...data: unknown[]) => {
@@ -302,9 +248,19 @@ function leaveMode(): void {
   document.body.classList.remove("with-config");
 }
 
+// openConfigWindow puts the editor on screen for good: the settings
+// WINDOW's entry point (main.ts wireConfigWindow). That process has
+// no searchbar underneath, so the editor is the whole UI and Esc /
+// Close close the window itself.
+export function openConfigWindow(): void {
+  standalone = true;
+  void enterMode();
+}
+
 // requestClose is the Esc / Close-button semantics: clean = exit;
 // dirty = first press warns, a second within ESC_DISCARD_MS discards
-// the working copy and exits. Ctrl+S always saves instead.
+// the working copy and exits. Ctrl+S always saves instead. In the
+// settings window, exiting means closing the window.
 function requestClose(): void {
   if (dirty) {
     const now = Date.now();
@@ -315,6 +271,12 @@ function requestClose(): void {
     }
     doc = null;
     dirty = false;
+  }
+  if (standalone) {
+    app?.CloseConfigWindow().catch((err: unknown) => {
+      console.warn("closing the settings window failed: " + String(err));
+    });
+    return;
   }
   leaveMode();
   queryEl.focus(); // back to the normal bar, query row focused
@@ -909,26 +871,12 @@ export function providerTestRequest(
         baseUrl: str(["preview", "kagi", "baseUrl"]),
         model: "",
       };
-    case "preview.openai":
+    case "preview.ai":
       return {
-        provider: "openai",
-        apiKey: str(["preview", "openai", "apiKey"]),
-        baseUrl: str(["preview", "openai", "baseUrl"]),
-        model: str(["preview", "openai", "model"]),
-      };
-    case "preview.anthropic":
-      return {
-        provider: "anthropic",
-        apiKey: str(["preview", "anthropic", "apiKey"]),
-        baseUrl: str(["preview", "anthropic", "baseUrl"]),
-        model: str(["preview", "anthropic", "model"]),
-      };
-    case "preview.custom":
-      return {
-        provider: "custom",
-        apiKey: str(["preview", "custom", "apiKey"]),
-        baseUrl: str(["preview", "custom", "baseUrl"]),
-        model: str(["preview", "custom", "model"]),
+        provider: "ai",
+        apiKey: str(["preview", "ai", "apiKey"]),
+        baseUrl: str(["preview", "ai", "baseUrl"]),
+        model: str(["preview", "ai", "model"]),
       };
     default:
       return null;
@@ -945,10 +893,10 @@ function testButtonHint(dotted: string): string {
   return "Sends ONE tiny real request with the values above (unsaved edits included) and reports the endpoint's honest answer.";
 }
 
-// appendTestRow adds the provider Test row to the four preview
-// provider sections. The probe runs against the CANDIDATE working
-// copy (empty fields fall back to the provider's environment
-// variables Go-side, like the live dispatcher); the outcome renders
+// appendTestRow adds the Test row to the two preview provider
+// sections (kagi, ai). The probe runs against the CANDIDATE working
+// copy (an empty key falls back to that provider's environment
+// variable Go-side, like the live dispatcher); the outcome renders
 // inline next to the button.
 function appendTestRow(sec: HTMLElement, dotted: string): void {
   if (providerTestRequest(dotted, {}) === null) {

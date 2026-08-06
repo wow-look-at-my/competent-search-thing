@@ -115,28 +115,10 @@ const (
 	DefaultPreviewImageMaxEdge = 800
 	DefaultPreviewDirMax       = 200
 	DefaultPreviewKagiMax      = 8
-	DefaultPreviewOpenAIModel  = "gpt-5-mini"
-	DefaultPreviewOpenAITokens = 1024
-	// DefaultPreviewAnthropicModel is the Anthropic answer model:
-	// the cheapest current-generation model, the right default for
-	// short preview answers (the gpt-5-mini analogue).
-	DefaultPreviewAnthropicModel  = "claude-haiku-4-5"
-	DefaultPreviewAnthropicTokens = 1024
-	DefaultPreviewCustomTokens    = 1024
-)
-
-// AI answer provider selector values (preview.aiProvider). "openai"
-// and "anthropic" are the known providers; "custom" points the
-// OpenAI-compatible client at a user-typed base URL (Ollama, LM
-// Studio, vLLM, any /v1/responses-speaking server). Normalize repairs
-// empty/unknown values to the default, the schema enum stays in
-// lockstep (the watcher.backend convention).
-const (
-	AIProviderOpenAI    = "openai"
-	AIProviderAnthropic = "anthropic"
-	AIProviderCustom    = "custom"
-
-	DefaultPreviewAIProvider = AIProviderOpenAI
+	// DefaultPreviewAITokens caps one AI answer. The endpoint, model
+	// and key have NO defaults on purpose: the answer preview points
+	// wherever the user says and nowhere otherwise.
+	DefaultPreviewAITokens = 1024
 )
 
 // SchemaRef is the value stamped into Config.Schema: a relative
@@ -483,25 +465,10 @@ type PreviewConfig struct {
 	ImageMaxEdge int `json:"imageMaxEdge"`
 	// DirMaxEntries caps a directory listing preview (default 200).
 	DirMaxEntries int `json:"dirMaxEntries"`
-	// AIProvider picks which provider answers the explicit AI
-	// preview (Ctrl+I): "openai" (the default), "anthropic", or
-	// "custom" (an OpenAI-compatible endpoint named by
-	// preview.custom.baseUrl). Only the selected provider's section
-	// is consulted; the others keep their values for switching back.
-	// Normalize trims, lowercases, and repairs empty/unknown values
-	// to "openai".
-	AIProvider string `json:"aiProvider"`
 	// Kagi configures the explicit-trigger Kagi web-search preview.
 	Kagi PreviewKagiConfig `json:"kagi"`
-	// OpenAI configures the OpenAI answer provider (aiProvider
-	// "openai").
-	OpenAI PreviewOpenAIConfig `json:"openai"`
-	// Anthropic configures the Anthropic answer provider (aiProvider
-	// "anthropic").
-	Anthropic PreviewAnthropicConfig `json:"anthropic"`
-	// Custom configures the user-typed OpenAI-compatible answer
-	// provider (aiProvider "custom").
-	Custom PreviewCustomConfig `json:"custom"`
+	// AI configures the ONE AI answer endpoint (Ctrl+I).
+	AI PreviewAIConfig `json:"ai"`
 }
 
 // PreviewKagiConfig configures the Kagi web-search preview provider.
@@ -520,58 +487,24 @@ type PreviewKagiConfig struct {
 	MaxResults int `json:"maxResults"`
 }
 
-// PreviewOpenAIConfig configures the OpenAI answer preview provider.
-type PreviewOpenAIConfig struct {
-	// APIKey is the OpenAI API key (secret; passed through verbatim,
-	// never logged). Empty means "use the OPENAI_API_KEY environment
-	// variable, if set"; with neither, the answer preview stays
-	// unavailable.
-	APIKey string `json:"apiKey"`
-	// BaseURL is a custom API base URL, e.g. an OpenAI-compatible
-	// server; empty means "use the OPENAI_BASE_URL environment
-	// variable, if set", else the official endpoint
-	// (https://api.openai.com). Passed through verbatim; requests go
-	// to <baseUrl>/v1/responses (the Responses API).
-	BaseURL string `json:"baseUrl"`
-	// Model names the model answering (default "gpt-5-mini").
-	Model string `json:"model"`
-	// MaxOutputTokens caps one answer (default 1024).
-	MaxOutputTokens int `json:"maxOutputTokens"`
-}
-
-// PreviewAnthropicConfig configures the Anthropic answer preview
-// provider (active when preview.aiProvider is "anthropic").
-type PreviewAnthropicConfig struct {
-	// APIKey is the Anthropic API key (secret; passed through
-	// verbatim, never logged). Empty means "use the
-	// ANTHROPIC_API_KEY environment variable, if set"; with neither,
-	// the answer preview stays unavailable.
-	APIKey string `json:"apiKey"`
-	// BaseURL is a custom API base URL; empty means "use the
-	// ANTHROPIC_BASE_URL environment variable, if set", else the
-	// official endpoint (https://api.anthropic.com). Passed through
-	// verbatim; requests go to <baseUrl>/v1/messages (the Messages
-	// API).
-	BaseURL string `json:"baseUrl"`
-	// Model names the model answering (default "claude-haiku-4-5").
-	Model string `json:"model"`
-	// MaxOutputTokens caps one answer (default 1024).
-	MaxOutputTokens int `json:"maxOutputTokens"`
-}
-
-// PreviewCustomConfig configures a user-typed OpenAI-compatible
-// answer endpoint (active when preview.aiProvider is "custom") --
-// Ollama, LM Studio, vLLM, or any server speaking the Responses API.
-type PreviewCustomConfig struct {
+// PreviewAIConfig configures the ONE AI answer endpoint behind the
+// preview pane's Ctrl+I: any server speaking the OpenAI-compatible
+// chat-completions API (OpenAI, Anthropic's compatibility endpoint,
+// OpenRouter, Ollama, LM Studio, vLLM, ...). There is deliberately no
+// built-in provider list and no default endpoint -- the app never
+// sends a query anywhere the user has not named.
+type PreviewAIConfig struct {
 	// APIKey is the endpoint's API key, when it needs one (secret;
 	// passed through verbatim, never logged). Local servers usually
-	// need none -- empty sends no Authorization header. No
-	// environment fallback.
+	// need none -- empty sends no Authorization header. Empty also
+	// means "use the COMPETENT_SEARCH_AI_API_KEY environment
+	// variable, if set".
 	APIKey string `json:"apiKey"`
-	// BaseURL is the endpoint's base URL -- REQUIRED for the custom
-	// provider to be usable; requests go to <baseUrl>/v1/responses
-	// (the OpenAI Responses API wire shape). No environment
-	// fallback.
+	// BaseURL is the API base INCLUDING the version segment (e.g.
+	// https://api.openai.com/v1, http://localhost:11434/v1) --
+	// REQUIRED; requests go to <baseUrl>/chat/completions. No
+	// environment fallback, no default: without it the answer preview
+	// simply stays unavailable.
 	BaseURL string `json:"baseUrl"`
 	// Model names the model answering -- required (there is no
 	// sensible default for an unknown server; the app never invents

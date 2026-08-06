@@ -90,7 +90,6 @@ const fakeApp: WailsAppBindings = {
     Promise.resolve({
       enabled: true,
       kagiConfigured: false,
-      aiProvider: "openai",
       aiConfigured: false,
       resultsWidth: 680,
     }),
@@ -101,6 +100,9 @@ const fakeApp: WailsAppBindings = {
   SaveConfig: () =>
     Promise.resolve({ ok: true, applied: null, pending: null }),
   OpenConfigFile: () => Promise.resolve(),
+  // This process is the searchbar, not the settings window.
+  GetStartupMode: () => Promise.resolve("search"),
+  CloseConfigWindow: () => Promise.resolve(),
   ResizeDrag: () => Promise.resolve(),
   ResizeCommit: () => Promise.resolve(),
 };

@@ -59,7 +59,7 @@ type App struct {
 	// (see logFanotifyGrant).
 	grantOnce sync.Once
 
-	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, hkGen, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, pendingConfig, history, launchCtx, launchCancel, progress, winW, winH, resultsW, appliedW, appliedH, placedX, placedY, placedOK, dragDisp, dragY, dragPosOK, dragActive
+	mu         sync.Mutex // guards ctx, visible, lastToggle, lastHide, hotkeyStop, hotkeyCancel, portalHK, hotkeyDesc, hkGen, trayH, trayCancel, stats, statsCancel, lastThemeErr, domReady, pendingShow, history, launchCtx, launchCancel, progress, winW, winH, resultsW, appliedW, appliedH, placedX, placedY, placedOK, dragDisp, dragY, dragPosOK, dragActive
 	ctx        context.Context
 	visible    bool
 	lastToggle time.Time
@@ -130,12 +130,6 @@ type App struct {
 	// pendingShow and executed once by DomReady.
 	domReady    bool
 	pendingShow bool
-	// pendingConfig remembers a summon-into-config-editor request
-	// (the config IPC/CLI command, the !config bang, the tray item,
-	// Options.OpenConfigOnStartup) that arrived before DomReady; it
-	// rides pendingShow (always latched together) and Hide cancels
-	// both. See showConfig in configui.go.
-	pendingConfig bool
 	// panelOnce guards the one-time Spotlight-style panel configuration
 	// DomReady applies through the plat.configurePanel seam -- DomReady
 	// is the earliest point every platform has a native window to
@@ -208,6 +202,11 @@ type App struct {
 
 	trayOnce sync.Once
 	newTray  func() trayHandle
+
+	// termOnce guards the one-time run-in-terminal capability log
+	// line (see runterm.go): the terminal is resolved per registry
+	// build, but the outcome is announced once per run.
+	termOnce sync.Once
 
 	// Firefox companion-extension bridge (see ffext.go in this
 	// package): the app-lifetime tab-switching bridge behind the
@@ -444,13 +443,15 @@ func (a *App) Startup(ctx context.Context) {
 	if a.opt.ShowOnStartup {
 		a.pendingShow = true
 	}
-	if a.opt.OpenConfigOnStartup {
-		// A start-into-config request is a show plus the editor mode
-		// event, executed together by DomReady (the showConfig latch).
-		a.pendingShow = true
-		a.pendingConfig = true
-	}
 	a.mu.Unlock()
+	// The settings window shares this object but almost none of its
+	// startup: no index, watcher, hotkey, tray, plugins or service
+	// registration belong in a window that only edits config.json
+	// (configwindow.go).
+	if a.opt.ConfigWindow {
+		a.startConfigWindow()
+		return
+	}
 	// The IPC handlers are wired BEFORE everything else, in particular
 	// before registerHotkey: on darwin the hotkey registration can
 	// block briefly on the Cocoa main-loop race, and summons sent over
@@ -546,9 +547,7 @@ func (a *App) DomReady(ctx context.Context) {
 	}
 	a.domReady = true
 	pending := a.pendingShow
-	pendingCfg := a.pendingConfig
 	a.pendingShow = false
-	a.pendingConfig = false
 	a.mu.Unlock()
 	// Spotlight-style collection behavior must be applied after the
 	// window exists; DomReady is the earliest point every platform has
@@ -562,17 +561,17 @@ func (a *App) DomReady(ctx context.Context) {
 	// Final near-60 uncap attempt: the webview definitely exists now,
 	// so this one logs the outcome either way (fps.go).
 	a.applyNear60Uncap(true)
-	if pending {
-		a.captureAppContext()
-		a.showOnCursorDisplay()
+	if !pending {
+		return
 	}
-	if pendingCfg {
-		// A deferred summon-into-config: the mode event follows the
-		// eventShown the show above emitted (the frontend's app:shown
-		// handler re-renders the bar; an earlier config event would be
-		// clobbered).
-		a.emitEvent(eventConfigOpen)
+	if a.opt.ConfigWindow {
+		// The settings window is an ordinary window: raise it where
+		// it is, never reposition it like the bar.
+		a.raiseConfigWindow()
+		return
 	}
+	a.captureAppContext()
+	a.showOnCursorDisplay()
 }
 
 // buildIndex runs the full disk walk -- forwarding progress to the

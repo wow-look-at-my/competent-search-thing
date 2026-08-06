@@ -10,7 +10,7 @@
 // initConfig (the module wires window listeners once, like the app).
 
 import { beforeAll, describe, expect, it } from "vitest";
-import { configModeActive, initConfig } from "./config";
+import { configModeActive, initConfig, openConfigWindow } from "./config";
 
 const fixtureSchema = {
   properties: {
@@ -53,11 +53,24 @@ interface FakeEnv {
   app: WailsAppBindings;
   rt: WailsRuntime;
   fire: (name: string, ...data: unknown[]) => void;
+  // closes counts CloseConfigWindow calls -- the settings window's
+  // Esc / Close outcome.
+  closes: number;
 }
 
 function fakeEnv(schemaJson: string, configJson: string): FakeEnv {
   const events = new Map<string, (...data: unknown[]) => void>();
+  const out: FakeEnv = {
+    app: null as unknown as WailsAppBindings,
+    rt: null as unknown as WailsRuntime,
+    fire: () => {},
+    closes: 0,
+  };
   const app = {
+    CloseConfigWindow: () => {
+      out.closes++;
+      return Promise.resolve();
+    },
     GetConfigSchema: () => Promise.resolve(schemaJson),
     GetConfigForEdit: () =>
       Promise.resolve({ configJson, path: "/tmp/config.json" }),
@@ -67,7 +80,6 @@ function fakeEnv(schemaJson: string, configJson: string): FakeEnv {
       Promise.resolve({
         enabled: false,
         kagiConfigured: false,
-        aiProvider: "openai",
         aiConfigured: false,
         resultsWidth: 680,
       }),
@@ -78,39 +90,22 @@ function fakeEnv(schemaJson: string, configJson: string): FakeEnv {
       return () => {};
     },
   } as unknown as WailsRuntime;
-  return {
-    app,
-    rt,
-    fire: (name, ...data) => {
-      const cb = events.get(name);
-      if (cb === undefined) {
-        throw new Error("no handler registered for " + name);
-      }
-      cb(...data);
-    },
+  out.app = app;
+  out.rt = rt;
+  out.fire = (name, ...data) => {
+    const cb = events.get(name);
+    if (cb === undefined) {
+      throw new Error("no handler registered for " + name);
+    }
+    cb(...data);
   };
+  return out;
 }
 
 // tick flushes microtasks plus one macrotask turn.
 function tick(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 0);
-  });
-}
-
-// frame resolves after the editor's own nextFrame callbacks ran:
-// queueing a requestAnimationFrame AFTER the code under test queued
-// its own guarantees ordering (rAF callbacks run FIFO). Falls back to
-// a macrotask when the environment has no rAF.
-function frame(): Promise<void> {
-  return new Promise((resolve) => {
-    if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(() => {
-        resolve();
-      });
-    } else {
-      setTimeout(resolve, 0);
-    }
   });
 }
 
@@ -139,7 +134,7 @@ beforeAll(() => {
 
 describe("config editor ToC", () => {
   it("renders ToC entries from the schema walk in schema order", async () => {
-    env.fire("config:open");
+    openConfigWindow();
     await tick();
     await tick();
     expect(configModeActive()).toBe(true);
@@ -210,36 +205,13 @@ describe("config editor ToC", () => {
     expect(byId("config-sec-trailing").hidden).toBe(false);
   });
 
-  it("restores mode, scroll, focus, and dirty edits across hide/show", async () => {
-    // Make the working copy dirty through a real control.
+  it("offers the reload strip for an external change while dirty", () => {
+    // Make the working copy dirty through a real control first.
     const alpha = byId<HTMLInputElement>("cfg-alpha");
     alpha.value = "changed";
     alpha.dispatchEvent(new Event("input"));
     expect(byId("config-dirty-note").hidden).toBe(false);
-    // Scroll the controls column and focus a specific control.
-    const body = byId("config-body");
-    body.scrollTop = 133;
-    const beta = byId<HTMLInputElement>("cfg-beta");
-    beta.focus();
-    expect(document.activeElement).toBe(beta);
-    // Simulate the platform moving focus during the hidden period --
-    // the restore must re-assert the tracked control.
-    beta.blur();
-    expect(document.activeElement).not.toBe(beta);
-    // The hide itself has no frontend event; the next summon fires
-    // app:shown with the mode still latched.
-    env.fire("app:shown");
-    await frame();
-    await tick();
-    expect(configModeActive()).toBe(true);
-    expect(document.body.classList.contains("with-config")).toBe(true);
-    expect(body.scrollTop).toBe(133);
-    expect(document.activeElement).toBe(beta);
-    expect(byId("config-dirty-note").hidden).toBe(false);
-    expect(alpha.value).toBe("changed");
-  });
 
-  it("offers the reload strip for an external change while dirty", () => {
     env.fire("config:changed", { applied: ["theme"], pending: null });
     const notices = byId("config-notices").textContent ?? "";
     expect(notices).toContain("changed on disk");
@@ -248,20 +220,17 @@ describe("config editor ToC", () => {
     expect(byId("config-dirty-note").hidden).toBe(false);
   });
 
-  it("Esc still exits (dirty double-Esc) and clears the restore latch", async () => {
+  // In the settings window Esc closes the WINDOW (there is no
+  // searchbar underneath to fall back to), and a dirty document still
+  // takes two presses before anything is discarded.
+  it("Esc closes the settings window, dirty double-press first", () => {
     const esc = (): void => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     };
     esc(); // first press arms the discard warning
+    expect(env.closes).toBe(0);
     expect(configModeActive()).toBe(true);
-    esc(); // second press within the window discards and exits
-    expect(configModeActive()).toBe(false);
-    expect(document.body.classList.contains("with-config")).toBe(false);
-    // The latch is gone: the next summon stays a normal search bar.
-    env.fire("app:shown");
-    await tick();
-    await tick();
-    expect(configModeActive()).toBe(false);
-    expect(document.body.classList.contains("with-config")).toBe(false);
+    esc(); // second press within the window discards and closes
+    expect(env.closes).toBe(1);
   });
 });

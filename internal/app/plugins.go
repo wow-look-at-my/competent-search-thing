@@ -128,6 +128,7 @@ func (a *App) buildRegistry() dispatcher {
 		FrequentSitesMax: cfg.Firefox.FrequentSites.MaxResults,
 		OpenTabs:         tabs,
 		OpenTabsMax:      cfg.Firefox.OpenTabs.MaxResults,
+		Terminal:         a.terminalRunner(),
 		FuzzyDisabled:    !config.Enabled(cfg.Search.FuzzyEnabled),
 		Rewrites:         rewrites,
 		Logf:             log.Printf,
@@ -447,9 +448,9 @@ func parseWindowID(s string) (uint32, error) {
 // runBuiltin executes one app-level builtin command (the actions
 // behind the !rescan/!reload/!config/!version/!quit bangs). The bang
 // flows that hand off elsewhere end with the bar hidden; !config
-// instead summons the in-app config editor (showConfig), and the
-// underlying behaviors live in requestRescan/showConfig so the tray
-// menu can share them.
+// instead opens the settings window (showConfig) and leaves the bar
+// alone, and the underlying behaviors live in requestRescan/
+// showConfig so the tray menu can share them.
 func (a *App) runBuiltin(value string) error {
 	switch value {
 	case builtinRescan:

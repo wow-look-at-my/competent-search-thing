@@ -166,16 +166,15 @@ func TestRunBuiltinReloadSwapsRegistry(t *testing.T) {
 	require.Equal(t, 0, f.callCount(), "the old registry is out of the loop")
 }
 
-func TestRunBuiltinConfigOpensEditor(t *testing.T) {
-	// !config summons the in-app config editor now: with the bar
-	// already visible (the bang was typed into it), that is just the
-	// mode event -- no file open, no hide, the bar switches modes.
+func TestRunBuiltinConfigOpensTheSettingsWindow(t *testing.T) {
+	// !config opens the settings WINDOW (its own process); the bar
+	// itself is left alone -- not hidden, no file opened.
 	a, r, _ := newPluginTestApp(t)
 	a.DomReady(context.Background())
 	a.showOnCursorDisplay() // the bar is visible, as it is when a bang runs
 	require.NoError(t, a.RunPluginAction("app", plugin.Action{Type: plugin.ActionRunBuiltin, Value: "config"}))
-	require.Len(t, r.emitted(eventConfigOpen), 1, "the editor mode event fires")
-	require.False(t, r.has("hide"), "the bar stays up, switching modes")
+	require.True(t, r.has("run:/test/bin/competent-search-thing config"))
+	require.False(t, r.has("hide"), "the bar stays up")
 	for _, c := range r.callNames() {
 		require.NotContains(t, c, "open:", "no file opens; the editor's escape hatch owns that")
 	}

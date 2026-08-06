@@ -123,22 +123,9 @@ func TestDefaultConfigMatchesSchema(t *testing.T) {
 				BaseURL:    "https://kagi.internal.example",
 				MaxResults: 5,
 			},
-			AIProvider: AIProviderAnthropic,
-			OpenAI: PreviewOpenAIConfig{
-				APIKey:          "sk-secret",
-				BaseURL:         "http://llm.local:8080/openai",
-				Model:           "gpt-5",
-				MaxOutputTokens: 2048,
-			},
-			Anthropic: PreviewAnthropicConfig{
-				APIKey:          "sk-ant-secret",
-				BaseURL:         "https://anthropic-proxy.internal.example",
-				Model:           "claude-haiku-4-5",
-				MaxOutputTokens: 512,
-			},
-			Custom: PreviewCustomConfig{
+			AI: PreviewAIConfig{
 				APIKey:          "local-key",
-				BaseURL:         "http://localhost:11434",
+				BaseURL:         "http://localhost:11434/v1",
 				Model:           "llama3",
 				MaxOutputTokens: 256,
 			},
@@ -209,14 +196,14 @@ func TestConfigSchemaRejectsInvalid(t *testing.T) {
 		"non-number frecency weight":      `{"search":{"frecency":{"weightNoise":"1"}}}`,
 		"zero telemetry maxSizeKB":        `{"search":{"telemetry":{"maxSizeKB":0}}}`,
 		"negative telemetry maxSizeKB":    `{"search":{"telemetry":{"maxSizeKB":-1}}}`,
-		"unknown ai provider":             `{"preview":{"aiProvider":"watson"}}`,
-		"empty ai provider":               `{"preview":{"aiProvider":""}}`,
-		"non-string ai provider":          `{"preview":{"aiProvider":true}}`,
-		"empty anthropic model":           `{"preview":{"anthropic":{"model":""}}}`,
-		"zero anthropic maxOutputTokens":  `{"preview":{"anthropic":{"maxOutputTokens":0}}}`,
-		"anthropic key typo":              `{"preview":{"anthropic":{"apikey":"x"}}}`,
-		"zero custom maxOutputTokens":     `{"preview":{"custom":{"maxOutputTokens":0}}}`,
-		"custom key typo":                 `{"preview":{"custom":{"baseURL":"http://x"}}}`,
+		"retired ai provider selector":    `{"preview":{"aiProvider":"openai"}}`,
+		"retired openai section":          `{"preview":{"openai":{"apiKey":"x"}}}`,
+		"retired anthropic section":       `{"preview":{"anthropic":{"apiKey":"x"}}}`,
+		"retired custom section":          `{"preview":{"custom":{"baseUrl":"http://x"}}}`,
+		"zero ai maxOutputTokens":         `{"preview":{"ai":{"maxOutputTokens":0}}}`,
+		"negative ai maxOutputTokens":     `{"preview":{"ai":{"maxOutputTokens":-1}}}`,
+		"ai key typo":                     `{"preview":{"ai":{"apikey":"x"}}}`,
+		"ai base url typo":                `{"preview":{"ai":{"baseURL":"http://x"}}}`,
 		"telemetry key typo":              `{"search":{"telemetry":{"maxSizeKb":64}}}`,
 		"no telemetry on-off switch":      `{"search":{"telemetry":{"enabled":true}}}`,
 		"no telemetry off switch":         `{"search":{"telemetry":{"disabled":true}}}`,
@@ -367,6 +354,6 @@ func TestConfigSchemaKeyCompleteness(t *testing.T) {
 		"config.schema.json $defs/previewConfig out of sync with PreviewConfig")
 	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PreviewKagiConfig{})), configSchemaProperties(t, "previewKagiConfig"),
 		"config.schema.json $defs/previewKagiConfig out of sync with PreviewKagiConfig")
-	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PreviewOpenAIConfig{})), configSchemaProperties(t, "previewOpenAIConfig"),
-		"config.schema.json $defs/previewOpenAIConfig out of sync with PreviewOpenAIConfig")
+	require.Equal(t, configJSONTagNames(t, reflect.TypeOf(PreviewAIConfig{})), configSchemaProperties(t, "previewAIConfig"),
+		"config.schema.json $defs/previewAIConfig out of sync with PreviewAIConfig")
 }
