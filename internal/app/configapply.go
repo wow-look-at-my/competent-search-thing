@@ -255,6 +255,17 @@ func (a *App) applyConfig(next *config.Config, origin string) ApplyResult {
 	if down {
 		return ApplyResult{}
 	}
+	// The settings window has nothing to apply TO -- no index, no
+	// watcher, no registry (configwindow.go). Its save reaches the
+	// running searchbar through config.json and that instance's own
+	// config watcher, which is also what makes the window work with
+	// no app running.
+	if a.opt.ConfigWindow {
+		a.cfgMu.Lock()
+		a.cfgCurrent = next
+		a.cfgMu.Unlock()
+		return ApplyResult{}
+	}
 
 	a.cfgMu.Lock()
 	old := a.cfgCurrent

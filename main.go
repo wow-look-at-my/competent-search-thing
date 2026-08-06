@@ -50,6 +50,9 @@ func main() {
 // bar should show once the frontend is ready; the App owns both from
 // here (Startup wires the IPC handlers, Shutdown closes the server).
 func runGUI(opts cli.RunOptions) error {
+	if opts.ConfigWindow {
+		return runConfigWindow(opts)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		log.Printf("config: %v (continuing with the returned config)", err)
@@ -90,7 +93,6 @@ func runGUI(opts cli.RunOptions) error {
 		Hotkey:                 cfg.Hotkey,
 		IPC:                    opts.Server,
 		ShowOnStartup:          opts.ShowOnStartup,
-		OpenConfigOnStartup:    opts.OpenConfig,
 		TrayDisabled:           !config.Enabled(cfg.Tray.Enabled),
 		HistoryPersistDisabled: !config.Enabled(cfg.History.PersistEnabled),
 		ConfigNotes:            cfg.MigrationNotes,
@@ -145,4 +147,43 @@ func runGUI(opts cli.RunOptions) error {
 		wailsOpts.Mac = app.MacWindowOptions()
 	}
 	return wails.Run(wailsOpts)
+}
+
+// Settings window geometry: an ordinary window, big enough for the
+// settings list plus its sidebar without being a full-screen takeover.
+const (
+	configWindowWidth  = 900
+	configWindowHeight = 720
+)
+
+// runConfigWindow is the GUI entry point for `competent-search-thing
+// config`: the settings editor in its OWN process and its own
+// ORDINARY window -- titled, resizable, visible from the start, in
+// the taskbar and the window switcher, and NOT always-on-top. That is
+// the whole point of the separate window: the searchbar's panel hides
+// itself on focus loss and floats above everything, so an editor
+// hosted inside it could end up buried with no way back to it.
+//
+// This process owns no index and no watcher (internal/app
+// configwindow.go); it edits config.json, and a running searchbar
+// picks the change up through its own config-file watcher.
+func runConfigWindow(opts cli.RunOptions) error {
+	a := app.New(nil, app.Options{
+		IPC:          opts.Server,
+		ConfigWindow: true,
+		WindowWidth:  configWindowWidth,
+		WindowHeight: configWindowHeight,
+	})
+	return wails.Run(&options.App{
+		Title:       "competent-search-thing settings",
+		Width:       configWindowWidth,
+		Height:      configWindowHeight,
+		MinWidth:    520,
+		MinHeight:   400,
+		AssetServer: &assetserver.Options{Assets: assets},
+		OnStartup:   a.Startup,
+		OnDomReady:  a.DomReady,
+		OnShutdown:  a.Shutdown,
+		Bind:        []interface{}{a},
+	})
 }

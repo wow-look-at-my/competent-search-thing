@@ -47,6 +47,11 @@ import (
 // computed socket path (tests and unusual setups).
 const EnvSocket = "COMPETENT_SEARCH_SOCKET"
 
+// EnvConfigSocket is EnvSocket's twin for the settings window, which
+// is its own process with its own single-instance socket (the
+// internal/ffext override convention).
+const EnvConfigSocket = "COMPETENT_SEARCH_CONFIG_SOCKET"
+
 // The wire commands a client may send.
 const (
 	CmdToggle  = "toggle"
@@ -103,4 +108,21 @@ func SocketPath(getenv func(string) string) string {
 		return filepath.Join(dir, "competent-search-thing.sock")
 	}
 	return filepath.Join(os.TempDir(), fmt.Sprintf("competent-search-thing-%d.sock", os.Getuid()))
+}
+
+// ConfigSocketPath returns the settings window's own socket path --
+// the same rules as SocketPath under the EnvConfigSocket override and
+// a "-config" name. The settings window is a separate process (a
+// normal, resizable, taskbar-visible window that cannot get lost
+// behind the bar's own always-on-top panel), so it needs its own
+// single-instance socket: a second `config` invocation raises the
+// window that is already open instead of opening another one.
+func ConfigSocketPath(getenv func(string) string) string {
+	if p := getenv(EnvConfigSocket); p != "" {
+		return p
+	}
+	if dir := getenv("XDG_RUNTIME_DIR"); dir != "" {
+		return filepath.Join(dir, "competent-search-thing-config.sock")
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("competent-search-thing-config-%d.sock", os.Getuid()))
 }

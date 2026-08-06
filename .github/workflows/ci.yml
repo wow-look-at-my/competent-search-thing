@@ -11,6 +11,7 @@ permissions:
   # submission (a 403 from the Dependency Submission API fails the build).
   contents: write
   actions: read
+  artifact-metadata: write
 
 jobs:
   linux:

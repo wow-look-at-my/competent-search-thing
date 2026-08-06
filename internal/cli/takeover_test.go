@@ -265,12 +265,14 @@ func TestToggleReplacesSkewedDaemon(t *testing.T) {
 	require.Equal(t, 1, kr.sigterms(), "and the quit-less old daemon was then terminated")
 }
 
-// --- config against an older daemon: automatic convergence -------------------
-// Replaces the old TestConfigAgainstOlderDaemon dead end ("older version
-// without the config command; restart it", exit 1).
+// --- config: the settings window gets the same self-heal ---------------------
+// The config command no longer negotiates with the searchbar at all;
+// it acquires the SETTINGS-WINDOW socket through the shared listen
+// seam, so a stale, skewed or wedged holder is replaced exactly like
+// any other instance -- and a healthy one is raised, never killed.
 
-func TestConfigReplacesOlderDaemon(t *testing.T) {
-	path := testSocketEnv(t)
+func TestConfigReplacesASkewedSettingsWindow(t *testing.T) {
+	path := testConfigSocketEnv(t)
 	kr := &cliKill{}
 	fake := scriptedFake(t, path, func(line string) string {
 		if strings.Contains(line, `"version"`) {
@@ -282,42 +284,16 @@ func TestConfigReplacesOlderDaemon(t *testing.T) {
 	gui := &guiRecorder{}
 	defer gui.closeServers()
 
-	code, stdout, stderr := runEnv(t, takeoverEnv(gui, kr), "config")
+	code, _, stderr := runEnv(t, takeoverEnv(gui, kr), "config")
 	require.Equal(t, 0, code, "stderr: %s", stderr)
-	require.NotContains(t, stderr, "restart it", "the restart-it dead end is retired")
-	require.NotContains(t, stdout, "restart it")
 	require.Equal(t, 1, gui.count())
-	opts := gui.last(t)
-	require.True(t, opts.OpenConfig, "the editor intent survives the takeover")
-	require.True(t, opts.ShowOnStartup)
+	require.True(t, gui.last(t).ConfigWindow, "the new settings window wins")
 }
 
-// --- config against a pre-JSON daemon ----------------------------------------
-// Inverts the old TestConfigUnexpectedReplyIsAnError.
-
-func TestConfigReplacesPreJSONDaemon(t *testing.T) {
-	path := testSocketEnv(t)
-	kr := &cliKill{}
-	fake := scriptedFake(t, path, func(string) string { return "wat" })
-	kr.onTerm = fake.close
-	gui := &guiRecorder{}
-	defer gui.closeServers()
-
-	code, _, _ := runEnv(t, takeoverEnv(gui, kr), "config")
-	require.Equal(t, 0, code)
-	require.Equal(t, 1, gui.count())
-	require.True(t, gui.last(t).OpenConfig)
-	require.Equal(t, 1, kr.sigterms())
-}
-
-// --- the defensive same-build unknown-command branch -------------------------
-// A daemon of THIS exact build that still denies the config command is
-// pathological (a same-build daemon knows config); the convergence
-// attempt finds it healthy, concedes, and reports honestly -- it never
-// kills a responsive same-build daemon over it.
-
-func TestConfigSameBuildUnknownCommandStaysHonest(t *testing.T) {
-	path := testSocketEnv(t)
+// A HEALTHY same-build settings window that answers the raise with
+// garbage is reported honestly and never signaled.
+func TestConfigHonestWhenTheOpenWindowMisbehaves(t *testing.T) {
+	path := testConfigSocketEnv(t)
 	kr := &cliKill{}
 	_ = scriptedFake(t, path, func(line string) string {
 		if strings.Contains(line, `"version"`) {
@@ -329,8 +305,8 @@ func TestConfigSameBuildUnknownCommandStaysHonest(t *testing.T) {
 
 	code, _, stderr := runEnv(t, takeoverEnv(gui, kr), "config")
 	require.Equal(t, 1, code)
-	require.Contains(t, stderr, "unexpected reply")
-	require.Equal(t, 0, gui.count(), "no GUI is started over a live same-build daemon")
+	require.Contains(t, stderr, "did not respond")
+	require.Equal(t, 0, gui.count(), "no second window over a live same-build one")
 	require.Zero(t, kr.sigterms(), "and it is never signaled")
 }
 

@@ -57,120 +57,70 @@ func TestProbeKagiFailures(t *testing.T) {
 	require.NotContains(t, res.Message, "bad")
 }
 
-func TestProbeOpenAISuccess(t *testing.T) {
+func TestProbeAISuccess(t *testing.T) {
 	var gotMaxTokens int
+	var gotModel, gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/v1/responses", r.URL.Path)
+		require.Equal(t, "/v1/chat/completions", r.URL.Path)
+		gotAuth = r.Header.Get("Authorization")
 		var body struct {
-			MaxOutputTokens int `json:"max_output_tokens"`
+			Model     string `json:"model"`
+			MaxTokens int    `json:"max_tokens"`
 		}
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-		gotMaxTokens = body.MaxOutputTokens
-		_, _ = w.Write([]byte(`{"status":"completed","model":"gpt-5-mini-resolved",
-			"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`))
+		gotModel, gotMaxTokens = body.Model, body.MaxTokens
+		_, _ = w.Write([]byte(`{"model":"llama3-resolved",
+			"choices":[{"finish_reason":"stop","message":{"content":"ok"}}]}`))
 	}))
 	defer srv.Close()
 
 	res := ProbeProvider(context.Background(), ProbeParams{
-		Provider: "openai", APIKey: "sk", BaseURL: srv.URL, Model: "gpt-5-mini",
+		Provider: "ai", APIKey: "sk", BaseURL: srv.URL + "/v1", Model: "llama3",
 	})
 	require.True(t, res.OK)
-	require.Equal(t, "ok: model gpt-5-mini-resolved answered", res.Message)
+	require.Equal(t, "ok: model llama3-resolved answered", res.Message)
+	require.Equal(t, "llama3", gotModel)
+	require.Equal(t, "Bearer sk", gotAuth)
 	require.Equal(t, probeMaxOutputTokens, gotMaxTokens, "the probe spends a tiny token cap")
 }
 
-func TestProbeOpenAIFailures(t *testing.T) {
-	res := ProbeProvider(context.Background(), ProbeParams{Provider: "openai"})
-	require.Equal(t, errAINoKey, res.Message)
-
-	res = ProbeProvider(context.Background(), ProbeParams{Provider: "openai", APIKey: "k"})
-	require.Equal(t, errAINoModel, res.Message)
-
-	res = ProbeProvider(context.Background(), ProbeParams{Provider: "openai", APIKey: "k", Model: "m", BaseURL: "ftp://x"})
-	require.Equal(t, errAIBadBase, res.Message)
-}
-
-func TestProbeAnthropicSuccessAndAuthFailure(t *testing.T) {
-	var gotVersion string
-	var gotMaxTokens int
-	authorized := true
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/v1/messages", r.URL.Path)
-		gotVersion = r.Header.Get("anthropic-version")
-		var body struct {
-			MaxTokens int `json:"max_tokens"`
-		}
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-		gotMaxTokens = body.MaxTokens
-		if !authorized {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"model":"claude-haiku-4-5-resolved","stop_reason":"end_turn","content":[{"type":"text","text":"ok"}]}`))
-	}))
-	defer srv.Close()
-
-	res := ProbeProvider(context.Background(), ProbeParams{
-		Provider: "anthropic", APIKey: "sk-ant", BaseURL: srv.URL, Model: "claude-haiku-4-5",
-	})
-	require.True(t, res.OK)
-	require.Equal(t, "ok: model claude-haiku-4-5-resolved answered", res.Message)
-	require.Equal(t, anthropicVersion, gotVersion)
-	require.Equal(t, probeMaxOutputTokens, gotMaxTokens)
-
-	authorized = false
-	res = ProbeProvider(context.Background(), ProbeParams{
-		Provider: "anthropic", APIKey: "sk-ant", BaseURL: srv.URL, Model: "claude-haiku-4-5",
-	})
-	require.False(t, res.OK)
-	require.Equal(t, "anthropic: HTTP 401: invalid x-api-key", res.Message)
-	require.NotContains(t, res.Message, "sk-ant")
-}
-
-func TestProbeAnthropicFailures(t *testing.T) {
-	res := ProbeProvider(context.Background(), ProbeParams{Provider: "anthropic"})
-	require.Equal(t, errAnthropicNoKey, res.Message)
-
-	res = ProbeProvider(context.Background(), ProbeParams{Provider: "anthropic", APIKey: "k"})
-	require.Equal(t, errAnthropicNoModel, res.Message)
-
-	res = ProbeProvider(context.Background(), ProbeParams{Provider: "anthropic", APIKey: "k", Model: "m", BaseURL: "://"})
-	require.Equal(t, errAnthropicBadBase, res.Message)
-}
-
-func TestProbeCustomKeylessSuccess(t *testing.T) {
+func TestProbeAIKeylessSendsNoAuthHeader(t *testing.T) {
+	// The local-server shape: no key configured, so no Authorization
+	// header at all (an empty bearer would be rejected outright).
 	sawAuth := "unset"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sawAuth = r.Header.Get("Authorization")
-		_, _ = w.Write([]byte(`{"status":"completed","model":"llama3",
-			"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`))
+		_, _ = w.Write([]byte(`{"model":"llama3","choices":[{"message":{"content":"ok"}}]}`))
 	}))
 	defer srv.Close()
 
-	res := ProbeProvider(context.Background(), ProbeParams{Provider: "custom", BaseURL: srv.URL, Model: "llama3"})
+	res := ProbeProvider(context.Background(), ProbeParams{Provider: "ai", BaseURL: srv.URL, Model: "llama3"})
 	require.True(t, res.OK)
 	require.Equal(t, "ok: model llama3 answered", res.Message)
 	require.Equal(t, "", sawAuth, "a keyless probe sends no Authorization header")
 }
 
-func TestProbeCustomFailuresNameCustomKeys(t *testing.T) {
-	res := ProbeProvider(context.Background(), ProbeParams{Provider: "custom", Model: "m"})
-	require.Equal(t, errCustomNoBase, res.Message)
+func TestProbeAIFailures(t *testing.T) {
+	// The key is optional; the endpoint and model are not, and each
+	// failure names its own knob.
+	res := ProbeProvider(context.Background(), ProbeParams{Provider: "ai", Model: "m"})
+	require.Equal(t, errAINoBase, res.Message)
 
-	res = ProbeProvider(context.Background(), ProbeParams{Provider: "custom", BaseURL: "http://h.example"})
-	require.Equal(t, errCustomNoModel, res.Message)
+	res = ProbeProvider(context.Background(), ProbeParams{Provider: "ai", BaseURL: "http://h.example"})
+	require.Equal(t, errAINoModel, res.Message)
 
-	res = ProbeProvider(context.Background(), ProbeParams{Provider: "custom", BaseURL: "h.example", Model: "m"})
-	require.Equal(t, errCustomBadBase, res.Message)
+	res = ProbeProvider(context.Background(), ProbeParams{Provider: "ai", BaseURL: "ftp://x", Model: "m"})
+	require.Equal(t, errAIBadBase, res.Message)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"invalid api key"}}`))
 	}))
 	defer srv.Close()
-	res = ProbeProvider(context.Background(), ProbeParams{Provider: "custom", BaseURL: srv.URL, Model: "m"})
+	res = ProbeProvider(context.Background(), ProbeParams{Provider: "ai", APIKey: "sk-secret", BaseURL: srv.URL, Model: "m"})
 	require.False(t, res.OK)
-	require.Equal(t, "custom: HTTP 503", res.Message, "custom errors name the custom provider")
+	require.Equal(t, "ai: HTTP 401: invalid api key", res.Message)
+	require.NotContains(t, res.Message, "sk-secret")
 }
 
 func TestProbeRejectsUnknownProviderAndOversizeInputs(t *testing.T) {
@@ -185,7 +135,7 @@ func TestProbeRejectsUnknownProviderAndOversizeInputs(t *testing.T) {
 	res = ProbeProvider(context.Background(), ProbeParams{Provider: "kagi", APIKey: "k", BaseURL: strings.Repeat("y", probeMaxBaseBytes+1)})
 	require.Equal(t, "test: base URL too long", res.Message)
 
-	res = ProbeProvider(context.Background(), ProbeParams{Provider: "openai", APIKey: "k", Model: strings.Repeat("z", probeMaxModelBytes+1)})
+	res = ProbeProvider(context.Background(), ProbeParams{Provider: "ai", APIKey: "k", Model: strings.Repeat("z", probeMaxModelBytes+1)})
 	require.Equal(t, "test: model name too long", res.Message)
 }
 

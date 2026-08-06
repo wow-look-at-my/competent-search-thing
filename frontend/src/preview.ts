@@ -37,7 +37,7 @@ let wired = false; // initPreview grabbed elements + wired listeners
 let enabled = false;
 let kagiConfigured = false;
 let aiConfigured = false;
-let aiProvider = "openai";
+
 
 let bodyEl: HTMLDivElement;
 let spinnerEl: HTMLDivElement;
@@ -111,7 +111,7 @@ export function applyPreviewConfig(cfg: PreviewConfigInfo): void {
   enabled = cfg.enabled;
   kagiConfigured = cfg.kagiConfigured;
   aiConfigured = cfg.aiConfigured;
-  aiProvider = cfg.aiProvider !== "" ? cfg.aiProvider : "openai";
+
   if (!enabled) {
     if (was) {
       cancelSpinner();
@@ -129,7 +129,7 @@ export function applyPreviewConfig(cfg: PreviewConfigInfo): void {
     document.body.style.setProperty("--preview-results-col", `${cfg.resultsWidth}px`);
   }
   setTrigger(webBtn, kagiConfigured, "preview.kagi.apiKey (or KAGI_API_KEY)");
-  setTrigger(aiBtn, aiConfigured, aiKeyHint(aiProvider));
+  setTrigger(aiBtn, aiConfigured, aiKeyHint);
   updateStripLabels();
   if (!was) {
     lastKey = null; // the next selection change repaints the pane
@@ -238,20 +238,10 @@ function targetKey(t: PreviewTarget): string {
 
 /* --- explicit web / AI triggers ------------------------------------- */
 
-// aiKeyHint names the SELECTED AI provider's config knobs for the
-// disabled-button hint (preview.aiProvider decides which section is
-// consulted; custom has no key requirement, its base URL + model are
-// the credentials).
-function aiKeyHint(provider: string): string {
-  switch (provider) {
-    case "anthropic":
-      return "preview.anthropic.apiKey (or ANTHROPIC_API_KEY)";
-    case "custom":
-      return "preview.custom.baseUrl + preview.custom.model";
-    default:
-      return "preview.openai.apiKey (or OPENAI_API_KEY)";
-  }
-}
+// aiKeyHint names what the disabled AI button needs. There is one
+// endpoint and the user describes it: no key is required (local
+// servers need none), but the endpoint and model are.
+const aiKeyHint = "preview.ai.baseUrl + preview.ai.model";
 
 // setTrigger reflects one provider's key state on its strip button --
 // in BOTH directions, since a live config change can add or remove a

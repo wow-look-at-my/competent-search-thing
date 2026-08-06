@@ -73,7 +73,14 @@ import (
 //	  opt-out. A false saved AFTER this flip is stamped
 //	  rootsVersion >= 8 and never revisited: a real opt-out,
 //	  respected forever.
-const currentRootsVersion = 8
+//	9 -- the three AI provider sections (openai/anthropic/custom plus
+//	  the aiProvider selector) collapse into ONE user-described
+//	  endpoint, preview.ai (see migrateAIProvider in migrate_v9.go).
+//	  The app carries the SELECTED provider's settings across and
+//	  announces it; it ships no provider list and no default
+//	  endpoint, so a query goes nowhere until preview.ai.baseUrl
+//	  names a server.
+const currentRootsVersion = 9
 
 // CurrentRootsVersion returns the rootsVersion stamp this build
 // writes. Writers that must preserve the field across a full-file
@@ -305,6 +312,11 @@ func (c *Config) migrateRootsFor(goos string, raw []byte) bool {
 	// v8: the preview pane turns on by default.
 	if c.RootsVersion < 8 {
 		c.migratePreviewDefaultOn()
+	}
+	// v9: the three AI provider sections collapse into the one
+	// user-described preview.ai endpoint (migrate_v9.go).
+	if c.RootsVersion < 9 {
+		c.migrateAIProvider(raw)
 	}
 	c.RootsVersion = currentRootsVersion
 	return true
