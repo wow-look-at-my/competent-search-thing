@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
-import { configModeActive, initConfig } from "./config";
+import { configModeActive, initConfig, openConfigWindow } from "./config";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const schemaJson = readFileSync(
@@ -23,8 +23,6 @@ function tick(): Promise<void> {
     setTimeout(resolve, 0);
   });
 }
-
-let fire: (name: string) => void;
 
 beforeAll(() => {
   const events = new Map<string, (...data: unknown[]) => void>();
@@ -40,18 +38,11 @@ beforeAll(() => {
     },
   } as unknown as WailsRuntime;
   initConfig(app, rt);
-  fire = (name) => {
-    const cb = events.get(name);
-    if (cb === undefined) {
-      throw new Error("no handler registered for " + name);
-    }
-    cb();
-  };
 });
 
 describe("config editor ToC over the shipped schema", () => {
   it("covers every section and sub-section in schema order", async () => {
-    fire("config:open");
+    openConfigWindow();
     await tick();
     await tick();
     expect(configModeActive()).toBe(true);

@@ -44,10 +44,9 @@ func (a *App) Hide() {
 	a.lastHide = a.plat.now()
 	// A hide also cancels a show that has not executed yet (e.g. an
 	// IPC hide racing a pre-DomReady summon): the ordered outcome is
-	// hidden. A latched summon-into-config dies with it -- and so does
-	// an in-flight drag-resize anchor (the next drag re-latches).
+	// hidden -- and so does an in-flight drag-resize anchor (the next
+	// drag re-latches).
 	a.pendingShow = false
-	a.pendingConfig = false
 	a.dragActive = false
 	a.dragDispOK = false
 	a.dragPosOK = false

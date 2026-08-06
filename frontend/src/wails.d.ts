@@ -391,6 +391,13 @@ interface WailsAppBindings {
   GetConfigForEdit(): Promise<ConfigForEdit>;
   SaveConfig(raw: string): Promise<ConfigSaveResult>;
   OpenConfigFile(): Promise<void>;
+  // Which UI this process is (internal/app configwindow.go):
+  // "search" = the searchbar, "config" = the settings window, whose
+  // frontend wires the editor alone. Asked FIRST, before any wiring.
+  GetStartupMode(): Promise<string>;
+  // Close the settings window (its Esc / Close button). Ignored in
+  // the searchbar process, where Esc must never quit the app.
+  CloseConfigWindow(): Promise<void>;
   // One minimal REAL request against a provider's candidate settings
   // (the editor's Test buttons; internal/app testpreview.go over
   // internal/preview ProbeProvider). Synchronous from the frontend's

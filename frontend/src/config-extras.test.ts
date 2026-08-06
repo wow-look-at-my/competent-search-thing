@@ -6,7 +6,12 @@
 // test files), so initConfig wires fresh here.
 
 import { beforeAll, describe, expect, it } from "vitest";
-import { initConfig, linkSegments, providerTestRequest } from "./config";
+import {
+  initConfig,
+  linkSegments,
+  openConfigWindow,
+  providerTestRequest,
+} from "./config";
 
 const schema = {
   properties: {
@@ -196,11 +201,9 @@ describe("providerTestRequest", () => {
 });
 
 describe("editor provider extras (DOM)", () => {
-  let fire: (name: string) => void;
-
   beforeAll(async () => {
-    ({ fire } = fakeEnv());
-    fire("config:open");
+    fakeEnv();
+    openConfigWindow();
     await tick();
   });
 

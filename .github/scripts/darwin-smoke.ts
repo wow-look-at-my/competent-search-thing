@@ -49,6 +49,9 @@ const RAW_RTT_MS = 2000; // raw socket round-trip budget (version/ping checks)
 const CLI_RTT_MS = 2500; // `<bin> toggle|show|hide` must exit within this
 const WINDOW_DEADLINE_MS = 8000; // idle-scenario window appear/disappear budget
 const FPS_METER_MS = 12000; // a4: first meter report ~2.5s after the bar shows, wide margin
+// a9: the settings window is a whole second process (Wails boot +
+// webview) -- it only has to answer its socket, but give it room.
+const CONFIG_WINDOW_MS = 30000;
 const WINDOW_DEADLINE_BUSY_MS = 10000; // scenario B window budget while indexing
 const MIDINDEX_WINDOW_MS = 20000; // scenario B: progress line must appear within this
 const B_INDEX_DONE_MS = 180000; // scenario B: the big index must then COMPLETE within this
@@ -231,6 +234,11 @@ interface App {
   name: string;
   proc: import("child_process").ChildProcess;
   sock: string;
+  // cfgSock is the SETTINGS WINDOW's own single-instance socket (the
+  // `config` command / the config IPC command spawn that window as a
+  // second process; internal/app configwindow.go). Isolated per app
+  // so a9 can talk to the window this app opened.
+  cfgSock: string;
   cfgDir: string;
   logFile: string;
   env: Record<string, string | undefined>;
@@ -250,12 +258,15 @@ function startApp(name: string, roots: string[], extraCfg: Record<string, unknow
   // SHORT socket path: darwin sun_path caps at ~104 bytes and $TMPDIR on
   // macOS is a long /var/folders/... path, so use /tmp explicitly.
   const sock = `/tmp/css-${name}-${process.pid}.sock`;
+  const cfgSock = `/tmp/css-cfg-${name}-${process.pid}.sock`;
   fs.rmSync(sock, { force: true });
+  fs.rmSync(cfgSock, { force: true });
   const logFile = path.join(work, `app-${name}.log`);
   const appEnv: Record<string, string | undefined> = {
     ...process.env,
     COMPETENT_SEARCH_CONFIG_DIR: cfgDir,
     COMPETENT_SEARCH_SOCKET: sock,
+    COMPETENT_SEARCH_CONFIG_SOCKET: cfgSock,
     // The dev-only fps meter (internal/app fps.go + fpsmeter.ts):
     // a4-fps-meter hard-gates that the whole chain -- env knob, bound
     // methods, rAF loop, report, Go log line -- works end to end on a
@@ -280,7 +291,7 @@ function startApp(name: string, roots: string[], extraCfg: Record<string, unknow
   fs.closeSync(fd);
   proc.on("error", (err: Error) => fs.appendFileSync(logFile, `spawn error: ${err.message}\n`));
   core.info(`[${name}] app pid ${proc.pid ?? "?"}, socket ${sock}, config ${cfgDir}, log ${logFile}`);
-  return { name, proc, sock, cfgDir, logFile, env: appEnv };
+  return { name, proc, sock, cfgSock, cfgDir, logFile, env: appEnv };
 }
 
 function readLog(app: App): string {
@@ -618,21 +629,31 @@ async function scenarioA(): Promise<void> {
     return `${d}; ${await expectWindow(app, false, WINDOW_DEADLINE_MS)}`;
   });
 
-  // The config command is acked like every other cmd (ack-first: the
-  // summon-into-editor runs after the reply; the frontend editor lands in
-  // Phase C, so this is an IPC-ack check, not a UI check). Sent while
-  // hidden, after -- and clear of -- the toggle pair; the explicit hide
-  // restores the hidden state a7 left, so teardown sees no change.
-  await check("a9-config-ipc", async () => {
+  // The config command is acked like every other cmd (ack-first), and
+  // it now SPAWNS THE SETTINGS WINDOW: a second process with its own
+  // ordinary window and its own single-instance socket
+  // (COMPETENT_SEARCH_CONFIG_SOCKET above; internal/app
+  // configwindow.go). The gate is the spawn actually happening on a
+  // real desktop -- the new window's socket answering `version` is the
+  // proof -- after which it is quit again so teardown sees only the
+  // searchbar. Sent while hidden, after and clear of the toggle pair;
+  // the explicit hide restores the hidden state a7 left.
+  await check("a9-config-window", async () => {
     const r = jsonSend(app.sock, "config", RAW_RTT_MS);
     if (!r.obj || r.obj.ok !== true || r.obj.accepted !== "config") {
       throw new Error(`{"cmd":"config"} not acked: ${r.raw.detail}`);
     }
+    const v = await pollFor("the settings window's socket", CONFIG_WINDOW_MS, POLL_MS, async () => {
+      const rep = jsonSend(app.cfgSock, "version", RAW_RTT_MS);
+      return rep.obj && rep.obj.ok === true ? rep.raw.detail : undefined;
+    });
+    // Close it: quit is the settings window's own IPC command.
+    jsonSend(app.cfgSock, "quit", RAW_RTT_MS);
     const h = jsonSend(app.sock, "hide", RAW_RTT_MS);
     if (!h.obj || h.obj.ok !== true) {
       throw new Error(`restoring hide not acked: ${h.raw.detail}`);
     }
-    return `${r.raw.detail}; restored hidden`;
+    return `${r.raw.detail}; settings window answered ${v}; quit; restored hidden`;
   });
 
   await stopApp(app);
