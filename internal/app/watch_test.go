@@ -7,7 +7,6 @@ package app
 // app_test.go.
 
 import (
-	"bytes"
 	"context"
 	"log"
 	"os"
@@ -101,7 +100,7 @@ func TestStartWatchToleratesBadExcluder(t *testing.T) {
 }
 
 func TestStartWatchLogsTierSummary(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -137,7 +136,7 @@ func TestStartWatchLogsTierSummary(t *testing.T) {
 }
 
 func TestStartWatchWiresWatcherConfig(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -169,7 +168,7 @@ func TestStartWatchWiresWatcherConfig(t *testing.T) {
 func TestStartWatchToleratesBadWatchExcludes(t *testing.T) {
 	// A malformed watcher.watchExcludes pattern costs the feature, not
 	// the watch layer: logged, then everything watches as usual.
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -182,7 +181,7 @@ func TestStartWatchToleratesBadWatchExcludes(t *testing.T) {
 }
 
 func TestStartWatchSweepDisabledLogsLoudly(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -216,7 +215,7 @@ func TestBuildIndexLogsAndSurvivesFailure(t *testing.T) {
 }
 
 func TestBuildIndexCancelledDiscardsPartialAndLogs(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -254,15 +253,22 @@ func TestShutdownCancelsInitialBuild(t *testing.T) {
 	called := make(chan struct{})
 	a.watchMu.Lock()
 	orig := a.buildCancel
+	done := a.buildDone
 	a.buildCancel = func() { orig(); close(called) }
 	a.watchMu.Unlock()
 	require.NotNil(t, orig, "Startup wires a cancellable context into the initial build")
+	require.NotNil(t, done, "Startup tracks the initial build to its return")
 
 	a.Shutdown(context.Background())
 	select {
 	case <-called:
 	default:
 		t.Fatal("Shutdown did not cancel the initial build context")
+	}
+	select {
+	case <-done:
+	default:
+		t.Fatal("Shutdown returned before the cancelled initial build")
 	}
 
 	a.watchMu.Lock()
@@ -309,7 +315,7 @@ func TestWatchBackendForPayloads(t *testing.T) {
 }
 
 func TestStartWatchEmitsBackendNoticeAndGrantHint(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -348,7 +354,7 @@ func TestLogFanotifyGrantResolvesSymlinkedExecutable(t *testing.T) {
 	// The field failure this pins: the hint printed the Homebrew bin/
 	// SYMLINK and setcap refused it ("not a regular (non-symlink)
 	// file"). The printed path must be the resolved real file.
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -410,7 +416,7 @@ func TestStartWatchStrictFanotifyNeverFallsBackToInotify(t *testing.T) {
 }
 
 func TestLogFanotifyGrantSkippedOffLinuxAndOnce(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -306,7 +305,7 @@ func TestStartupSavesContext(t *testing.T) {
 }
 
 func TestStartupLogsConfigNotesOnce(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 

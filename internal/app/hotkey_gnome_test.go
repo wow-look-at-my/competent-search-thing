@@ -233,6 +233,18 @@ func (l *logBuffer) String() string {
 	return l.b.String()
 }
 
+func (l *logBuffer) Bytes() []byte {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return []byte(l.b.String())
+}
+
+func (l *logBuffer) Reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.b.Reset()
+}
+
 func captureLog(t *testing.T) *logBuffer {
 	t.Helper()
 	buf := &logBuffer{}

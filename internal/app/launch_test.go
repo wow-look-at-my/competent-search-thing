@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io/fs"
@@ -186,7 +185,7 @@ func TestOpenArmsWatcherActivatesAndReaps(t *testing.T) {
 }
 
 func TestOpenLogsTheLaunchLine(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 

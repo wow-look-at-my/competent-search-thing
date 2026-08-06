@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"log"
 	"os"
@@ -324,7 +323,7 @@ func TestStartupBuildsRegistryFromPluginsDir(t *testing.T) {
 	require.NoError(t, os.MkdirAll(bad, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(bad, "manifest.json"), []byte("{not json"), 0o644))
 
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -349,7 +348,7 @@ func TestStartupBuildsRegistryFromPluginsDir(t *testing.T) {
 }
 
 func TestStartupMissingPluginsDirIsQuiet(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -372,7 +371,7 @@ func TestBuildRegistryToleratesCorruptConfig(t *testing.T) {
 	t.Setenv(config.EnvConfigDir, dir) // after newTestApp, which re-points it
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte("{corrupt"), 0o644))
 
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -392,7 +391,7 @@ func TestOpenWindowsGetterSessionGating(t *testing.T) {
 	})
 
 	t.Run("wayland disables with one log line", func(t *testing.T) {
-		var buf bytes.Buffer
+		var buf logBuffer
 		log.SetOutput(&buf)
 		defer log.SetOutput(os.Stderr)
 

@@ -56,7 +56,7 @@ func (w *Watcher) refreshWatch(dir string) { w.watch(dir, true) }
 func (w *Watcher) promote(dir string) { w.watch(dir, true) }
 
 func (w *Watcher) watch(dir string, refresh bool) {
-	if w.watchExcluded(dir) {
+	if w.watchExcluded(dir) || w.mountSkipped(dir) {
 		// Watch-excluded dirs never get (or refresh) a watch, from any
 		// path -- event promotion, sweep promotion, or the fill. They
 		// stay indexed and swept; the sweep interval is their bound.
@@ -131,7 +131,7 @@ func (w *Watcher) watch(dir string, refresh bool) {
 // must not reshuffle recency). Reports whether the budget still has
 // room, so fill loops can stop enumerating early.
 func (w *Watcher) addWatchCold(dir string) bool {
-	if w.watchExcluded(dir) {
+	if w.watchExcluded(dir) || w.mountSkipped(dir) {
 		// Never watched, but the budget keeps its room: later dirs may
 		// fit. (Defense in depth -- desiredSplit already filters these
 		// out of the fill lists.)
@@ -346,7 +346,7 @@ func (w *Watcher) desiredSplit(ctx context.Context, bound int) (home, rest []str
 			if _, isRoot := w.pinned[p]; isRoot {
 				continue // already counted with the roots
 			}
-			if w.ex.Match(filepath.Base(p), p) || w.watchExcluded(p) {
+			if w.ex.Match(filepath.Base(p), p) || w.watchExcluded(p) || w.mountSkipped(p) {
 				continue
 			}
 			total++

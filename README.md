@@ -226,7 +226,10 @@ A whole-system walk needs guardrails, and they are on by default:
   server must never hang your index. `overlay` is deliberately NOT
   skipped (container roots are overlay mounts). The skip list is
   recomputed on every rebuild, so mounts that come and go are handled;
-  each rebuild logs what it skipped.
+  each rebuild logs what it skipped. The runtime sweep also tracks mount
+  changes: newly unsafe mounts are removed from the index without being
+  read, and unmounting restores the local content exposed underneath on
+  the next sweep.
 - **Indexing a skipped mount anyway:** add the mountpoint to `roots`
   in config.json. A mountpoint that is itself a configured root is
   never auto-skipped -- that is the escape hatch for local FUSE

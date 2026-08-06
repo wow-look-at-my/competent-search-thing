@@ -37,7 +37,7 @@ func TestFPSEnabledOffByDefault(t *testing.T) {
 }
 
 func TestRecordFPSSampleDisabledIsSilentNoOp(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -49,7 +49,7 @@ func TestRecordFPSSampleDisabledIsSilentNoOp(t *testing.T) {
 }
 
 func TestRecordFPSSampleLogFormat(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -92,7 +92,7 @@ func TestRecordFPSSampleValidation(t *testing.T) {
 }
 
 func TestStartFPSInfoDisabledLogsNothing(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -105,7 +105,7 @@ func TestStartFPSInfoDisabledLogsNothing(t *testing.T) {
 }
 
 func TestStartFPSInfoLogsContextAndChanges(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -140,7 +140,7 @@ func TestPowerInfoLineDegradesHonestly(t *testing.T) {
 }
 
 func TestApplyNear60UncapAppliesOnceAndLogs(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -157,7 +157,7 @@ func TestApplyNear60UncapAppliesOnceAndLogs(t *testing.T) {
 }
 
 func TestApplyNear60UncapTransientMissStaysQuietUntilFinal(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -173,7 +173,7 @@ func TestApplyNear60UncapTransientMissStaysQuietUntilFinal(t *testing.T) {
 }
 
 func TestApplyNear60UncapEscapeHatch(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 

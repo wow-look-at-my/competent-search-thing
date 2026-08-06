@@ -275,10 +275,11 @@ func (a *App) endStartupSequenceLater(cred launch.Credential) {
 		return
 	}
 	ctx := a.launchWatchCtx()
+	delay := launchReapDelay
 	go func() {
 		select {
 		case <-ctx.Done():
-		case <-time.After(launchReapDelay):
+		case <-time.After(delay):
 			a.endStartupSequence(cred)
 		}
 	}()

@@ -171,8 +171,8 @@ func startWatcherRegistered(t *testing.T, w *Watcher) {
 	<-w.InitialRegistration()
 }
 
-// newTestSweeper builds a Sweeper whose mount seam is hermetic (no
-// /proc reads) unless the options script one, with test-friendly
+// newTestSweeper builds a Sweeper whose mount seams are hermetic (no
+// /proc reads) unless the options script them, with test-friendly
 // spacing defaults that individual options may override.
 func newTestSweeper(t *testing.T, m *index.Manager, w *Watcher, opt SweepOptions) *Sweeper {
 	t.Helper()
@@ -184,6 +184,9 @@ func newTestSweeper(t *testing.T, m *index.Manager, w *Watcher, opt SweepOptions
 	}
 	if opt.mounts == nil {
 		opt.mounts = func() []string { return nil }
+	}
+	if opt.mountSkips == nil {
+		opt.mountSkips = func() []string { return nil }
 	}
 	return NewSweeper(m, w, opt)
 }
