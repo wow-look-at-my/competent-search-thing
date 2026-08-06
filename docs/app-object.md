@@ -256,7 +256,7 @@ finishes,
 (WatchMaxWatches, WatchExcludes -> a second watch-only Excluder,
 WatchBackend -> watch.Options.Backend, SweepInterval,
 SweepDisabled = no Sweeper + one loud warning; see the
-internal/watch bullet) -- ADOPTING the armed pre-build watcher when
+internal/watch entry) -- ADOPTING the armed pre-build watcher when
 one exists (wire the trio around it, then watch.Release: the fill
 runs against the just-swapped index and the held events apply;
 no early watcher = the old New+Start path) -- then announces the
