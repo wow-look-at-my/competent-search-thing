@@ -209,6 +209,11 @@ type App struct {
 	trayOnce sync.Once
 	newTray  func() trayHandle
 
+	// termOnce guards the one-time run-in-terminal capability log
+	// line (see runterm.go): the terminal is resolved per registry
+	// build, but the outcome is announced once per run.
+	termOnce sync.Once
+
 	// Firefox companion-extension bridge (see ffext.go in this
 	// package): the app-lifetime tab-switching bridge behind the
 	// activate_tab action and the open-tabs live snapshot. newFfext is

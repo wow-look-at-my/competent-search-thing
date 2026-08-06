@@ -128,6 +128,7 @@ func (a *App) buildRegistry() dispatcher {
 		FrequentSitesMax: cfg.Firefox.FrequentSites.MaxResults,
 		OpenTabs:         tabs,
 		OpenTabsMax:      cfg.Firefox.OpenTabs.MaxResults,
+		Terminal:         a.terminalRunner(),
 		FuzzyDisabled:    !config.Enabled(cfg.Search.FuzzyEnabled),
 		Rewrites:         rewrites,
 		Logf:             log.Printf,

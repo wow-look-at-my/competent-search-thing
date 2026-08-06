@@ -190,6 +190,12 @@ type Options struct {
 	// OpenTabsMax caps one firefox-tabs response (config
 	// firefox.openTabs.maxResults; non-positive = the default 6).
 	OpenTabsMax int
+	// Terminal supplies the run-in-terminal capability behind the
+	// builtin run-terminal source (a PATH lookup plus the terminal
+	// invocation builder). nil -- no terminal emulator on this
+	// machine -- means the provider is NOT REGISTERED at all, the
+	// OpenWindows convention.
+	Terminal *TerminalRunner
 	// FuzzyDisabled turns the engine's fuzzy (subsequence) tier off
 	// for every candidate source and text-matched external result
 	// (config search.fuzzyDisabled -- the same toggle that governs the
@@ -297,10 +303,12 @@ func (b *builtinBase) preRanked() bool                            { return false
 
 // addBuiltins registers the builtin providers (bang suggestions, app
 // commands, installed-app launcher, untargeted app search,
-// open-windows search, frequent sites, open tabs) unless
-// individually disabled -- the open-windows search additionally needs
-// its Options.OpenWindows seam, which is nil on sessions that cannot
-// enumerate windows. Builtins register BEFORE external plugins so a
+// open-windows search, frequent sites, open tabs, run-in-terminal)
+// unless individually disabled -- the open-windows search and the
+// run-in-terminal source additionally need their seams
+// (Options.OpenWindows, Options.Terminal), which are nil on sessions
+// that cannot enumerate windows / machines with no terminal
+// emulator. Builtins register BEFORE external plugins so a
 // manifest can never shadow an app bang or claim a builtin id.
 func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
 	if !disabled(builtinSuggestID) {
@@ -329,6 +337,11 @@ func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
 	}
 	if opts.OpenTabs != nil && !disabled(builtinTabsID) {
 		r.register(newTabsProvider(opts.OpenTabs, opts.OpenTabsMax))
+	}
+	// The run-in-terminal source exists only where the app layer
+	// resolved a terminal emulator to run commands in.
+	if opts.Terminal.usable() && !disabled(builtinRunTermID) {
+		r.register(newRunTermProvider(opts.Terminal))
 	}
 	if len(opts.Rewrites) > 0 && !disabled(builtinRewritesID) {
 		rules, errs := compileRewrites(opts.Rewrites)
