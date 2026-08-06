@@ -98,9 +98,8 @@ func (a *App) buildTray() trayHandle { return tray.New(a.trayOptions()) }
 // Show/Hide is the hotkey toggle path (pre-DomReady deferral
 // included), Rescan now is the !rescan builtin minus its bar-hide
 // (there is no bar interaction to end when the click came from the
-// tray), Open config summons the in-app config editor exactly like
-// !config (showConfig; pre-DomReady deferral included), Quit is the
-// quit builtin. Callbacks arrive on the tray's D-Bus goroutines;
+// tray), Open config opens the settings window exactly like !config
+// (showConfig), Quit is the quit builtin. Callbacks arrive on the tray's D-Bus goroutines;
 // every reused path is goroutine-safe the same way the hotkey and IPC
 // callbacks already are.
 func (a *App) trayOptions() tray.Options {

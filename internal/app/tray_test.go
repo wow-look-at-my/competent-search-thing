@@ -176,18 +176,16 @@ func TestTrayRescanWhileIndexStillBuilding(t *testing.T) {
 	require.False(t, r.has("hide"), "tray rescan never touches bar visibility")
 }
 
-func TestTrayOpenConfigSummonsEditor(t *testing.T) {
+func TestTrayOpenConfigOpensTheSettingsWindow(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
 	a.Startup(context.Background())
 	a.DomReady(context.Background())
 	opts := a.trayOptions()
 
-	// From the tray the bar is usually hidden: the click takes the
-	// full summon path and then enters editor mode.
 	trayMenuClick(t, opts, "Open config")
-	require.Len(t, r.emitted(eventShown), 1, "the bar summons")
-	require.Len(t, r.emitted(eventConfigOpen), 1, "and enters config-editor mode")
-	require.False(t, r.has("hide"), "tray open-config never hides the bar")
+	require.True(t, r.has("run:/test/bin/competent-search-thing config"),
+		"the tray item opens the settings window")
+	require.Empty(t, r.emitted(eventShown), "the bar is not summoned for it")
 	for _, c := range r.callNames() {
 		require.NotContains(t, c, "open:", "no file opens; the editor's escape hatch owns that")
 	}

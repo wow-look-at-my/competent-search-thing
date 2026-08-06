@@ -16,19 +16,10 @@ func DefaultPreview() PreviewConfig {
 		TextMaxKB:     DefaultPreviewTextMaxKB,
 		ImageMaxEdge:  DefaultPreviewImageMaxEdge,
 		DirMaxEntries: DefaultPreviewDirMax,
-		AIProvider:    DefaultPreviewAIProvider,
 		Kagi:          PreviewKagiConfig{MaxResults: DefaultPreviewKagiMax},
-		OpenAI: PreviewOpenAIConfig{
-			Model:           DefaultPreviewOpenAIModel,
-			MaxOutputTokens: DefaultPreviewOpenAITokens,
-		},
-		Anthropic: PreviewAnthropicConfig{
-			Model:           DefaultPreviewAnthropicModel,
-			MaxOutputTokens: DefaultPreviewAnthropicTokens,
-		},
-		Custom: PreviewCustomConfig{
-			MaxOutputTokens: DefaultPreviewCustomTokens,
-		},
+		// No default endpoint, model or key: the AI answer preview
+		// stays unavailable until the user names a server.
+		AI: PreviewAIConfig{MaxOutputTokens: DefaultPreviewAITokens},
 	}
 }
 

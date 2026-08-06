@@ -1,10 +1,9 @@
 package app
 
-// The config editor surface: the bound methods behind the in-app
-// config GUI (GetConfigSchema/GetConfigForEdit/SaveConfig/
-// OpenConfigFile) and the summon-into-config plumbing (showConfig +
-// the pendingConfig latch). The live-apply engine those methods feed
-// lives in configapply.go.
+// The config editor surface: the bound methods behind the settings
+// GUI (GetConfigSchema/GetConfigForEdit/SaveConfig/OpenConfigFile)
+// and showConfig, which opens the settings window as its own process.
+// The live-apply engine those methods feed lives in configapply.go.
 
 import (
 	"crypto/sha256"
@@ -16,15 +15,14 @@ import (
 	"strings"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/config"
+	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
 	"github.com/wow-look-at-my/competent-search-thing/schemas"
 )
 
 const (
-	// eventConfigOpen tells the frontend to enter config-editor mode;
-	// no payload. It is always emitted AFTER eventShown on a summon
-	// (the frontend's app:shown handler clears and re-renders the bar;
-	// an earlier config event would be clobbered).
-	eventConfigOpen = "config:open"
+	// configWindowArg is the subcommand that runs the settings window
+	// (internal/cli config.go); showConfig spawns this binary with it.
+	configWindowArg = "config"
 	// eventConfigChanged reports a config.json change that did not
 	// come from the GUI (an external edit hot-applied, or a failed
 	// reload); payload configChangedEvent.
@@ -198,29 +196,37 @@ func lineOfOffset(raw string, off int64) int {
 	return 1 + strings.Count(raw[:off], "\n")
 }
 
-// showConfig summons the bar into config-editor mode: the IPC/CLI
-// "config" command, the !config bang, and the tray "Open config" item
-// all funnel here. Before the frontend can render, the summon is
-// latched (pendingShow + pendingConfig, the toggle pattern) and
-// DomReady executes it; a hidden bar takes the exact
-// capture-context-then-show path other summons use; a visible bar
-// just gets the mode event. eventConfigOpen always FOLLOWS eventShown.
-// Goroutine-safe and pre-Startup-safe like the other IPC handlers.
+// showConfig opens the SETTINGS WINDOW: the IPC "config" command, the
+// !config bang, and the tray "Open config" item all funnel here. It
+// spawns "<this binary> config", a second process owning an ordinary
+// resizable window with its own single-instance socket -- so a second
+// request raises the window already open rather than opening another.
+//
+// The editor used to live in the bar's own window, which is a
+// frameless always-on-top panel that hides itself on focus loss: the
+// editor had to suppress that, and an alt-tab then buried it behind
+// other windows with no way back to it. A normal top-level window is
+// reachable from the taskbar and the window switcher like anything
+// else, and it needs no coordination with the bar at all: it saves
+// config.json, and this instance's config watcher hot-applies the
+// change.
+//
+// Goroutine-safe and pre-Startup-safe (no runtime context needed).
 func (a *App) showConfig() {
-	a.mu.Lock()
-	if !a.domReady {
-		a.pendingShow = true
-		a.pendingConfig = true
-		a.mu.Unlock()
+	exe, err := a.plat.executable()
+	if err != nil {
+		log.Printf("config: cannot locate this binary to open the settings window: %v", err)
 		return
 	}
-	visible := a.visible
-	a.mu.Unlock()
-	if !visible {
-		a.captureAppContext()
-		a.showOnCursorDisplay()
+	// The STABLE spelling, for the same reason the GNOME keybinding
+	// command uses it: a versioned install path (Homebrew Cellar)
+	// stops resolving the moment the app is upgraded.
+	exe = platform.StableExecutable(exe, a.plat.args0())
+	if err := a.plat.run([]string{exe, configWindowArg}, nil); err != nil {
+		log.Printf("config: opening the settings window failed: %v", err)
+		return
 	}
-	a.emitEvent(eventConfigOpen)
+	log.Printf("config: opening the settings window (%s %s)", exe, configWindowArg)
 }
 
 // setLastSavedSum records the checksum of the last GUI-saved

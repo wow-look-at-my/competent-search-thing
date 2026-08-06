@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"os"
+	"os/exec"
 	goruntime "runtime"
 	"runtime/debug"
 	"time"
@@ -109,6 +110,11 @@ type platformSeams struct {
 	// on the GTK thread, linux only; false elsewhere, where
 	// cursorInfo's Work rects cover the clamp).
 	windowWorkArea func() (platform.Rect, bool)
+	// lookPath resolves a bare command name against PATH (production
+	// exec.LookPath): it both finds the terminal emulator and decides
+	// whether a typed word names a program (runterm.go). nil means no
+	// run-in-terminal capability at all.
+	lookPath func(name string) (string, error)
 	// lstat probes the disk for the outside-roots hint (hint.go) and
 	// the launch path's directory check; production is os.Lstat, tests
 	// pin it so no real IO happens.
@@ -214,6 +220,7 @@ func defaultPlatformSeams() platformSeams {
 		configurePanel:  native.ConfigurePanel,
 		setWindowSize:   native.SetWindowSize,
 		windowWorkArea:  native.WindowWorkArea,
+		lookPath:        exec.LookPath,
 		lstat:           os.Lstat,
 		open:            launcher.OpenEnv,
 		reveal:          launcher.RevealEnv,

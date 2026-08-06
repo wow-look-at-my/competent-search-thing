@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -143,78 +144,29 @@ func TestSaveConfigAppliesLive(t *testing.T) {
 	require.Empty(t, res.ApplyErrors)
 }
 
-func TestShowConfigLatchesUntilDomReady(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{})
-	a.Startup(context.Background())
-
-	a.showConfig() // frontend not ready: latched
-	require.False(t, r.has("show"))
-	require.Empty(t, r.emitted(eventConfigOpen))
-
-	a.DomReady(context.Background())
-	require.Len(t, r.emitted(eventShown), 1, "the latched summon shows the bar")
-	require.Len(t, r.emitted(eventConfigOpen), 1, "and enters editor mode")
-
-	// Ordering contract: config:open strictly after app:shown (the
-	// frontend's app:shown handler re-renders the bar).
-	r.mu.Lock()
-	emits := append([]emittedEvent(nil), r.emits...)
-	r.mu.Unlock()
-	var shownAt, cfgAt int
-	for i, e := range emits {
-		switch e.name {
-		case eventShown:
-			shownAt = i
-		case eventConfigOpen:
-			cfgAt = i
-		}
-	}
-	require.Greater(t, cfgAt, shownAt, "config:open follows app:shown")
-}
-
-func TestShowConfigWhenHiddenSummons(t *testing.T) {
+// showConfig opens the SETTINGS WINDOW: a second process, never a
+// mode of the bar (configwindow.go explains why).
+func TestShowConfigSpawnsTheSettingsWindow(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
 	a.Startup(context.Background())
 	a.DomReady(context.Background())
 
 	a.showConfig()
-	require.Len(t, r.emitted(eventShown), 1, "hidden bar: the full summon path runs")
-	require.Len(t, r.emitted(eventConfigOpen), 1)
+	require.True(t, r.has("run:/test/bin/competent-search-thing config"),
+		"the settings window is spawned as its own process")
+	require.Empty(t, r.emitted(eventShown), "and the bar is never summoned for it")
 }
 
-func TestShowConfigWhenVisibleJustEmits(t *testing.T) {
+// A binary we cannot locate means no settings window -- and, above
+// all, no crash and no half-open bar.
+func TestShowConfigWithoutAnExecutablePath(t *testing.T) {
 	a, r := newTestApp(t, nil, Options{})
+	a.plat.executable = func() (string, error) { return "", errors.New("no exe") }
 	a.Startup(context.Background())
 	a.DomReady(context.Background())
-	a.showOnCursorDisplay()
-	require.Len(t, r.emitted(eventShown), 1)
 
 	a.showConfig()
-	require.Len(t, r.emitted(eventShown), 1, "no re-summon of a visible bar")
-	require.Len(t, r.emitted(eventConfigOpen), 1, "just the mode event")
-}
-
-func TestHideCancelsPendingConfig(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{})
-	a.Startup(context.Background())
-	a.showConfig() // latched
-	a.Hide()       // an IPC hide while booting wins
-	a.DomReady(context.Background())
-	require.Empty(t, r.emitted(eventShown), "the latched summon died with the hide")
-	require.Empty(t, r.emitted(eventConfigOpen))
-}
-
-func TestOpenConfigOnStartup(t *testing.T) {
-	a, r := newTestApp(t, nil, Options{OpenConfigOnStartup: true})
-	a.Startup(context.Background())
-	require.Empty(t, r.emitted(eventConfigOpen), "nothing before DomReady")
-
-	a.DomReady(context.Background())
-	require.Len(t, r.emitted(eventShown), 1, "OpenConfigOnStartup implies the show")
-	require.Len(t, r.emitted(eventConfigOpen), 1)
-
-	a.DomReady(context.Background())
-	require.Len(t, r.emitted(eventConfigOpen), 1, "the latch executes exactly once")
+	require.False(t, r.has("run:/test/bin/competent-search-thing config"))
 }
 
 func TestStartupWiresIPCConfigHandler(t *testing.T) {
@@ -228,10 +180,9 @@ func TestStartupWiresIPCConfigHandler(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, rep.OK)
 	require.Equal(t, ipc.CmdConfig, rep.Accepted)
-	require.Eventually(t, func() bool { return len(r.emitted(eventConfigOpen)) == 1 },
-		5*time.Second, 5*time.Millisecond, "IPC config summons the editor")
-	require.Eventually(t, func() bool { return len(r.emitted(eventShown)) == 1 },
-		5*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return r.has("run:/test/bin/competent-search-thing config")
+	}, 5*time.Second, 5*time.Millisecond, "IPC config opens the settings window")
 }
 
 func TestOpenConfigFileBoundMethod(t *testing.T) {

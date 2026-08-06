@@ -246,6 +246,10 @@ func newTestApp(t *testing.T, m *index.Manager, opt Options) (*App, *seamRecorde
 	// No real /proc walks: the frecency cwd derivation stays inert
 	// unless a test injects a fake process tree.
 	a.plat.procTree = nil
+	// No real PATH probing: the run-in-terminal capability stays off
+	// (no terminal detection, no per-query LookPath) unless a test
+	// injects a fake lookup.
+	a.plat.lookPath = nil
 	// No real NSWorkspace observers (the seam is non-nil when the
 	// darwin CI job builds the production seams); Space-watch tests
 	// inject a recording fake.

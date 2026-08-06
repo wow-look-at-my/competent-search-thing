@@ -371,7 +371,7 @@ that replaces the file re-offers.
 If you decline the prompt (or it cannot run -- no polkit agent, a
 headless session), the app remembers your choice and never asks again;
 it falls back to the per-directory hot set and shows how to enable full
-coverage later. To retry from the GUI, open the config editor
+coverage later. To retry from the GUI, open the settings window
 (**!config**, or the tray's "Open config") and click **Set up
 full-filesystem watching** in the Watcher section -- it runs the same
 grant and applies at the next launch. From a terminal:
@@ -991,8 +991,22 @@ WebView2 runtime is required (preinstalled on Windows 11).
 
 The app carries a built-in config editor: run
 `competent-search-thing config`, type `!config` into the bar, or pick
-"Open config" from the tray icon, and the bar switches into editor
-mode (the same single window -- no second window, no dialog).
+"Open config" from the tray icon, and the settings open in their own
+ORDINARY window -- resizable, movable, in the window list and
+Alt-Tab, and it stays where you put it.
+
+That window is a separate process with its own single-instance socket
+(`COMPETENT_SEARCH_CONFIG_SOCKET`, default
+`$XDG_RUNTIME_DIR/competent-search-thing-config.sock`), because the
+searchbar's window is a Spotlight-style panel: always on top, no
+decorations, and hiding itself the moment it loses focus. Settings
+need the opposite of all three, and Wails gives one window per
+process. Asking for settings while they are already open just raises
+the existing window; closing them (Esc, the Close button, or the
+window manager's close button) ends that process and leaves the
+searchbar untouched. Saves reach the running searchbar the same way
+a hand edit does -- it watches `config.json` and applies changes
+live.
 
 The editor is rendered ENTIRELY from the shipped JSON Schema
 (`schemas/config.schema.json`), so every setting appears with its
@@ -1014,15 +1028,13 @@ clicking a dimmed entry clears the filter and jumps there.
   the schema's bounds, strings text fields; every control shows the
   schema description as help text, and a filter box at the top
   narrows the ~50 settings by name or description;
-- URLs in the help text are clickable links (the get-an-API-key pages
-  for Kagi, OpenAI, and Anthropic); they open in your browser, never
-  inside the app window;
-- the API keys (`preview.kagi.apiKey`, `preview.openai.apiKey`,
-  `preview.anthropic.apiKey`, `preview.custom.apiKey`) render as
+- URLs in the help text are clickable links (the get-an-API-key
+  pages); they open in your browser, never inside the app window;
+- the API keys (`preview.kagi.apiKey`, `preview.ai.apiKey`) render as
   password fields with a show/hide toggle and are never echoed
   anywhere else;
-- each preview provider section (`preview.kagi` / `openai` /
-  `anthropic` / `custom`) carries a **Test** button that sends one
+- each preview provider section (`preview.kagi` / `preview.ai`)
+  carries a **Test** button that sends one
   minimal real request with the values currently in the editor --
   unsaved edits included -- and reports the honest outcome inline
   (the Kagi test spends 1 API credit; the hint says so);
@@ -1039,19 +1051,9 @@ strict decode (typos are named with a line number), atomic write,
 then the live-apply pass -- and the editor reports exactly what
 happened: the applied sections, any per-knob "takes effect at next
 launch" note (see below), and any apply errors, then re-fetches so
-the app-repaired values are what you see. Esc (or Close) leaves the
-editor; with unsaved edits the first press warns and a second within
-two seconds discards them. Hiding the bar mid-edit (hotkey, tray,
-`hide`) does NOT lose your place: the next summon restores the
-editor exactly as you left it -- same scroll position, same focused
-setting, unsaved edits intact with the unsaved-changes note showing
--- so you can close with the hotkey, look something up, and summon
-straight back into the setting you were on (in memory for the app
-run; leaving via Esc/Close instead makes the next summon a normal
-search bar, and reopening the editor then still restores unsaved
-edits). While the
-editor is up, alt-tabbing away does NOT hide the window (the normal
-focus-loss auto-hide is suspended so you can check things mid-edit).
+the app-repaired values are what you see. Esc (or Close) closes the
+window; with unsaved edits the first press warns and a second within
+two seconds discards them.
 
 `config.json` itself stays reachable as an escape hatch via the
 "Open config.json" button: unknown keys a hand edit added are listed
@@ -1220,11 +1222,8 @@ configs gain it on their next save):
     "textMaxKB": 256,
     "imageMaxEdge": 800,
     "dirMaxEntries": 200,
-    "aiProvider": "openai",
     "kagi": { "apiKey": "", "baseUrl": "", "maxResults": 8 },
-    "openai": { "apiKey": "", "baseUrl": "", "model": "gpt-5-mini", "maxOutputTokens": 1024 },
-    "anthropic": { "apiKey": "", "baseUrl": "", "model": "claude-haiku-4-5", "maxOutputTokens": 1024 },
-    "custom": { "apiKey": "", "baseUrl": "", "model": "", "maxOutputTokens": 1024 }
+    "ai": { "apiKey": "", "baseUrl": "", "model": "", "maxOutputTokens": 1024 }
   },
   "rewrites": [
     {
@@ -1395,23 +1394,20 @@ Field reference:
   keep the classic bar-only window. `textMaxKB` (default 256) caps how much of a
   text file one preview reads; `imageMaxEdge` (default 800) caps a
   thumbnail's longest edge; `dirMaxEntries` (default 200) caps a
-  directory listing. `aiProvider` (`openai` default / `anthropic` /
-  `custom`) picks which section answers the AI preview. The API keys
-  (`kagi.apiKey`, `openai.apiKey`, `anthropic.apiKey`,
-  `custom.apiKey`) are SECRETS -- passed through verbatim, never
-  logged; the `KAGI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
-  environment variables fill empty ones. Per provider:
-  `kagi.maxResults` (default 8); `openai.model` (default
-  `gpt-5-mini`); `anthropic.model` (default `claude-haiku-4-5`);
-  `custom.model` (required, no invented default); each `.../
-  maxOutputTokens` defaults 1024. The `baseUrl` knobs point a
-  provider at a compatible server (empty = the official endpoint;
-  empty `openai.baseUrl` / `anthropic.baseUrl` also honor
-  `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`; `custom.baseUrl` is
-  REQUIRED -- it IS the endpoint); all pass through verbatim and are
-  never logged. Zero or negative numbers, an empty `aiProvider`, and
-  empty openai/anthropic models are repaired to the defaults. See
-  [Preview pane](#preview-pane).
+  directory listing. The API keys (`kagi.apiKey`, `ai.apiKey`) are
+  SECRETS -- passed through verbatim, never logged; the
+  `KAGI_API_KEY` / `COMPETENT_SEARCH_AI_API_KEY` environment
+  variables fill empty ones. `kagi.maxResults` defaults 8 and
+  `kagi.baseUrl` points at a compatible search server (empty = the
+  official endpoint). `ai` is the ONE AI answer endpoint, entirely
+  yours to describe: `ai.baseUrl` (REQUIRED, the OpenAI-compatible
+  API base including its version segment) and `ai.model` (REQUIRED,
+  no invented default) have no defaults and no environment
+  fallbacks, so nothing is sent anywhere until you name a server;
+  `ai.apiKey` is optional (local servers need none) and
+  `ai.maxOutputTokens` defaults 1024. Base URLs pass through
+  verbatim and are never logged. Zero or negative numbers are
+  repaired to the defaults. See [Preview pane](#preview-pane).
 
 The full format is formally described by
 [`schemas/config.schema.json`](schemas/config.schema.json) -- add a
@@ -1932,7 +1928,7 @@ its disable knob -- `firefox-frequent`, `firefox-tabs`):
 |------|------|
 | `!rescan` | rebuild the file index from disk now (errors while the initial build is still running) |
 | `!reload` | re-read `config.json` and the plugin manifests, restart providers |
-| `!config` | open the in-app config editor (see "Config editor"; `config.json` itself stays reachable from there) |
+| `!config` | open the settings window (see "Config editor"; `config.json` itself stays reachable from there) |
 | `!version` | copy the app version to the clipboard |
 | `!quit` | exit the app |
 | `!app <text>` / `!launch <text>` | search installed applications and launch the selection |
@@ -1996,9 +1992,46 @@ exactly like `!app` does. This is the fourth built-in provider,
 { "plugins": { "entries": { "apps-search": { "enabled": false } } } }
 ```
 
-The remaining built-ins, `firefox-frequent` and `firefox-tabs`, have
-no bangs: they answer plain queries with a "Frequent Sites" and an
-"Open Tabs" section -- see the next two sections.
+The remaining built-ins, `run-terminal`, `firefox-frequent` and
+`firefox-tabs`, have no bangs: they answer plain queries with a
+"Run", a "Frequent Sites" and an "Open Tabs" section -- see the next
+sections.
+
+### Command-line programs (run in a terminal)
+
+Type `htop` and the bar offers **Run** -> `htop` in a terminal
+window. This is the `run-terminal` built-in: programs on your `$PATH`
+that have no desktop entry are invisible to every other section, and
+the thing you want from them is a terminal.
+
+- It matches an EXACT program name only -- the first word of the
+  query must be a program on `$PATH`. No prefix matching, no fuzzy:
+  `ht` offers nothing, `htop` offers `htop`. A typed name is an
+  unambiguous request, and anything looser would put an executable
+  row in front of your files on every third keystroke.
+- Arguments come along: `htop -d 5` runs exactly that. Quoted
+  arguments survive (`mpv 'my film.mkv'` is two words), and they are
+  passed as separate arguments -- never re-joined into a shell
+  string, so there is nothing to escape.
+- A path is not a `$PATH` lookup: `./build.sh` and `/usr/bin/htop`
+  stay file results.
+- The terminal is resolved at startup: `$TERMINAL` if it resolves,
+  then the first of `x-terminal-emulator`, `gnome-terminal`,
+  `konsole`, `xfce4-terminal`, `mate-terminal`, `terminator`,
+  `ghostty`, `kitty`, `wezterm`, `alacritty`, `foot`, `lxterminal`,
+  `urxvt`, `rxvt`, `st`, `xterm` found on `$PATH`. macOS uses
+  `open -a Terminal`, which cannot carry arguments -- so there the
+  row appears for a bare program name only. Windows uses Windows
+  Terminal, else `cmd.exe`. No terminal found means no section at
+  all.
+- Apps with a desktop entry keep winning: an exact-name tie orders
+  the **Apps** section first, so `firefox` still launches the app
+  rather than a terminal running it.
+- To turn it off:
+
+```json
+{ "plugins": { "entries": { "run-terminal": { "enabled": false } } } }
+```
 
 ### Frequent sites (Firefox)
 
@@ -2700,27 +2733,27 @@ Web search needs a Kagi key -- get one at
 `KAGI_API_KEY` environment variable; `preview.kagi.maxResults`
 (default 8) caps the hits.
 
-The AI answerer is chosen by `preview.aiProvider`:
+AI answers go to ONE endpoint, which you name in full. There is no
+built-in provider list and no default endpoint: nothing is ever sent
+anywhere until `preview.ai.baseUrl` points at a server you chose.
 
-- `openai` (the default): `preview.openai.apiKey` or
-  `OPENAI_API_KEY` -- get a key at
-  <https://platform.openai.com/api-keys>; `model` (default
-  `gpt-5-mini`) and `maxOutputTokens` (default 1024) shape the
-  answer.
-- `anthropic`: `preview.anthropic.apiKey` or `ANTHROPIC_API_KEY` --
-  get a key at <https://platform.claude.com/settings/>; `model`
-  defaults to `claude-haiku-4-5` (the cheapest current-generation
-  model).
-- `custom`: any OpenAI-compatible endpoint you type in -- Ollama, LM
-  Studio, vLLM, a proxy. `preview.custom.baseUrl` is REQUIRED (it IS
-  the endpoint), `model` is required, and `apiKey` is optional
-  (local servers usually need none; empty sends no auth header).
+- `preview.ai.baseUrl` -- REQUIRED. The API base **including its
+  version segment**, exactly what every SDK's `base_url` takes:
+  `https://api.openai.com/v1`, `https://api.anthropic.com/v1`,
+  `https://openrouter.ai/api/v1`, `http://localhost:11434/v1`
+  (Ollama), LM Studio, vLLM, llama.cpp, a proxy -- anything speaking
+  the OpenAI-compatible chat-completions API. Requests go to
+  `<baseUrl>/chat/completions`.
+- `preview.ai.model` -- REQUIRED, and unguessable for an arbitrary
+  server, so it has no default.
+- `preview.ai.apiKey` -- OPTIONAL: local servers usually need none,
+  and an empty key sends no `Authorization` header at all. Falls back
+  to the `COMPETENT_SEARCH_AI_API_KEY` environment variable.
+- `preview.ai.maxOutputTokens` (default 1024) caps the answer.
 
-Only the selected provider is consulted; the other sections keep
-their values so switching back is one dropdown change. Provider
-switches apply live -- no restart.
+Changes apply live -- no restart.
 
-Every provider section in the config editor has a **Test** button:
+Each provider section in the config editor has a **Test** button:
 one minimal real request against the values currently in the editor
 (unsaved edits included; empty fields fall back to the environment
 variables above), answering inline with an honest ok or the
@@ -2728,35 +2761,23 @@ provider's error and HTTP status. The Kagi test runs a real limit-1
 search and costs 1 API credit -- the cheapest honest test the API
 offers.
 
-Endpoints are configurable for self-hosted or compatible servers --
-empty (the default) means the official endpoint:
-
-- `preview.kagi.baseUrl` (config only, no environment fallback):
-  replaces the whole default base (`https://kagi.com/api/v1`);
-  searches go to `<baseUrl>/search`, so the target must speak the
-  Kagi Search API.
-- `preview.openai.baseUrl`, or the `OPENAI_BASE_URL` environment
-  variable (the SDK convention; the config value wins): answers go to
-  `<baseUrl>/v1/responses`, so the target must implement the OpenAI
-  RESPONSES API -- pointing it at a server that only offers
-  `/v1/chat/completions` will not work. `preview.custom.baseUrl`
-  speaks the same wire shape.
-- `preview.anthropic.baseUrl`, or `ANTHROPIC_BASE_URL` (config
-  wins): answers go to `<baseUrl>/v1/messages`, the Anthropic
-  Messages API.
+`preview.kagi.baseUrl` (config only, no environment fallback) is the
+matching knob for self-hosted or compatible search: empty means the
+official endpoint, and a value replaces the whole default base
+(`https://kagi.com/api/v1`). Searches go to `<baseUrl>/search`, so
+the target must speak the Kagi Search API.
 
 One trailing `/` on a base URL is trimmed. A value that is not
 `http(s)` with a host is rejected: the provider stays unavailable and
 the fetch answers with a terse error naming the knob
-(`kagi: invalid baseUrl (preview.kagi.baseUrl)` / `openai: invalid
-baseUrl (preview.openai.baseUrl / OPENAI_BASE_URL)` / the anthropic
-and custom equivalents) -- never the configured value, which may
-carry credentials.
+(`kagi: invalid baseUrl (preview.kagi.baseUrl)` /
+`ai: invalid baseUrl (preview.ai.baseUrl)`) -- never the configured
+value, which may carry credentials.
 
 The keys are passed through verbatim and NEVER logged or exposed to
-the page -- the frontend only learns "configured or not" plus the
-selected provider, and an unconfigured provider's button renders
-disabled with a hint naming its config keys.
+the page -- the frontend only learns "configured or not", and an
+unconfigured provider's button renders disabled with a hint naming
+its config keys.
 
 Web searches go to the Kagi Search API (`POST <baseUrl>/search` with
 a JSON body, default base `https://kagi.com/api/v1`,
@@ -2768,16 +2789,14 @@ a burst of 3 requests refilling at 1 per second -- fails fast with
 "rate limited, retry shortly" instead of dialing. Searches time out
 hard at 10 seconds.
 
-AI answers go to the selected provider -- the OpenAI Responses API
-(`POST <baseUrl>/v1/responses`, default base
-`https://api.openai.com`; the custom provider speaks the same shape)
-or the Anthropic Messages API (`POST <baseUrl>/v1/messages`, default
-base `https://api.anthropic.com`) -- with your `model` and
-`maxOutputTokens`; answers cut off by the token cap end with a
-truncation marker line. Answers are cached PERSISTENTLY in
-`<configDir>/aicache.json` -- up to 128 entries, least-recently-used
-evicted, file mode 0600, keyed by provider + model + question so
-switching providers never serves another backend's answer -- and
+AI answers go to your configured endpoint as one chat completion
+(`POST <baseUrl>/chat/completions`, `{"model", "messages",
+"max_tokens"}`) with your `model` and `maxOutputTokens`; answers cut
+off by the token cap end with a truncation marker line. Answers are
+cached PERSISTENTLY in `<configDir>/aicache.json` -- up to 128
+entries, least-recently-used evicted, file mode 0600, keyed by model
++ endpoint host + question so the same model name pointed at a
+different server never serves that server's answers -- and
 asking the same question again (even across restarts) answers
 instantly with a `cached` badge and zero network; delete the file to
 clear the cache. Answers time out hard at 90 seconds.
@@ -2795,8 +2814,8 @@ GNOME desktop that is the top-right status area -- with a menu:
 
 - **Show/Hide** -- toggle the searchbar (same path as the hotkey)
 - **Rescan now** -- request a full re-index
-- **Open config** -- summon the bar into the in-app config editor
-  (see "Config editor"; `config.json` stays reachable from there)
+- **Open config** -- open the settings window (see "Config editor";
+  `config.json` stays reachable from there)
 - **Quit** -- exit the app
 
 The bar itself stays hidden until summoned, so the tray icon is the
@@ -2970,19 +2989,19 @@ single instance around one unix socket (in `$XDG_RUNTIME_DIR`):
 - `competent-search-thing hide` -- hides the running instance's bar;
   unlike the others it never starts the app (prints a notice and
   exits 1 when nothing is running).
-- `competent-search-thing config` -- opens the running instance's
-  in-app config editor (see "Config editor"); starts the app when it
-  is not running, opening the editor once the frontend is ready. A
-  running instance too old to know the command is replaced
-  automatically (new instance wins) and the editor opens in the new
-  one.
+- `competent-search-thing config` -- opens the settings window (see
+  "Config editor"). It is its own process with its own
+  single-instance socket, so it neither starts nor needs the
+  searchbar; asking again raises the window that is already open.
 - `competent-search-thing --version` -- prints the app version.
 
 The running instance acknowledges each `toggle`/`show`/`hide`/
 `config` immediately and executes the action right after the reply, so an
 instance busy with the initial index build can no longer time the
 client out -- the command is accepted instantly and acts as soon as
-the app gets to it.
+the app gets to it. (`config` still rides the searchbar's socket for
+the tray item and the `!config` builtin; the searchbar answers it by
+launching the settings process.)
 
 Any keybinding mechanism that can run a command can therefore summon
 the bar. That is the whole Wayland story in one line: bind a key to
@@ -3185,6 +3204,14 @@ For debugging and unusual setups:
 - `COMPETENT_SEARCH_NO_SERVICE=1` -- skip the automatic login-service
   registration for this process (see
   [Runs as a login service](#runs-as-a-login-service)).
+- `COMPETENT_SEARCH_CONFIG_SOCKET` -- override the settings window's
+  socket path (default
+  `$XDG_RUNTIME_DIR/competent-search-thing-config.sock`); the
+  settings window is a second process with its own single-instance
+  socket, see [Config editor](#config-editor).
+- `COMPETENT_SEARCH_AI_API_KEY` -- the AI answer endpoint's key when
+  `preview.ai.apiKey` is empty (see
+  [Preview pane](#preview-pane)).
 
 ### What Wayland does not allow
 

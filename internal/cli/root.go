@@ -36,10 +36,11 @@ type RunOptions struct {
 	// frontend is ready (set when a toggle/show subcommand had to
 	// start the app itself).
 	ShowOnStartup bool
-	// OpenConfig asks the app to open the bar straight into its
-	// config editor once the frontend is ready (set when the config
-	// subcommand had to start the app itself).
-	OpenConfig bool
+	// ConfigWindow runs the GUI as the SETTINGS WINDOW instead of the
+	// searchbar (the config subcommand): an ordinary window of its
+	// own, on its own single-instance socket, with no index and no
+	// bar (internal/app configwindow.go).
+	ConfigWindow bool
 }
 
 // env is the state every command builder closes over: the app version,

@@ -12,7 +12,7 @@ import (
 // the terse client errors carry the HTTP status and a capped provider
 // message, never the key, never the raw body. NOTE the Kagi probe
 // spends one real search credit (a limit-1 search is the cheapest
-// honest test the API offers); the AI probes cap the answer at
+// honest test the API offers); the AI probe caps the answer at
 // probeMaxOutputTokens.
 
 // Probe bounds: defense in depth against a hostile frontend echo (the
@@ -21,9 +21,8 @@ const (
 	probeMaxKeyBytes   = 4096
 	probeMaxBaseBytes  = 2048
 	probeMaxModelBytes = 256
-	// probeMaxOutputTokens caps one probe answer -- deliberately tiny
-	// (the OpenAI Responses API rejects values below 16; Anthropic
-	// accepts any positive cap, and 16 is equally cheap there).
+	// probeMaxOutputTokens caps one probe answer -- deliberately tiny;
+	// 16 is the smallest cap the strictest servers accept.
 	probeMaxOutputTokens = 16
 	// probePrompt is the one-shot probe input. The answer content is
 	// irrelevant -- reachability and authentication are the test.
@@ -32,11 +31,18 @@ const (
 	probeQuery = "connectivity test"
 )
 
+// The two testable providers -- the whole set: the web search and the
+// one user-configured AI endpoint.
+const (
+	ProviderKagi = "kagi"
+	ProviderAI   = "ai"
+)
+
 // ProbeParams carries one probe's candidate values. Provider selects
-// the endpoint ("kagi", "openai", "anthropic", or "custom"); the rest
-// are that provider's candidate settings, already env-resolved by the
-// caller (the app layer applies the same config-else-environment
-// resolution the live dispatcher uses).
+// the endpoint (ProviderKagi or ProviderAI); the rest are that
+// provider's candidate settings, already env-resolved by the caller
+// (the app layer applies the same config-else-environment resolution
+// the live dispatcher uses).
 type ProbeParams struct {
 	Provider string
 	APIKey   string
@@ -69,14 +75,10 @@ func ProbeProvider(ctx context.Context, p ProbeParams) ProbeResult {
 		return probeFail("test: model name too long")
 	}
 	switch strings.ToLower(strings.TrimSpace(p.Provider)) {
-	case "kagi":
+	case ProviderKagi:
 		return probeKagi(ctx, p)
-	case aiProviderOpenAI:
-		return probeOpenAICompat(ctx, p, "openai", errAINoKey, errAINoModel, errAIBadBase, true)
-	case aiProviderAnthropic:
-		return probeAnthropic(ctx, p)
-	case aiProviderCustom:
-		return probeCustom(ctx, p)
+	case ProviderAI:
+		return probeAI(ctx, p)
 	default:
 		return probeFail(fmt.Sprintf("test: unknown provider %q", p.Provider))
 	}
@@ -104,46 +106,21 @@ func probeKagi(ctx context.Context, p ProbeParams) ProbeResult {
 	return ProbeResult{OK: true, Message: fmt.Sprintf("ok: search answered with %d %s (1 credit spent)", len(results), noun)}
 }
 
-// probeOpenAICompat probes an OpenAI-Responses-API endpoint --
-// the OpenAI provider itself and (via probeCustom) any compatible
-// server. keyRequired=false skips the key check (custom endpoints may
-// be keyless).
-func probeOpenAICompat(ctx context.Context, p ProbeParams, label, noKey, noModel, badBase string, keyRequired bool) ProbeResult {
-	if keyRequired && p.APIKey == "" {
-		return probeFail(noKey)
-	}
-	if p.Model == "" {
-		return probeFail(noModel)
-	}
-	base, err := normalizeBaseURL(p.BaseURL)
-	if err != nil {
-		return probeFail(badBase)
-	}
-	client := NewOpenAIClient(p.APIKey, p.Model, probeMaxOutputTokens)
-	client.BaseURL = base
-	client.Name = label
-	return probeAsk(ctx, client.Ask)
-}
-
-func probeCustom(ctx context.Context, p ProbeParams) ProbeResult {
+// probeAI probes the configured chat-completions endpoint. The key is
+// optional (keyless local servers are the common case); the base URL
+// and model are not, exactly as the live wiring requires them.
+func probeAI(ctx context.Context, p ProbeParams) ProbeResult {
 	if p.BaseURL == "" {
-		return probeFail(errCustomNoBase)
-	}
-	return probeOpenAICompat(ctx, p, "custom", "", errCustomNoModel, errCustomBadBase, false)
-}
-
-func probeAnthropic(ctx context.Context, p ProbeParams) ProbeResult {
-	if p.APIKey == "" {
-		return probeFail(errAnthropicNoKey)
+		return probeFail(errAINoBase)
 	}
 	if p.Model == "" {
-		return probeFail(errAnthropicNoModel)
+		return probeFail(errAINoModel)
 	}
 	base, err := normalizeBaseURL(p.BaseURL)
 	if err != nil {
-		return probeFail(errAnthropicBadBase)
+		return probeFail(errAIBadBase)
 	}
-	client := NewAnthropicClient(p.APIKey, p.Model, probeMaxOutputTokens)
+	client := NewAIClient(p.APIKey, p.Model, probeMaxOutputTokens)
 	client.BaseURL = base
 	return probeAsk(ctx, client.Ask)
 }
