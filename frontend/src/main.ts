@@ -16,7 +16,7 @@
 // the opt-in preview pane lives in preview.ts (wired below through
 // GetPreviewConfig + the selection/query hooks).
 
-import { configModeActive, initConfig, openConfigWindow } from "./config";
+import { initConfig, openConfigWindow } from "./config";
 import { initFileIcons } from "./fileicons/fileicons";
 import { initFPSMeter } from "./fpsmeter";
 import { initResize } from "./resize";
@@ -645,12 +645,6 @@ function hideBar(app: WailsAppBindings): void {
 }
 
 function onKeydown(app: WailsAppBindings, ev: KeyboardEvent): void {
-  if (configModeActive()) {
-    // config.ts owns the keys in editor mode (its own window handler
-    // covers Esc and Ctrl+S; everything else keeps its default so
-    // form controls behave like form controls).
-    return;
-  }
   switch (ev.key) {
     case "ArrowDown":
       ev.preventDefault();
@@ -712,17 +706,10 @@ function wireEvents(app: WailsAppBindings, rt: WailsRuntime): void {
     // The bar always summons empty: the pre-hide text is deliberately
     // dropped (press Up to get past searches back), and any history
     // browsing is reset. The pipeline re-run renders the empty-query
-    // cheat sheet and doubles as the plugin cancel signal. This reset
-    // runs even when the config editor is being RESTORED (the bar hid
-    // while the editor was up -- config.ts keeps the mode; see its
-    // app:shown handler): it keeps the search layer underneath fresh
-    // for the eventual Esc-out. Only the focus steal is skipped --
-    // the restored editor re-asserts its own focused control.
+    // cheat sheet and doubles as the plugin cancel signal.
     inputEl.value = "";
     state.histCursor = -1;
-    if (!configModeActive()) {
-      inputEl.focus();
-    }
+    inputEl.focus();
     scheduleSearch(app);
     // Instant cached snapshot (the summon's fresh samples follow as
     // stats:update events moments later).
@@ -868,10 +855,7 @@ function wire(app: WailsAppBindings, rt: WailsRuntime): void {
     );
   }
   window.addEventListener("blur", () => {
-    // The blur auto-hide is suppressed in config mode: users alt-tab
-    // away to check things mid-edit, and losing the editor (plus its
-    // unsaved changes' visibility) on focus loss would be hostile.
-    if (state.visible && !configModeActive()) {
+    if (state.visible) {
       hideBar(app);
     }
   });

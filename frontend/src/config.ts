@@ -40,8 +40,7 @@
 // config-file watcher -- which is also why the settings window works
 // with no app running. Key ownership: this module owns Esc
 // (dirty-aware close) and Ctrl/Cmd+S via its own window keydown
-// handler (the preview.ts pattern), and configModeActive() stays
-// exported for main.ts's gates. All DOM building is text-node-only;
+// handler (the preview.ts pattern). All DOM building is text-node-only;
 // styling lives in config.css over the existing --sb-* tokens.
 
 import "./config.css";
@@ -139,9 +138,8 @@ let closeBtn: HTMLButtonElement;
 let openFileBtn: HTMLButtonElement;
 let queryEl: HTMLInputElement;
 
-// configModeActive gates main.ts's keydown and blur->Hide handlers:
-// while the editor is up, Esc/arrows/Enter belong to it and an
-// alt-tab away must NOT hide the bar.
+// configModeActive reports whether the editor is up -- the test
+// suites' observable for "openConfigWindow rendered".
 export function configModeActive(): boolean {
   return active;
 }
@@ -873,26 +871,12 @@ export function providerTestRequest(
         baseUrl: str(["preview", "kagi", "baseUrl"]),
         model: "",
       };
-    case "preview.openai":
+    case "preview.ai":
       return {
-        provider: "openai",
-        apiKey: str(["preview", "openai", "apiKey"]),
-        baseUrl: str(["preview", "openai", "baseUrl"]),
-        model: str(["preview", "openai", "model"]),
-      };
-    case "preview.anthropic":
-      return {
-        provider: "anthropic",
-        apiKey: str(["preview", "anthropic", "apiKey"]),
-        baseUrl: str(["preview", "anthropic", "baseUrl"]),
-        model: str(["preview", "anthropic", "model"]),
-      };
-    case "preview.custom":
-      return {
-        provider: "custom",
-        apiKey: str(["preview", "custom", "apiKey"]),
-        baseUrl: str(["preview", "custom", "baseUrl"]),
-        model: str(["preview", "custom", "model"]),
+        provider: "ai",
+        apiKey: str(["preview", "ai", "apiKey"]),
+        baseUrl: str(["preview", "ai", "baseUrl"]),
+        model: str(["preview", "ai", "model"]),
       };
     default:
       return null;
@@ -909,10 +893,10 @@ function testButtonHint(dotted: string): string {
   return "Sends ONE tiny real request with the values above (unsaved edits included) and reports the endpoint's honest answer.";
 }
 
-// appendTestRow adds the provider Test row to the four preview
-// provider sections. The probe runs against the CANDIDATE working
-// copy (empty fields fall back to the provider's environment
-// variables Go-side, like the live dispatcher); the outcome renders
+// appendTestRow adds the Test row to the two preview provider
+// sections (kagi, ai). The probe runs against the CANDIDATE working
+// copy (an empty key falls back to that provider's environment
+// variable Go-side, like the live dispatcher); the outcome renders
 // inline next to the button.
 function appendTestRow(sec: HTMLElement, dotted: string): void {
   if (providerTestRequest(dotted, {}) === null) {

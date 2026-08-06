@@ -80,7 +80,6 @@ function fakeEnv(schemaJson: string, configJson: string): FakeEnv {
       Promise.resolve({
         enabled: false,
         kagiConfigured: false,
-        aiProvider: "openai",
         aiConfigured: false,
         resultsWidth: 680,
       }),

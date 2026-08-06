@@ -37,7 +37,7 @@ const schema = {
             baseUrl: { type: "string", description: "custom base" },
           },
         },
-        custom: {
+        ai: {
           type: "object",
           properties: {
             apiKey: { type: "string", description: "SECRET: optional." },
@@ -53,7 +53,7 @@ const schema = {
 const docJson = JSON.stringify({
   preview: {
     kagi: { apiKey: "saved-key", baseUrl: "" },
-    custom: { apiKey: "", baseUrl: "http://localhost:1234", model: "llama3" },
+    ai: { apiKey: "", baseUrl: "http://localhost:1234/v1", model: "llama3" },
   },
 });
 
@@ -75,7 +75,6 @@ function fakeEnv(): { app: WailsAppBindings; fire: (name: string) => void } {
       Promise.resolve({
         enabled: false,
         kagiConfigured: false,
-        aiProvider: "openai",
         aiConfigured: false,
         resultsWidth: 680,
       }),
@@ -151,9 +150,7 @@ describe("providerTestRequest", () => {
   const from = {
     preview: {
       kagi: { apiKey: "kk", baseUrl: "kb" },
-      openai: { apiKey: "ok", baseUrl: "ob", model: "om" },
-      anthropic: { apiKey: "ak", baseUrl: "ab", model: "am" },
-      custom: { apiKey: "ck", baseUrl: "cb", model: "cm" },
+      ai: { apiKey: "ak", baseUrl: "ab", model: "am" },
     },
   };
 
@@ -164,23 +161,11 @@ describe("providerTestRequest", () => {
       baseUrl: "kb",
       model: "",
     });
-    expect(providerTestRequest("preview.openai", from)).toEqual({
-      provider: "openai",
-      apiKey: "ok",
-      baseUrl: "ob",
-      model: "om",
-    });
-    expect(providerTestRequest("preview.anthropic", from)).toEqual({
-      provider: "anthropic",
+    expect(providerTestRequest("preview.ai", from)).toEqual({
+      provider: "ai",
       apiKey: "ak",
       baseUrl: "ab",
       model: "am",
-    });
-    expect(providerTestRequest("preview.custom", from)).toEqual({
-      provider: "custom",
-      apiKey: "ck",
-      baseUrl: "cb",
-      model: "cm",
     });
   });
 
@@ -188,11 +173,15 @@ describe("providerTestRequest", () => {
     expect(providerTestRequest("preview", from)).toBeNull();
     expect(providerTestRequest("search.frecency", from)).toBeNull();
     expect(providerTestRequest("preview.kagi.apiKey", from)).toBeNull();
+    // The retired per-provider sections are gone, not silently mapped.
+    expect(providerTestRequest("preview.openai", from)).toBeNull();
+    expect(providerTestRequest("preview.anthropic", from)).toBeNull();
+    expect(providerTestRequest("preview.custom", from)).toBeNull();
   });
 
   it("degrades missing values to empty strings", () => {
-    expect(providerTestRequest("preview.anthropic", {})).toEqual({
-      provider: "anthropic",
+    expect(providerTestRequest("preview.ai", {})).toEqual({
+      provider: "ai",
       apiKey: "",
       baseUrl: "",
       model: "",
@@ -253,20 +242,20 @@ describe("editor provider extras (DOM)", () => {
   it("renders a failed probe with the error class and the honest message", async () => {
     probeResult = { ok: false, message: "kagi: HTTP 401: Invalid API Key" };
     const btn = document.getElementById(
-      "cfg-test-preview-custom",
+      "cfg-test-preview-ai",
     ) as HTMLButtonElement;
     expect(btn).not.toBeNull();
     btn.click();
     await tick();
 
     expect(testedRequests.at(-1)).toEqual({
-      provider: "custom",
+      provider: "ai",
       apiKey: "",
-      baseUrl: "http://localhost:1234",
+      baseUrl: "http://localhost:1234/v1",
       model: "llama3",
     });
     const result = document
-      .getElementById("config-sec-preview.custom")
+      .getElementById("config-sec-preview.ai")
       ?.querySelector<HTMLSpanElement>(".config-test-result");
     expect(result?.textContent).toBe("kagi: HTTP 401: Invalid API Key");
     expect(result?.classList.contains("config-test-err")).toBe(true);

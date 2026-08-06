@@ -44,9 +44,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   ONLY by the darwin frontend so linux behavior cannot change) --
   and with the flag off all three fields
   stay nil, byte-identical to the pre-flag call (CI screenshots run
-  flag-off). runGUI also wires RunOptions.OpenConfig ->
-  app Options.OpenConfigOnStartup (the CLI config subcommand's
-  start-into-editor path). Zero-arg invocation boots the GUI exactly
+  flag-off). RunOptions.ConfigWindow instead routes to
+  runConfigWindow: the SETTINGS WINDOW process (900x720, ordinary
+  decorated/resizable/not-on-top window, Options.Mode
+  StartupModeConfig) -- a second process because Wails v2 gives one
+  window per process and the searchbar's is a hide-on-blur panel, so
+  settings could never be one of its modes. Zero-arg invocation boots the GUI exactly
   as before the
   CLI existed (CI screenshots rely on that). Deliberately has NO test
   file and stays minimal (see coverage note below).
@@ -117,8 +120,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   icon activation -> the same toggle path the hotkey uses (pending-
   show deferral included), Rescan now -> requestRescan (the !rescan
   behavior minus the bar-hide; still-building = friendly logged
-  error), Open config -> showConfig (the !config behavior: summon
-  into the in-app config editor, pre-DomReady deferral included; the
+  error), Open config -> showConfig (the !config behavior: launch
+  the settings-window process; the
   config FILE stays reachable via the OpenConfigFile bound method),
   Quit -> runBuiltin("quit"); the tooltip getter wraps
   hotkeyDescription(), so no shortcut is promised until one is
@@ -602,7 +605,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   env); run_builtin -> rescan (Rescanner.Request;
   friendly error while the index is still building) / reload
   (newRegistry, swap under mutex, Close the old) / config
-  (showConfig: summon into the in-app config editor, bar stays up) /
+  (showConfig: open the settings window, bar stays up) /
   version (copy `Version`, stays open) / quit
   (runtime Quit); activate_window (parseWindowID: non-empty base-10
   uint32) -> the activateWindow seam (production
@@ -613,14 +616,26 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   (not connected, timeout, tab gone) the case returns a.Open(Value)
   -- the pick never surfaces an error when the fallback works;
   everything else hides the bar on success.
-  CONFIG EDITOR (configui.go + configapply.go): `showConfig()` is the
-  one summon-into-editor path (IPC "config", the !config builtin, the
-  tray item, Options.OpenConfigOnStartup -- which latches
-  pendingShow+pendingConfig at Startup): pre-DomReady = latch both
-  (Hide cancels both; DomReady runs the show then emits
-  "config:open"), hidden = the capture+show path then "config:open",
-  visible = "config:open" only -- the mode event ALWAYS follows
-  "app:shown" (the frontend's app:shown handler re-renders). Bound
+  CONFIG EDITOR (configui.go + configapply.go + configwindow.go):
+  settings live in their OWN PROCESS with an ordinary window --
+  Wails v2 gives one window per process and this one is a
+  hide-on-blur always-on-top panel, so an editor mode of it could be
+  lost behind other windows (the reported bug). `showConfig()` (IPC
+  "config", the !config builtin, the tray item) therefore SPAWNS
+  `<platform.StableExecutable> config` through the plat.run seam and
+  leaves the bar alone; configwindow.go is the other end
+  (Options.ConfigWindow: GetStartupMode answers "config", the
+  frontend wires the editor alone, Startup runs only
+  startConfigWindow -- config baseline + schema sidecar + theme/
+  config watcher + IPC handlers whose summons raiseConfigWindow (a
+  PLAIN show: an ordinary window the user placed must never be
+  repositioned or clamped) -- and CloseConfigWindow quits the
+  process, refusing to run in the searchbar). Nothing talks to the
+  searchbar: the editor saves config.json and the running app's own
+  config watcher hot-applies it, which is also why the settings
+  window works with no app running. applyConfig short-circuits in
+  this process (nothing live to apply) after storing cfgCurrent.
+  Bound
   methods: `GetConfigSchema()` (the embedded
   schemas.ConfigSchemaJSON), `GetConfigForEdit()` (fresh
   Load+Normalize as indented JSON + config path + LoadWarning +
@@ -715,8 +730,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   {indexed,done,seconds}, "watch:degraded"
   {watched,dropped,overflows}, "watch:backend" {backend,full,hint}
   (once, from startWatch; see above), "app:shown", "theme:changed" (no
-  payload; frontend refetches GetTheme/GetCustomCSS), "config:open"
-  (no payload; enter config-editor mode), "config:changed" (payload
+  payload; frontend refetches GetTheme/GetCustomCSS),
+  "config:changed" (payload
   {applied,pending,nextLaunch,error} -- an external edit hot-applied
   or failed to load; nextLaunch lists only the ruled
   window.translucent),
@@ -731,7 +746,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   sampler). ALL Wails
   runtime calls and platform hooks sit behind seam structs
   (`runtimeSeams` incl. clipboardSetText/quit and `platformSeams`
-  incl. run/activateWindow/configurePanel/watchSpaceChanges/appSource plus getenv/executable/args0/detectSession/
+  incl. run/activateWindow/configurePanel/watchSpaceChanges/appSource plus getenv/lookPath/executable/args0/detectSession/
   startPortal/ensureGnomeBinding/procTree/userHome AND the launch
   seams --
   open/reveal/run take extraEnv now (reveal also startupID),
@@ -837,14 +852,15 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   running = plain notice on
   stderr + exit 1 (cobra error/usage output suppressed), transport
   errors = honest exit 1. config
-  (config.go) opens the in-app config editor through the same
-  classify-then-act shape aimed at CmdConfig (OK -> "opening the
-  config editor in the running instance" exit 0; NotReady() -> the
-  still-starting notice exit 0; UnknownCommand() -- a JSON daemon
-  predating the config command, skew by definition -- -> log +
-  becomeInstance with RunOptions{ShowOnStartup: true, OpenConfig:
-  true}; the old "older version ... restart it" exit-1 dead end is
-  RETIRED, convergence is automatic). firefox-host (firefoxhost.go) is the
+  (config.go) opens the SETTINGS WINDOW and deliberately never
+  touches the searchbar's socket: it e.listens on
+  ipc.ConfigSocketPath (the settings window's OWN single-instance
+  socket) and runs the GUI with RunOptions{ConfigWindow: true};
+  ErrAlreadyRunning means a settings window is up, so it Sends
+  "show" and reports honestly (raiseConfigWindow), and any other
+  listen error degrades to a settings window with a NIL server
+  (the bare-invocation precedent). It therefore neither needs nor
+  starts the searchbar. firefox-host (firefoxhost.go) is the
   native-messaging relay Firefox spawns through the generated
   wrapper: it never boots the GUI and never touches the
   single-instance socket -- it only runs ffext.RunHost over its
@@ -874,8 +890,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   newRoot() consumes the builder registry so Execute -- and every
   test -- gets a fresh command tree (executeEnv is the test entry
   over a caller-built env). RunOptions{Server,
-  ShowOnStartup, OpenConfig} is the runGUI contract (main.go wires
-  OpenConfig to app Options.OpenConfigOnStartup); the App takes
+  ShowOnStartup, ConfigWindow} is the runGUI contract (main.go
+  branches on ConfigWindow into runConfigWindow); the App takes
   ownership of
   the server (Shutdown closes it). Unit-tested headlessly: fake
   runGUI, real ipc servers on temp sockets, COMPETENT_SEARCH_SOCKET
@@ -887,7 +903,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
 - `internal/ipc` -- the single-instance unix-socket IPC layer, pure
   and headless-tested. SocketPath: $COMPETENT_SEARCH_SOCKET override,
   else $XDG_RUNTIME_DIR/competent-search-thing.sock, else a per-uid
-  name under os.TempDir(). ONE request per conn (2s conn deadline,
+  name under os.TempDir(); ConfigSocketPath is its twin for the
+  SETTINGS WINDOW process ($COMPETENT_SEARCH_CONFIG_SOCKET, else the
+  same rules over competent-search-thing-config.sock) -- a separate
+  socket so the two processes are separately single-instanced.
+  ONE request per conn (2s conn deadline,
   4 KiB line cap), one newline-terminated JSON object each way --
   JSON is the ONLY wire shape (the legacy v1 line protocol is
   DELETED): request
@@ -1582,17 +1602,14 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   = the opt-out; the v8 migration resets a PRE-flip stored false as
   machine handwriting, see migrate.go) -- windowWidth 1100,
   windowHeight 700, textMaxKB 256, imageMaxEdge 800,
-  dirMaxEntries 200, aiProvider ("openai" default / "anthropic" /
-  "custom"; empty/unknown repaired to openai), kagi {apiKey, baseUrl,
-  maxResults 8}, and the three parallel AI sections openai
-  {apiKey, baseUrl, model "gpt-5-mini", maxOutputTokens 1024} /
-  anthropic {same shape, model "claude-haiku-4-5"} / custom {same
-  shape, model deliberately has NO invented default -- unknowable for
-  an arbitrary OpenAI-compatible server; the fetch/Test paths name
-  the missing knob}} -- the
-  preview pane; numerics and empty openai/anthropic models are
-  Normalize-repaired, the API keys AND base URLs pass through verbatim
-  (empty baseUrl = the official endpoint; validation happens in
+  dirMaxEntries 200, kagi {apiKey, baseUrl, maxResults 8}, and ai
+  {apiKey, baseUrl, model, maxOutputTokens 1024} -- the ONE
+  user-described AI endpoint (v9): baseUrl and model have NO default
+  (unknowable for an arbitrary server, and a default endpoint would
+  mean sending queries somewhere nobody chose), so only
+  maxOutputTokens is Normalize-repaired}} -- the
+  preview pane; the API keys AND base URLs pass through verbatim
+  (empty kagi baseUrl = the official endpoint; validation happens in
   internal/preview, not here) and are never
   logged. Lives under
   os.UserConfigDir(); the `COMPETENT_SEARCH_CONFIG_DIR` env var
@@ -1605,8 +1622,11 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   service.go, the login-service auto-registration gate) and
   `COMPETENT_SEARCH_NO_WATCH_SETUP` (internal/watchsetup, the per-process
   gate on the automatic fanotify-capability setup; the persistent
-  per-user opt-out is config watcher.setupEnabled=false) -- all five
-  are documented in the README. Default
+  per-user opt-out is config watcher.setupEnabled=false),
+  `COMPETENT_SEARCH_CONFIG_SOCKET` (internal/ipc, the settings
+  window's socket) and `COMPETENT_SEARCH_AI_API_KEY` (internal/app
+  preview.go, the AI endpoint's key when preview.ai.apiKey is empty)
+  -- all documented in the README. Default
   roots are the WHOLE FILESYSTEM (migrate.go: defaultRootsFor -- "/"
   on linux/darwin, %SystemDrive% with C:\ fallback on windows; goos +
   getenv are parameters so tests cover the windows shape headlessly)
@@ -1641,7 +1661,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   before the config-dir watcher comes up; its file name never
   matches the config.json hot-apply path, so no watcher loop).
   rootsVersion (0 = legacy, current
-  8) drives the one-shot Load migration (migrateRootsFor; goos and
+  9) drives the one-shot Load migration (migrateRootsFor; goos and
   the RAW file bytes are parameters so tests cover the darwin shape
   and the old-key reads headlessly), each missing
   step applied in
@@ -1679,10 +1699,17 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   to repair to explicit true, with a loud note either way (absent =
   announce-only, false = reset + announce, explicit true = silent);
   a false stamped at rootsVersion >= 8 is a real post-flip opt-out
-  the step never revisits -- and each step is
+  the step never revisits; the v9 step (migrateAIProvider,
+  migrate_v9.go, RAW bytes -- see that file's header) collapses the
+  three AI providers into preview.ai, carrying the SELECTED one's
+  settings over (openai/anthropic gain the endpoint they used to
+  imply, custom keeps its own) and announcing the collapse, the
+  changed wire shape and the one key variable; a document already
+  carrying preview.ai keeps it, and a config that never configured an
+  AI provider migrates and announces nothing -- and each step is
   gated on its
   own version so already-fired informational notes never repeat.
-  Either way version 8 is
+  Either way version 9 is
   Saved back, and every user-visible change lands in the
   non-serialized MigrationNotes (json:"-") that internal/app logs
   loudly at startup -- the scope never changes silently. `Load` never crashes: missing file -> defaults
@@ -2030,6 +2057,29 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   end-to-end with live cpu/net + the GPU either live in 0..100 or
   the logged honest dash).
   Consumed by internal/app's stats.go.
+- `internal/terminal` -- resolves the terminal emulator a command
+  should run in, pure over injectable GOOS/Getenv/LookPath seams so
+  the whole matrix is headless-tested (the internal/gsettings
+  pattern). `Detect(Options)` -> (Terminal{Name, Path,
+  SupportsArgs}, ok): unix = $TERMINAL if it resolves (argument
+  convention from the table, "-e" for an unknown name) else the
+  first hit of unixCandidates -- x-terminal-emulator FIRST (on
+  Debian-family systems it IS the user's choice), then the
+  desktop-environment terminals, then the minimal ones -- each with
+  the flag that takes a command as SEPARATE trailing arguments
+  ("--" gnome-terminal, "-x" the xfce4/mate/terminator family,
+  nothing for kitty/foot, "start --" wezterm, "-e" for the rest);
+  darwin = `open -a Terminal` with SupportsArgs FALSE (it starts a
+  program, it cannot carry a command line); windows = wt.exe else
+  `cmd.exe /c start "" cmd.exe /k`. `Terminal.Command(argv)` builds
+  the full argv, nil for an empty command or an argument-carrying
+  one on a !SupportsArgs terminal. DELIBERATELY no terminal whose
+  run-a-command flag wants ONE re-quoted shell string (tilix -e):
+  re-quoting is where launchers get command injection wrong, and
+  every supported terminal takes the words as separate arguments.
+  Consumed by internal/app runterm.go (the terminalRunner builder
+  over plat.lookPath, logged once) and internal/plugin
+  builtin_runterm.go.
 - `internal/theme` -- design-token resolution. WARNING: the 22
   `TokenNames` (bg, bg-elevated, fg, fg-dim, accent, accent-fg,
   selection-bg, selection-fg, border, highlight, warning, badge-bg,
@@ -2286,7 +2336,26 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   user-facing story); a prioritized source exactly like
   firefox-frequent (sourcePriorityWeb, the same tier gate -- the
   "tampermonkey" fix: a strong open-tab title match renders above
-  the file results).
+  the file results);
+  builtin_runterm.go "run-terminal"/Run -- run a $PATH program in a
+  terminal (the field ask: typing "htop" found files named htop and
+  no way to run it). No bangs, all-queries Trigger with MinQueryLen
+  1, registered ONLY when Options.Terminal (a *TerminalRunner
+  carrying Name/LookPath/Command; internal/terminal resolves it,
+  internal/app runterm.go wires it) is usable -- the OpenWindows
+  seam convention, so a machine with no terminal emulator never sees
+  the section. EXACT PATH MATCH ONLY: splitCommand (quote-aware,
+  unterminated quote = no row) takes the first word, a word carrying
+  a separator is refused (a path is a file result, and LookPath
+  would resolve a relative one against the APP's cwd), LookPath must
+  succeed, and the row runs the RESOLVED exe. Texts = the whole
+  command line plus each word, so the engine mints the exact tier
+  for "htop" and for "htop -d 5" alike; priority(best <= TierExact)
+  = 1 puts it in the promoted zone, and "apps-search" < "run-
+  terminal" breaks the exact-tier tie so a GUI app still wins its
+  own name. Action = run_command over Terminal.Command's argv,
+  capped at maxArgvEntries so the app layer's re-validation can
+  never reject what was offered.
   Exhaustively
   unit-tested, table-driven, plus an end-to-end manifest ->
   registry -> /bin/sh transport dispatch test.
@@ -2344,10 +2413,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   "meta"|"text"|"image"|"dir"|"web"|"ai"|"error", title, path, meta,
   text, image, dir, web, ai, err, durMs}. dispatch.go:
   `New(parentCtx, Options{TextMaxKB, ImageMaxEdge, DirMaxEntries,
-  Emit, KagiAPIKey, KagiBaseURL, KagiMaxResults, AIProvider
-  ("openai" incl. "" / "anthropic" / "custom"), the three parallel
-  provider groups OpenAI*/Anthropic*/Custom* (each APIKey/BaseURL/
-  Model/MaxOutputTokens), AICachePath, Logf})` -> Dispatcher (the
+  Emit, KagiAPIKey, KagiBaseURL, KagiMaxResults, AIAPIKey/AIBaseURL/
+  AIModel/AIMaxOutputTokens, AICachePath, Logf})` -> Dispatcher (the
   base URLs go through normalizeBaseURL: empty = the client default,
   ONE trailing "/" trimmed, anything not http(s)-with-a-host leaves
   that provider UNAVAILABLE -- webErr/aiErr carry the terse
@@ -2369,26 +2436,23 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   fetch supersedes an in-flight file preview and vice versa, via
   arm()): exactly ONE payload per accepted fetch -- kind "web"
   {query, results, cached} / "ai" {query, answer, model, cached} /
-  "error" (blank query = "empty query"; no key = an error naming the
-  SELECTED provider's config key + env fallback; invalid baseUrl =
-  "kagi: invalid baseUrl
-  (preview.kagi.baseUrl)" / "openai: invalid baseUrl
-  (preview.openai.baseUrl / OPENAI_BASE_URL)" / the anthropic and
-  custom equivalents; custom additionally answers "custom: no base
-  URL (preview.custom.baseUrl)" / "custom: no model
-  (preview.custom.model)" -- required knobs with no official
-  fallback; provider
+  "error" (blank query = "empty query"; missing knobs and invalid
+  base URLs each name their own: "kagi: no API key
+  (preview.kagi.apiKey or KAGI_API_KEY)" / "kagi: invalid baseUrl
+  (preview.kagi.baseUrl)" / "ai: no API base URL
+  (preview.ai.baseUrl)" / "ai: no model (preview.ai.model)" / "ai:
+  invalid baseUrl (preview.ai.baseUrl)"; provider
   failure; 10s
   web / 90s ai hard
-  timeouts spelled out by fetchErrMsg). aiprovider.go wires exactly
-  ONE AI provider per Dispatcher (wireAI dispatching on AIProvider:
-  openai = the existing client byte-identically; anthropic = the
-  Messages client; custom = the OpenAI client over a REQUIRED
-  user-typed base URL with the key OPTIONAL -- empty sends no
-  Authorization header, the local-server shape -- and a "custom"
-  error label so a misconfigured endpoint never blames OpenAI), each
-  installed via installAI with a per-provider honest unavailable
-  message. kagi.go: KagiClient
+  timeouts spelled out by fetchErrMsg). aiprovider.go wires the ONE
+  AI endpoint per Dispatcher (wireAI: baseUrl and model REQUIRED --
+  there is no provider list and no default endpoint, so nothing is
+  sent anywhere until the user names a server -- key OPTIONAL, empty
+  sends no Authorization header, the local-server shape), installed
+  via installAI, which keys the answer cache by model + the
+  endpoint's HOSTNAME (never userinfo: the string is written to the
+  cache file) so one model name pointed at two servers cannot cross
+  answers. kagi.go: KagiClient
   (NewKagiClient(key, maxResults); BaseURL/HTTPClient/Now/Logf
   exported seams -- BaseURL doubles as the production
   preview.kagi.baseUrl override and REPLACES the whole default base
@@ -2413,39 +2477,29 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   trace id (X-Kagi-Trace header else meta.trace, capped 64 bytes;
   the id Kagi support asks for), wired by dispatch.go's New under
   the "preview: " prefix.
-  openai.go: OpenAIClient (NewOpenAIClient(key, model,
-  maxOutputTokens); same exported seams) -- OpenAI Responses API
-  verified 2026-07-18: POST {base}/v1/responses `Authorization:
-  Bearer <key>` {"model","input","max_output_tokens"}; Ask(ctx,
-  prompt) -> (answer, resolvedModel, err) concatenating output[]
-  "message" items' "output_text" parts (top-level output_text is
-  SDK-only per the docs; read as a defensive fallback), status
-  "incomplete" appends a "[truncated by max_output_tokens]" marker
-  line ("[truncated: content_filter]" for that reason; marker-only
-  answers are legal -- reasoning models can spend every token before
-  emitting text), API-error JSON {"error":{"message"}} -> terse
-  capped error; the exported Name field relabels every error
-  ("custom" when the client serves the custom provider, so a
-  misconfigured local endpoint never blames OpenAI).
-  anthropic.go: AnthropicClient (NewAnthropicClient(key, model,
-  maxOutputTokens); same exported seams) -- the Anthropic Messages
-  API: POST {base}/v1/messages (default base
-  https://api.anthropic.com) with x-api-key + anthropic-version
-  headers, {"model","max_tokens","messages":[{role:user}]} in, a
-  content[] of "text" blocks out; stop_reason "max_tokens" appends
-  the truncation marker line (the OpenAI incomplete-status twin),
-  API-error JSON {"error":{"message"}} -> the same terse capped
-  error envelope, the key confined to the header -- never logged,
-  never in errors. probe.go: `ProbeProvider(ctx,
-  ProbeParams{Provider kagi|openai|anthropic|custom, APIKey,
+  aiclient.go: AIClient (NewAIClient(key, model, maxOutputTokens);
+  BaseURL/HTTPClient exported seams) -- the ONE AI client, speaking
+  OpenAI-compatible chat completions because that is what OpenAI,
+  Anthropic's compat endpoint, OpenRouter, Ollama, llama.cpp, LM
+  Studio and vLLM all implement: POST {base}/chat/completions
+  {"model","messages":[{role:user}],"max_tokens"}, BaseURL being the
+  API base INCLUDING the version segment (every SDK's base_url
+  convention), an EMPTY key sending no Authorization header at all;
+  Ask(ctx, prompt) -> (answer, resolvedModel, err) concatenating the
+  choices' message content, finish_reason "length" appending a
+  "[truncated by maxOutputTokens]" marker line, non-2xx = "ai: HTTP
+  <code>" + at most a 200-char parsed {"error":{"message"}} (a bare
+  string error is read too -- local servers send them), the key
+  confined to the header, never logged, never in errors. probe.go:
+  `ProbeProvider(ctx, ProbeParams{Provider kagi|ai, APIKey,
   BaseURL, Model})` -> ProbeResult{OK, Message} -- the
   config editor Test buttons' engine: bounded inputs (key 4096 /
   base 2048 / model 256 bytes -- wire-abuse defense), ONE minimal
   real request per call (kagi = a REAL limit-1 search, which spends
   one API credit -- the cheapest honest test the API offers, the
-  button hint says so; the AI providers = one ask capped at 16
-  output tokens, the smallest cap the OpenAI Responses API accepts),
-  candidate values resolved exactly like the live wiring (custom:
+  button hint says so; ai = one ask capped at 16
+  output tokens, the smallest cap the strictest servers accept),
+  candidate values resolved exactly like the live wiring (ai:
   base+model required, key optional), honest ok/error messages that
   carry the HTTP status + capped provider message but never the key
   or raw body. aicache.go: AICache -- the persistent AI answer LRU
@@ -2455,11 +2509,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   even when the write fails; "" path = memory-only): {"v":1,
   "entries":[{k,model,prompt,answer,at}]} at Options.AICachePath, k =
   sha256 hex of model+NUL+FULL prompt where the stored "model" is the
-  PROVIDER-QUALIFIED "<provider>/<configured model>" (installAI in
-  aiprovider.go; switching providers can never serve another
-  backend's cached answer even when model strings collide, and
-  pre-qualification entries keyed by the bare model simply miss once
-  and repopulate -- deliberate) (the stored prompt is capped
+  ENDPOINT-QUALIFIED "<configured model>@<baseUrl hostname>"
+  (installAI in aiprovider.go; the same model name pointed at a
+  different server can never serve that server's answers, and the
+  hostname alone keeps userinfo out of the cache file) (the stored prompt is capped
   2KB, answer 32KB), Get(model,prompt) refreshes recency (At),
   Put evicts past 128 entries by oldest At; hits emit Cached:true
   with zero network. cache.go: bytes-bounded LRU of rich payloads
@@ -2481,22 +2534,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   while the web/AI strip buttons render disabled with a
   configure-hint) and resolves each API key
   ONCE -- config value, else the env var through the getenv seam
-  (KAGI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY), exactly the
+  (KAGI_API_KEY / COMPETENT_SEARCH_AI_API_KEY), exactly the
   resolution
-  GetPreviewConfig reports -- resolves the OpenAI and Anthropic base
-  URLs the same
-  way (preview.openai.baseUrl else OPENAI_BASE_URL;
-  preview.anthropic.baseUrl else ANTHROPIC_BASE_URL; the Kagi base
-  is config-only, no env, and the custom section is config-only
-  throughout) -- and passes <configDir>/aicache.json
+  GetPreviewConfig reports. Base URLs are CONFIG-ONLY (no env
+  fallback anywhere): there is no default AI endpoint, so nothing is
+  sent anywhere until preview.ai.baseUrl names a server. It also
+  passes <configDir>/aicache.json
   (config.Dir() failure = one log line + memory-only cache); the
   keys and base URLs flow only into preview.Options, never into logs
   or payloads;
   bound methods QueryPreview(target, gen) / GetPreviewConfig()
-  (enabled + kagiConfigured + aiProvider + aiConfigured -- the
-  SELECTED provider's usability, so an OpenAI key never lights the
-  button while anthropic is selected; custom needs base+model, key
-  optional -- + resultsWidth = the flag-off bar
+  (enabled + kagiConfigured + aiConfigured -- the AI half is
+  baseUrl AND model, the key being optional -- + resultsWidth = the flag-off bar
   width, Options.ResultsWidth wired from config window.width in
   main.go with a DefaultWindowWidth fallback when unset; keys never
   exposed) /
@@ -3791,10 +3840,9 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   ('Search web for "<q>"') and idles the pane on a cleared query.
   The strip buttons + hotkeys are the ONLY FetchWebPreview /
   FetchAIPreview call sites (never automatic; unconfigured providers
-  render disabled with a hint naming the SELECTED provider's config
-  knobs -- the AI button follows GetPreviewConfig's aiProvider +
-  aiConfigured, so it lights only when the provider the config
-  actually selects is usable). Renderers are
+  render disabled with a hint naming their config knobs -- the AI
+  button follows GetPreviewConfig's aiConfigured, which is
+  preview.ai baseUrl AND model). Renderers are
   text-node-only: meta dl, text (header + highlighted <pre><code> +
   truncation footer), image (<img src=dataUri> + WxH/size caption),
   dir (rows cloning the folder/file icon templates + "N more..."),
@@ -3803,9 +3851,10 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   badges + a Copy button through copy_text, <= 8 KiB Go-side, with a
   "Copied"/error flash in the pane strip), error card) +
   `src/config.ts` + `src/config.css` + `src/toc.ts` (the CONFIG
-  EDITOR MODE --
-  initConfig wires from wire(), everything else is lazy on the first
-  "config:open": fetch + cache GetConfigSchema (embedded, immutable)
+  EDITOR, the whole UI of the settings-window process --
+  main.ts's wire() asks GetStartupMode first and, on "config", runs
+  wireConfigWindow (initConfig + openConfigWindow) instead of the
+  searchbar wiring; openConfigWindow: fetch + cache GetConfigSchema (embedded, immutable)
   and JSON.parse GetConfigForEdit's configJson into a WORKING COPY,
   set body.with-config (config.css hides every normal bar region via
   two-id selectors that out-rank the with-preview grid rules
@@ -3819,7 +3868,7 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   so sidebar and column can never disagree): one entry per top-level
   section in schema order + indented sub-entries for nested object
   sections (search.frecency/priors/telemetry/arbiter,
-  firefox.frequentSites/openTabs, preview.kagi/openai), while
+  firefox.frequentSites/openTabs, preview.kagi/ai), while
   top-level LEAF settings group under a synthetic "General" section
   (leading run; a leaf after the first real section -- rewrites --
   gets its own group named after itself, schema order never
@@ -3846,8 +3895,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   <a> elements -- no innerHTML) whose clicks preventDefault and route
   through the OpenExternalURL bound method, so the get-an-API-key doc
   links open the system browser and the webview never navigates,
-  while the four preview provider sections (kagi/openai/anthropic/
-  custom) each append a Test row: the button reads the WORKING COPY's
+  while the two preview provider sections (preview.kagi and
+  preview.ai) each append a Test row: the button reads the WORKING COPY's
   candidate values (providerTestRequest -- unsaved edits testable),
   calls TestPreviewProvider, disables itself while in flight, and
   renders the honest ok/error outcome inline beside the button (the
@@ -3890,31 +3939,18 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   runs here). GetConfigForEdit's unknownKeys render a persistent
   warning strip (dropped-if-saved; points at Open config.json,
   which calls OpenConfigFile and keeps the editor open).
-  "config:changed" (external edit): editor closed = preview refresh
-  only; open + clean = silent re-fetch/re-render + transient
+  "config:changed" (external edit): open + clean = silent
+  re-fetch/re-render + transient
   "changed on disk -- reloaded" flash + the event's own summary;
   open + dirty = keep the edits, show a "changed on disk" strip
-  with a Reload button (also while HIDDEN with the editor latched:
-  the strip is waiting on re-show, edits never clobbered); event
-  error = error strip, doc kept. MODE
-  EXITS vs HIDE/SHOW RESTORE: Esc/Close are the ONLY mode exits --
-  clean = leave + focus #query (previous bar state byte-identical);
-  dirty = first press flashes "unsaved changes --
-  press Esc again to discard", second within 2s discards. Hiding
-  the bar WHILE the editor is up (hotkey toggle, IPC hide, tray,
-  darwin Space switch) leaves `active` latched and the next
-  "app:shown" RESTORES the editor exactly -- mode, #config-body
-  scrollTop, focused control (a focusin listener on #config-pane
-  tracks the last focused id; re-asserted plus scroll plus ToC
-  highlight one nextFrame later -- rAF with a setTimeout fallback
-  for jsdom), and unsaved dirty edits -- in memory for the app run
-  (config.test.ts pins the round-trip). After an Esc/Close exit the
-  next summon is a fresh search bar, with an unsaved working copy
-  still PRESERVED and restored on the next config:open this run
-  (dirty note + "restored unsaved edits" flash; a clean editor
-  re-fetches fresh). Own window keydown handler (Esc + Ctrl/Cmd+S,
-  mode-gated);
-  configModeActive() is the export main.ts gates on. All DOM is
+  with a Reload button; event
+  error = error strip, doc kept. EXIT: Esc and Close both call the
+  CloseConfigWindow bound method, which quits this process -- clean
+  = immediately, dirty = the first press flashes "unsaved changes --
+  press Esc again to discard" and a second within 2s closes.
+  Own window keydown handler (Esc + Ctrl/Cmd+S);
+  configModeActive() is still exported (main.ts's searchbar wiring
+  never runs here, so nothing consumes it in this process). All DOM is
   text-node-only; config.css consumes existing --sb-* tokens with
   literal dark fallbacks -- NO new --sb-* token, no :root block) +
   `src/resize.ts` (DRAG-EDGE WINDOW RESIZING, wired by wire()'s
@@ -3938,8 +3974,8 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   center; vertical = 1:1 downward; no accumulation across dropped
   frames) rAF-coalesced into ResizeDrag(w, h), and pointerup/cancel
   commits ONCE via ResizeCommit (moveless edge clicks commit
-  nothing); drags stay active in config-editor mode -- they
-  manipulate the window, not the search UI) +
+  nothing); the settings window has no drag wiring at all -- it is
+  an ordinary resizable window) +
   `src/highlight.ts` (hljs lib/core + explicitly registered grammars
   covering every LangHint name in the hljs distribution plus
   shell/plaintext -- never import the full highlight.js bundle;
@@ -3966,11 +4002,12 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   Web,WebResult,AI}, ResolveIcons, the four preview bound
   methods, and the provider-UX pair TestPreviewProvider
   (PreviewProviderTest -> PreviewProbeResult) + OpenExternalURL
-  (ConfigInfo carries aiProvider + aiConfigured, the selected
-  provider's usability), plus the config-editor contract ConfigForEdit/ConfigSaveResult/
+  (ConfigInfo carries kagiConfigured + aiConfigured), plus the
+  config-editor contract ConfigForEdit/ConfigSaveResult/
   ConfigChangedEvent (Go nil slices arrive as null -- the applied/
   pending fields are `string[] | null`) and the four config bound
   methods GetConfigSchema/GetConfigForEdit/SaveConfig/OpenConfigFile
+  plus the settings-window pair GetStartupMode/CloseConfigWindow
   plus the drag-resize pair ResizeDrag/ResizeCommit,
   and the telemetry report contract
   Telemetry{PickReport,ShownRef,PickedRef} and RecordPick -- keep in
@@ -4132,11 +4169,16 @@ speed) in Go + Wails v2 + vanilla TypeScript/Vite.
   session and asserts boot + JSON-shaped IPC round-trips within hard
   deadlines + the legacy-rejection check (a8-legacy-rejected: a bare
   v1 line must earn the JSON invalid-request error or a silent
-  close, never the old raw "ok") + the config-command ack
-  (a9-config-ipc: {"cmd":"config"} must earn
-  {"ok":true,"accepted":"config"}, sent hidden after a7 and clear of
-  the toggle pair, then an explicit hide restores the hidden state
-  -- an IPC-ack check, not a UI check) + the fps meter gate
+  close, never the old raw "ok") + the settings-window gate
+  (a9-config-window: {"cmd":"config"} must earn
+  {"ok":true,"accepted":"config"} AND the spawned settings process
+  must answer `version` on its OWN socket
+  (COMPETENT_SEARCH_CONFIG_SOCKET, per-scenario) within
+  CONFIG_WINDOW_MS -- the proof that the spawn really happens on a
+  real desktop -- after which it is quit so teardown sees only the
+  searchbar; sent hidden after a7 and clear of
+  the toggle pair, then an explicit hide restores the hidden state)
+  + the fps meter gate
   (a4-fps-meter: every scenario boots with COMPETENT_SEARCH_FPS=1;
   after a3 shows the bar, a parseable "fps: N avg, ..." summary AND
   the "fps: meter on; display NHz max, ..." context line -- the

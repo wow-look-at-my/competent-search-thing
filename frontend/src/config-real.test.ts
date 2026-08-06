@@ -73,9 +73,7 @@ describe("config editor ToC over the shipped schema", () => {
       { dotted: "firefox.openTabs", sub: true },
       { dotted: "preview", sub: false },
       { dotted: "preview.kagi", sub: true },
-      { dotted: "preview.openai", sub: true },
-      { dotted: "preview.anthropic", sub: true },
-      { dotted: "preview.custom", sub: true },
+      { dotted: "preview.ai", sub: true },
       { dotted: "rewrites", sub: false },
     ]);
   });

@@ -90,7 +90,6 @@ const fakeApp: WailsAppBindings = {
     Promise.resolve({
       enabled: true,
       kagiConfigured: false,
-      aiProvider: "openai",
       aiConfigured: false,
       resultsWidth: 680,
     }),

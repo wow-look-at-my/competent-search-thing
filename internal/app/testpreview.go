@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/preview"
 )
 
@@ -23,8 +22,7 @@ const previewTestTimeout = 15 * time.Second
 // every field and normalizes the base URL; defense in depth -- the
 // frontend merely echoes editor state).
 type PreviewProviderTest struct {
-	// Provider selects the endpoint: "kagi", "openai", "anthropic",
-	// or "custom".
+	// Provider selects the endpoint: "kagi" or "ai".
 	Provider string `json:"provider"`
 	APIKey   string `json:"apiKey"`
 	BaseURL  string `json:"baseUrl"`
@@ -34,35 +32,21 @@ type PreviewProviderTest struct {
 // TestPreviewProvider runs ONE minimal real request against the
 // candidate provider configuration and answers honest ok/error --
 // the terse message carries the HTTP status and provider error text,
-// never key material. Empty candidate fields resolve through the SAME
-// environment fallbacks the live dispatcher applies (KAGI_API_KEY,
-// OPENAI_API_KEY / OPENAI_BASE_URL, ANTHROPIC_API_KEY /
-// ANTHROPIC_BASE_URL; custom has none), so the probe exercises
-// exactly the configuration a save would produce. NOTE the Kagi probe
-// spends one real search credit; the AI probes cap the answer at a
-// few tokens.
+// never key material. An empty candidate key resolves through the
+// SAME environment fallback the live dispatcher applies (KAGI_API_KEY
+// / COMPETENT_SEARCH_AI_API_KEY), so the probe exercises exactly the
+// configuration a save would produce. NOTE the Kagi probe spends one
+// real search credit; the AI probe caps the answer at a few tokens.
 func (a *App) TestPreviewProvider(req PreviewProviderTest) preview.ProbeResult {
 	provider := strings.ToLower(strings.TrimSpace(req.Provider))
 	key := req.APIKey
 	base := req.BaseURL
-	switch provider {
-	case "kagi":
-		if key == "" {
+	if key == "" {
+		switch provider {
+		case preview.ProviderKagi:
 			key = a.plat.getenv(envKagiAPIKey)
-		}
-	case config.AIProviderOpenAI:
-		if key == "" {
-			key = a.plat.getenv(envOpenAIAPIKey)
-		}
-		if base == "" {
-			base = a.plat.getenv(envOpenAIBaseURL)
-		}
-	case config.AIProviderAnthropic:
-		if key == "" {
-			key = a.plat.getenv(envAnthropicAPIKey)
-		}
-		if base == "" {
-			base = a.plat.getenv(envAnthropicBaseURL)
+		case preview.ProviderAI:
+			key = a.plat.getenv(envAIAPIKey)
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), previewTestTimeout)

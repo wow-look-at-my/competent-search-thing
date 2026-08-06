@@ -19,16 +19,12 @@ const eventPreviewResult = "preview:result"
 // defers to these (read through the getenv seam, so unit tests stay
 // hermetic).
 const (
-	envKagiAPIKey      = "KAGI_API_KEY"
-	envOpenAIAPIKey    = "OPENAI_API_KEY"
-	envAnthropicAPIKey = "ANTHROPIC_API_KEY"
-	// envOpenAIBaseURL / envAnthropicBaseURL are the SDK-conventional
-	// endpoint overrides: an empty preview.<provider>.baseUrl defers
-	// to the matching variable. The Kagi and custom base URLs
-	// deliberately have NO env fallback (config only -- custom IS the
-	// user-typed endpoint).
-	envOpenAIBaseURL    = "OPENAI_BASE_URL"
-	envAnthropicBaseURL = "ANTHROPIC_BASE_URL"
+	envKagiAPIKey = "KAGI_API_KEY"
+	// envAIAPIKey is the one AI key variable: an empty
+	// preview.ai.apiKey defers to it, so a key never has to live in
+	// config.json. The base URL and model have NO env fallback -- the
+	// endpoint is config's to name, and there is no default.
+	envAIAPIKey = "COMPETENT_SEARCH_AI_API_KEY"
 )
 
 // PreviewConfigInfo is the GetPreviewConfig answer: whether the pane
@@ -40,13 +36,9 @@ const (
 type PreviewConfigInfo struct {
 	Enabled        bool `json:"enabled"`
 	KagiConfigured bool `json:"kagiConfigured"`
-	// AIProvider is the selected AI answer provider ("openai",
-	// "anthropic", or "custom") -- the frontend's strip-button hint
-	// names the right config keys with it.
-	AIProvider string `json:"aiProvider"`
-	// AIConfigured reports whether the SELECTED provider is usable:
-	// a key (config or environment) for openai/anthropic, a base URL
-	// plus model for custom.
+	// AIConfigured reports whether the AI answer endpoint is usable:
+	// a base URL plus a model (the key is optional -- local servers
+	// need none).
 	AIConfigured bool `json:"aiConfigured"`
 	ResultsWidth int  `json:"resultsWidth"`
 }
@@ -61,9 +53,9 @@ const aiCacheFileName = "aicache.json"
 // parent context Shutdown cancels. The provider API keys resolve in
 // buildPreviewDispatcher -- config value first, else the environment
 // variable through the getenv seam -- exactly the resolution
-// GetPreviewConfig reports, and the OpenAI base URL resolves the same
-// way (preview.openai.baseUrl, else OPENAI_BASE_URL; the Kagi base is
-// config-only). The resolved keys and base URLs flow only into the
+// GetPreviewConfig reports. Base URLs are config-only: there is no
+// default AI endpoint, so nothing is ever sent anywhere until one is
+// named. The resolved keys and base URLs flow only into the
 // dispatcher options and are never logged (a base URL may carry
 // userinfo); the dispatcher trims one trailing "/" and turns an
 // invalid base into a terse fetch-path error instead of a broken
@@ -111,21 +103,9 @@ func (a *App) buildPreviewDispatcher() {
 	if kagiKey == "" {
 		kagiKey = a.plat.getenv(envKagiAPIKey)
 	}
-	openaiKey := p.OpenAI.APIKey
-	if openaiKey == "" {
-		openaiKey = a.plat.getenv(envOpenAIAPIKey)
-	}
-	openaiBase := p.OpenAI.BaseURL
-	if openaiBase == "" {
-		openaiBase = a.plat.getenv(envOpenAIBaseURL)
-	}
-	anthropicKey := p.Anthropic.APIKey
-	if anthropicKey == "" {
-		anthropicKey = a.plat.getenv(envAnthropicAPIKey)
-	}
-	anthropicBase := p.Anthropic.BaseURL
-	if anthropicBase == "" {
-		anthropicBase = a.plat.getenv(envAnthropicBaseURL)
+	aiKey := p.AI.APIKey
+	if aiKey == "" {
+		aiKey = a.plat.getenv(envAIAPIKey)
 	}
 	cachePath := ""
 	if dir, err := config.Dir(); err == nil {
@@ -135,28 +115,19 @@ func (a *App) buildPreviewDispatcher() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	d := preview.New(ctx, preview.Options{
-		TextMaxKB:                p.TextMaxKB,
-		ImageMaxEdge:             p.ImageMaxEdge,
-		DirMaxEntries:            p.DirMaxEntries,
-		Emit:                     a.previewEmit,
-		KagiAPIKey:               kagiKey,
-		KagiBaseURL:              p.Kagi.BaseURL,
-		KagiMaxResults:           p.Kagi.MaxResults,
-		AIProvider:               p.AIProvider,
-		OpenAIAPIKey:             openaiKey,
-		OpenAIBaseURL:            openaiBase,
-		OpenAIModel:              p.OpenAI.Model,
-		OpenAIMaxOutputTokens:    p.OpenAI.MaxOutputTokens,
-		AnthropicAPIKey:          anthropicKey,
-		AnthropicBaseURL:         anthropicBase,
-		AnthropicModel:           p.Anthropic.Model,
-		AnthropicMaxOutputTokens: p.Anthropic.MaxOutputTokens,
-		CustomAPIKey:             p.Custom.APIKey,
-		CustomBaseURL:            p.Custom.BaseURL,
-		CustomModel:              p.Custom.Model,
-		CustomMaxOutputTokens:    p.Custom.MaxOutputTokens,
-		AICachePath:              cachePath,
-		Logf:                     log.Printf,
+		TextMaxKB:         p.TextMaxKB,
+		ImageMaxEdge:      p.ImageMaxEdge,
+		DirMaxEntries:     p.DirMaxEntries,
+		Emit:              a.previewEmit,
+		KagiAPIKey:        kagiKey,
+		KagiBaseURL:       p.Kagi.BaseURL,
+		KagiMaxResults:    p.Kagi.MaxResults,
+		AIAPIKey:          aiKey,
+		AIBaseURL:         p.AI.BaseURL,
+		AIModel:           p.AI.Model,
+		AIMaxOutputTokens: p.AI.MaxOutputTokens,
+		AICachePath:       cachePath,
+		Logf:              log.Printf,
 	})
 	a.previewMu.Lock()
 	a.previewDisp = d
@@ -211,37 +182,8 @@ func (a *App) GetPreviewConfig() PreviewConfigInfo {
 	return PreviewConfigInfo{
 		Enabled:        config.Enabled(p.Enabled),
 		KagiConfigured: p.Kagi.APIKey != "" || a.plat.getenv(envKagiAPIKey) != "",
-		AIProvider:     aiProviderName(p),
-		AIConfigured:   a.aiConfigured(p),
+		AIConfigured:   p.AI.BaseURL != "" && p.AI.Model != "",
 		ResultsWidth:   a.resultsWidth(),
-	}
-}
-
-// aiProviderName is the effective provider selector -- the config
-// value with the pre-selector zero value reading as the default
-// (Normalize repairs persisted configs, but Options-seeded test/boot
-// state may carry the raw zero).
-func aiProviderName(p config.PreviewConfig) string {
-	if p.AIProvider == "" {
-		return config.DefaultPreviewAIProvider
-	}
-	return p.AIProvider
-}
-
-// aiConfigured mirrors the dispatcher wiring's usability rule for the
-// SELECTED provider: openai/anthropic need a key (config or
-// environment), custom needs its base URL plus a model (the key is
-// optional there). An invalid base URL still fails at fetch time with
-// the terse message -- this is the strip button's cheap availability
-// signal, not a validator.
-func (a *App) aiConfigured(p config.PreviewConfig) bool {
-	switch aiProviderName(p) {
-	case config.AIProviderAnthropic:
-		return p.Anthropic.APIKey != "" || a.plat.getenv(envAnthropicAPIKey) != ""
-	case config.AIProviderCustom:
-		return p.Custom.BaseURL != "" && p.Custom.Model != ""
-	default:
-		return p.OpenAI.APIKey != "" || a.plat.getenv(envOpenAIAPIKey) != ""
 	}
 }
 
