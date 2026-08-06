@@ -210,9 +210,10 @@ type Watcher struct {
 	holdCap     int
 	heldDropped bool
 
-	mu     sync.Mutex
-	n      notifier
-	budget int
+	mu      sync.Mutex
+	mountMu sync.RWMutex
+	n       notifier
+	budget  int
 	// wide is true when the notifier reported wideCoverage (fanotify
 	// whole-filesystem marks): the hot set is not filled, watch
 	// bookkeeping stays empty, and every per-directory watch call is
@@ -220,6 +221,7 @@ type Watcher struct {
 	wide          bool
 	watched       map[string]*list.Element // dir -> LRU element; nil element = pinned root
 	lru           *list.List               // evictable watched dirs; front = hottest
+	mountSkips    map[string]struct{}      // unsafe mount roots; guarded by mountMu
 	stats         Stats
 	loggedDrop    bool
 	loggedOverf   bool
@@ -279,6 +281,10 @@ func New(m *index.Manager, roots []string, ex *index.Excluder, opt Options) *Wat
 	// mode, or pinned fsnotify); it needs the roots, so it is bound
 	// after the loop above. Unit tests swap the seam.
 	w.newNotifier = newBackendNotifier(opt.Backend, w.rootList)
+	// BuildFromDisk applies the same live mount table to the initial
+	// walk. Seed the watcher too so a parent event cannot reintroduce
+	// a network/virtual/FUSE mount before the first sweep snapshot.
+	w.setMountSkips(index.SystemMountSkips(w.rootList))
 	return w
 }
 

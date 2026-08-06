@@ -208,7 +208,7 @@ func (w *Watcher) wantEvent(ev fsnotify.Event) (string, bool) {
 		return "", false
 	}
 	path := filepath.Clean(ev.Name)
-	if w.ex.Match(filepath.Base(path), path) {
+	if w.ex.Match(filepath.Base(path), path) || w.mountSkipped(path) {
 		return "", false
 	}
 	return path, true
@@ -237,6 +237,11 @@ func (w *Watcher) flush(ctx context.Context) {
 // Stat) keeps symlink handling identical to the walker: the link
 // itself is indexed as a non-directory and never followed.
 func (w *Watcher) reconcile(ctx context.Context, path string) {
+	if root, skipped := w.mountSkipRoot(path); skipped {
+		w.mgr.Remove(root)
+		w.dropWatchesUnder(root)
+		return
+	}
 	// Activity inside a watched directory keeps that directory hot: a
 	// cheap map hit that promotes an already-watched parent within the
 	// LRU. Unwatched parents are deliberately NOT pulled into the hot
@@ -298,6 +303,11 @@ func (w *Watcher) reconcile(ctx context.Context, path string) {
 // its siblings (reconcile stops before this function), so the shallow
 // diff runs only for paths that are directories on disk.
 func (w *Watcher) reconcileDir(ctx context.Context, dir string) {
+	if root, skipped := w.mountSkipRoot(dir); skipped {
+		w.mgr.Remove(root)
+		w.dropWatchesUnder(root)
+		return
+	}
 	// Watch before read, so nothing slips through: anything created
 	// after ReadDir raises its own event, anything created before is
 	// in the listing, and overlaps dedup in AddEntry. refreshWatch
@@ -326,6 +336,11 @@ func (w *Watcher) reconcileDir(ctx context.Context, dir string) {
 	for _, de := range entries {
 		name := de.Name()
 		full := filepath.Join(dir, name)
+		if root, skipped := w.mountSkipRoot(full); skipped {
+			w.mgr.Remove(root)
+			w.dropWatchesUnder(root)
+			continue
+		}
 		if w.ex.Match(name, full) {
 			continue
 		}
@@ -357,6 +372,11 @@ func (w *Watcher) reconcileDir(ctx context.Context, dir string) {
 			continue
 		}
 		full := filepath.Join(dir, name)
+		if root, skipped := w.mountSkipRoot(full); skipped {
+			w.mgr.Remove(root)
+			w.dropWatchesUnder(root)
+			continue
+		}
 		if w.ex.Match(name, full) {
 			// Excluded names should never be in the index; filter
 			// defensively so reconcile never acts on one that is.
@@ -384,6 +404,11 @@ func (w *Watcher) scanNewDir(ctx context.Context, dir string) {
 		}
 		d := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
+		if root, skipped := w.mountSkipRoot(d); skipped {
+			w.mgr.Remove(root)
+			w.dropWatchesUnder(root)
+			continue
+		}
 		w.addWatch(d)
 		entries, err := w.readDir(d)
 		if err != nil {
@@ -392,6 +417,11 @@ func (w *Watcher) scanNewDir(ctx context.Context, dir string) {
 		for _, de := range entries {
 			name := de.Name()
 			full := filepath.Join(d, name)
+			if root, skipped := w.mountSkipRoot(full); skipped {
+				w.mgr.Remove(root)
+				w.dropWatchesUnder(root)
+				continue
+			}
 			if w.ex.Match(name, full) {
 				continue
 			}

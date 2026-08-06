@@ -107,7 +107,7 @@ func firefoxCfg(sitesDir, tabsDir string) config.FirefoxConfig {
 
 func TestFirefoxSourcesNoProfileIsQuietlyNil(t *testing.T) {
 	a, _ := newTestApp(t, nil, Options{}) // firefoxBases pinned to nil
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -127,7 +127,7 @@ func TestFirefoxSourcesProfileDirOverrides(t *testing.T) {
 	writePlacesFixture(t, sitesDir, "https://daily.example/", "Daily", 12)
 	writeRecoveryFixtureImage(t, tabsDir, "https://open.example/page", "Open page",
 		"https://open.example/favicon.ico")
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
@@ -189,7 +189,7 @@ func TestFirefoxSourcesMixedOverrideAndFailedDiscovery(t *testing.T) {
 	a, _ := newTestApp(t, nil, Options{}) // discovery finds nothing
 	tabsDir := t.TempDir()
 	writeRecoveryFixture(t, tabsDir, "https://only-tabs.example/", "Only tabs")
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 

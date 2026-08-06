@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"log"
 	"os"
@@ -110,7 +109,7 @@ func TestDomReadyDeferredShowDrivesStatsVisibility(t *testing.T) {
 }
 
 func TestStartupHonorsStatsDisabledConfig(t *testing.T) {
-	var buf bytes.Buffer
+	var buf logBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 

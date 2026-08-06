@@ -47,11 +47,20 @@ type WalkStats struct {
 // deduplicated (a root inside another root is skipped); cancellation of
 // ctx stops the walk early and returns ctx.Err().
 func Walk(ctx context.Context, st *Store, roots []string, excludes []string, progress ProgressFunc) (WalkStats, error) {
+	return walk(ctx, st, roots, excludes, nil, progress)
+}
+
+// walk is Walk with an additional set of trusted exact full paths. It
+// exists for mount-derived skips, whose legal Unix filenames may contain
+// filepath.Match metacharacters and therefore must not enter the user glob
+// pattern channel.
+func walk(ctx context.Context, st *Store, roots []string, excludes, fullLiterals []string, progress ProgressFunc) (WalkStats, error) {
 	var stats WalkStats
 	ex, err := NewExcluder(excludes)
 	if err != nil {
 		return stats, err
 	}
+	ex.addFullLiterals(fullLiterals)
 	kept, skipped := normalizeRoots(roots)
 	stats.SkippedRoots = skipped
 

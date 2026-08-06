@@ -438,11 +438,16 @@ func (a *App) restartIndexLayer(next *config.Config) error {
 			// The initial build ended WITHOUT bringing the trio up: it
 			// failed. Run a fresh one under the new configuration.
 			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
 			a.buildCancel = cancel
+			a.buildDone = done
 			a.buildFinished = false
 			a.watchMu.Unlock()
 			log.Printf("config: index scope updated; retrying the initial build")
-			go a.buildIndex(ctx)
+			go func() {
+				defer close(done)
+				a.buildIndex(ctx)
+			}()
 		default:
 			// Pre-Startup: the stored values are all Startup needs.
 			a.watchMu.Unlock()

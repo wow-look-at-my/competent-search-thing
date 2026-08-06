@@ -79,6 +79,12 @@ type SweepOptions struct {
 	// linux, scoped to the configured roots via index.RealMountpoints,
 	// and returns nil elsewhere; tests script it.
 	mounts func() []string
+	// mountSkips lists unsafe virtual, network, and FUSE mountpoints
+	// below the roots. Tracking them separately lets a transition from
+	// a local mount to an unsafe one remove stale indexed content
+	// without ever reading the unsafe filesystem; its later departure
+	// force-reconciles the local directory exposed underneath.
+	mountSkips func() []string
 }
 
 // SweepStats is a snapshot of the Sweeper for logs and the UI.
@@ -106,12 +112,14 @@ type SweepStats struct {
 // indexed directory in pages, lstats each one, and shallow-reconciles
 // -- through the Watcher's reconcile engine -- the ones whose mtime
 // moved past the watermark of the previous completed pass, plus the
-// ones that vanished. Mountpoints appearing or vanishing under the
-// roots since the previous pass are force-reconciled regardless of
-// mtime (a mount onto an existing directory moves no mtime, and an
-// unmount restores content the index never saw change). Directories
-// the hot set does not watch therefore converge within one sweep
-// interval; tiers differ only in latency, never in final state.
+// ones that vanished. Mountpoints appearing, vanishing, or changing
+// between walkable and unsafe under the roots since the previous pass
+// are force-converged regardless of mtime (a mount onto an existing
+// directory moves no mtime, and an unmount restores content the index
+// never saw change). Unsafe arrivals are tombstoned without filesystem
+// reads. Directories the hot set does not watch therefore converge
+// within one sweep interval; tiers differ only in latency, never in
+// final state.
 //
 // Known documented limit: an mtime-BACKDATED mutation (e.g. tar
 // --preserve into an existing directory) hides from the incremental
@@ -136,10 +144,17 @@ type Sweeper struct {
 	// watermark -- advanced to a pass's start time ONLY when that pass
 	// ran to completion, so a cancelled/partial pass leaves the window
 	// untouched and the next pass redoes it -- and the previous pass's
-	// mount snapshot for the symmetric-difference diff.
+	// classified mount snapshot for the change diff.
 	watermark  time.Time
-	prevMounts map[string]struct{}
+	prevMounts map[string]mountState
 }
+
+type mountState uint8
+
+const (
+	mountWalkable mountState = iota + 1
+	mountUnsafe
+)
 
 // NewSweeper wires a Sweeper to the Manager and the Watcher. w must
 // NOT be nil: the Watcher's reconcile is the engine every sweep
@@ -191,6 +206,9 @@ func NewSweeper(m *index.Manager, w *Watcher, opt SweepOptions) *Sweeper {
 		// The default needs the normalized roots, so it is bound here
 		// rather than with the other option defaults above.
 		s.opt.mounts = func() []string { return index.RealMountpoints(s.roots) }
+	}
+	if s.opt.mountSkips == nil {
+		s.opt.mountSkips = func() []string { return index.SystemMountSkips(s.roots) }
 	}
 	w.setSweepRequester(s.Request)
 	return s
@@ -351,17 +369,34 @@ func (s *Sweeper) maybeCompact() {
 func (s *Sweeper) pass(ctx context.Context) (swept, relisted int, complete bool) {
 	ex := s.w.excluder()
 
-	// Mount phase: mountpoints entering or leaving the table under the
-	// roots are force-dirty -- reconciled regardless of mtime.
-	cur := s.mountsUnderRoots()
-	for _, mp := range symmetricDiff(s.prevMounts, cur) {
+	// Mount phase: mountpoints entering, leaving, or changing safety
+	// class under the roots are force-converged regardless of mtime.
+	cur := s.mountSnapshot()
+	unsafe := make([]string, 0, len(cur))
+	for mp, state := range cur {
+		if state == mountUnsafe {
+			unsafe = append(unsafe, mp)
+		}
+	}
+	s.w.setMountSkips(unsafe)
+	for _, mp := range changedMounts(s.prevMounts, cur) {
 		if ctx.Err() != nil {
 			return swept, relisted, false
+		}
+		if state, present := cur[mp]; present && state == mountUnsafe {
+			// Never lstat or readdir a newly unsafe mount. Remove the
+			// mountpoint entry and its indexed local subtree, matching
+			// BuildFromDisk's prune semantics, and release any watches
+			// that still point at the filesystem hidden underneath.
+			s.mgr.Remove(mp)
+			s.w.dropWatchesUnder(mp)
+			relisted++
+			continue
 		}
 		if ex.Match(filepath.Base(mp), mp) {
 			continue // excluded paths never touch the index
 		}
-		if _, added := cur[mp]; added {
+		if state, present := cur[mp]; present && state == mountWalkable {
 			// A mountpoint that APPEARED gets notifier coverage first
 			// (fanotify marks the new filesystem when the backend
 			// supports it), so events flow before the forced
@@ -456,32 +491,37 @@ func (s *Sweeper) reconcilePath(ctx context.Context, path string) {
 	s.w.reconcileDir(ctx, path)
 }
 
-// mountsUnderRoots snapshots the mountpoints (of real, walkable
-// filesystems; see the seam) lying under -- or equal to -- one of the
-// configured roots.
-func (s *Sweeper) mountsUnderRoots() map[string]struct{} {
-	out := make(map[string]struct{})
-	for _, mp := range s.opt.mounts() {
+// mountSnapshot classifies every current mountpoint under the roots.
+// Unsafe wins defensively if a scripted or malformed source reports a
+// path in both lists.
+func (s *Sweeper) mountSnapshot() map[string]mountState {
+	out := make(map[string]mountState)
+	s.addMountsUnderRoots(out, s.opt.mounts(), mountWalkable)
+	s.addMountsUnderRoots(out, s.opt.mountSkips(), mountUnsafe)
+	return out
+}
+
+func (s *Sweeper) addMountsUnderRoots(out map[string]mountState, mounts []string, state mountState) {
+	for _, mp := range mounts {
 		if !filepath.IsAbs(mp) {
 			continue
 		}
 		mp = filepath.Clean(mp)
 		for _, r := range s.roots {
 			if pathWithin(mp, r) {
-				out[mp] = struct{}{}
+				out[mp] = state
 				break
 			}
 		}
 	}
-	return out
 }
 
-// symmetricDiff returns the keys present in exactly one of prev and
-// cur, sorted for a deterministic application order.
-func symmetricDiff(prev, cur map[string]struct{}) []string {
+// changedMounts returns paths whose presence or classification changed,
+// sorted for deterministic application order.
+func changedMounts(prev, cur map[string]mountState) []string {
 	var out []string
-	for k := range prev {
-		if _, ok := cur[k]; !ok {
+	for k, oldState := range prev {
+		if state, ok := cur[k]; !ok || state != oldState {
 			out = append(out, k)
 		}
 	}
