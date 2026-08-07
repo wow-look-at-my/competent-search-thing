@@ -237,6 +237,23 @@ user-facing story); a prioritized source exactly like
 firefox-frequent (sourcePriorityWeb, the same tier gate -- the
 "tampermonkey" fix: a strong open-tab title match renders above
 the file results);
+builtin_calc.go "calc"/Calculator -- the "=2+2" prefix AND the
+!calc/!c bangs, in-process (no python3, no install step; the
+examples/plugins/calc example is the same surface for plugin
+authors). The evaluator is a bounded recursive-descent parser (max
+depth 64, max 1024 consumed tokens) over the operator set
++ - * / // % ** with parens and unary +/-; int64 arithmetic with
+overflow-checked + - * and Python floor-division/modulo semantics
+(-7//2 == -4, -7%2 == 1) so results match the Python example;
+float64 appears once a float literal enters (0.1+0.2 -> 0.3 via
+12-digit 'g' formatting); hex/octal/binary literals accepted,
+exponents capped at 256, division by zero / overflow / non-finite
+all yield NO result rather than an error row. One preRanked
+triggered-band row: title = the formatted value, subtitle =
+"<expr> =", icon "calculator", badge CALC, copy_text action, and
+Hex/Binary fields for integers (negative values Python-style
+"-0x2", MinInt64 skipped); a bare "=" or a malformed expression
+claims nothing. Disable via plugins.entries["calc"];
 builtin_runterm.go "run-terminal"/Run -- run a $PATH program in a
 terminal (the field ask: typing "htop" found files named htop and
 no way to run it). No bangs, all-queries Trigger with MinQueryLen

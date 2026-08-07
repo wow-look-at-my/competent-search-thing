@@ -314,10 +314,13 @@ func TestCaptureKicksWindowsRefreshAndConverts(t *testing.T) {
 func TestStartupBuildsRegistryFromPluginsDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(config.EnvConfigDir, dir)
-	good := filepath.Join(dir, "plugins", "calc")
+	// A distinct id: the builtin calculator already owns the "calc" id
+	// and bang, so an external manifest claiming them would be skipped
+	// (that collision is covered by TestNewManifestCannotShadowBuiltin).
+	good := filepath.Join(dir, "plugins", "calc2")
 	require.NoError(t, os.MkdirAll(good, 0o755))
-	manifest := `{"v":1,"id":"calc","name":"Calculator","type":"command",` +
-		`"bangs":["calc"],"command":{"argv":["/bin/true"]}}`
+	manifest := `{"v":1,"id":"calc2","name":"Calculator 2","type":"command",` +
+		`"bangs":["calc2"],"command":{"argv":["/bin/true"]}}`
 	require.NoError(t, os.WriteFile(filepath.Join(good, "manifest.json"), []byte(manifest), 0o644))
 	bad := filepath.Join(dir, "plugins", "broken")
 	require.NoError(t, os.MkdirAll(bad, 0o755))
@@ -339,8 +342,8 @@ func TestStartupBuildsRegistryFromPluginsDir(t *testing.T) {
 	require.Contains(t, logged, "plugin:", "manifest problems are logged with the plugin prefix")
 	require.Contains(t, logged, "broken", "the broken manifest is named")
 
-	ti := a.QueryPlugins("!calc 2+2", 1)
-	require.Equal(t, plugin.TargetInfo{Targeted: true, Plugin: "calc", Name: "Calculator", Bang: "calc"}, ti,
+	ti := a.QueryPlugins("!calc2 2+2", 1)
+	require.Equal(t, plugin.TargetInfo{Targeted: true, Plugin: "calc2", Name: "Calculator 2", Bang: "calc2"}, ti,
 		"the valid manifest made it into the registry")
 
 	require.Eventually(t, func() bool { return len(a.Search("shopping")) == 1 },
