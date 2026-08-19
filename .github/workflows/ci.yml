@@ -11,6 +11,9 @@ permissions:
   # submission (a 403 from the Dependency Submission API fails the build).
   contents: write
   actions: read
+  # buildhost-publish-release records every artifact the publish makes public
+  # on the org's linked artifacts page; that recording is part of publishing,
+  # not optional, so the publish fails without this.
   artifact-metadata: write
 
 jobs:
