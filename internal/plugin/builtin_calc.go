@@ -474,7 +474,7 @@ func calcBinop(a calcValue, op string, b calcValue) (calcValue, error) {
 			if a.i == math.MinInt64 && b.i == -1 {
 				return calcValue{}, fmt.Errorf("integer overflow")
 			}
-			return calcFromInt(floorDiv(a.i, b.i))
+			return calcFromInt(floorDiv(a.i, b.i)), nil
 		case "%":
 			if b.i == 0 {
 				return calcValue{}, fmt.Errorf("division by zero")
@@ -484,7 +484,7 @@ func calcBinop(a calcValue, op string, b calcValue) (calcValue, error) {
 			if a.i == math.MinInt64 && b.i == -1 {
 				return calcValue{}, fmt.Errorf("integer overflow")
 			}
-			return calcFromInt(pythonMod(a.i, b.i))
+			return calcFromInt(pythonMod(a.i, b.i)), nil
 		}
 	}
 	// Float path: / always float; // and % also compute float results.
