@@ -43,9 +43,11 @@ var evalCases = []struct {
 	{"100/8", "12.5"},
 	{"2**-2", "0.25"},
 	{"1//3", "0"},
-	{"-7//2", "-4"},  // floor division semantics (Python)
-	{"7%-3", "-2"},   // modulo sign follows the divisor (Python)
-	{"-7%2", "1"},    // modulo sign follows the divisor (Python)
+	// Floor division and modulo follow Python semantics: -7//2 == -4,
+	// 7%-3 == -2, -7%2 == 1 (the example plugin's behavior).
+	{"-7//2", "-4"},
+	{"7%-3", "-2"},
+	{"-7%2", "1"},
 
 	// Must fail
 	{"", ""},
@@ -61,13 +63,15 @@ var evalCases = []struct {
 	{"2//0", ""},
 	{"2%0", ""},
 	{"1/0", ""},
-	{"2**999", ""},  // exponent out of range
-	{"0**-1", ""},   // division by zero via float pow -> Inf, filtered
-	{"2**63", ""},   // 2^63 overflows int64; must not wrap
-	{"99999999999999999999", ""}, // int64 overflow
-	{"9223372036854775807+1", ""},  // add overflow, must not wrap
-	{"-9223372036854775807-2", ""}, // sub overflow, must not wrap
-	{"-9223372036854775807-1", "-9223372036854775808"}, // exactly MinInt64: valid
+	// Bounds and overflow: refused rather than wrapped or hung.
+	{"2**999", ""},
+	{"0**-1", ""},
+	{"2**63", ""},
+	{"99999999999999999999", ""},
+	{"9223372036854775807+1", ""},
+	{"-9223372036854775807-2", ""},
+	// Exactly MinInt64 is representable and valid.
+	{"-9223372036854775807-1", "-9223372036854775808"},
 	{"2+2 x", ""},
 	{"x+1", ""},
 	{"2 and 3", ""},
