@@ -25,7 +25,9 @@
 //     launcher, builtin_apps_search.go untargeted app search,
 //     builtin_openwindows.go open-window search,
 //     builtin_firefox.go frequently-visited Firefox sites,
-//     builtin_tabs.go open Firefox tabs) -- trusted in-process
+//     builtin_tabs.go open Firefox tabs, builtin_calc.go the "="
+//     prefix / !calc calculator, builtin_runterm.go run-in-terminal,
+//     builtin_rewrites.go config rewrite rules) -- trusted in-process
 //     providers that may emit the internal-only actions.
 //
 // The Wails app wiring (bound methods, events, cancellation by query

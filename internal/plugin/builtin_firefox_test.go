@@ -159,7 +159,7 @@ func TestNewRegistersFirefoxProviderOnlyWithSource(t *testing.T) {
 	r = New(Options{FrequentSites: sitesFn(testSites()), Logf: func(string, ...any) {}})
 	defer r.Close()
 	require.Contains(t, r.byID, builtinFirefoxID)
-	require.Len(t, r.providers, 4, "app + apps + apps-search + firefox-frequent")
+	require.Len(t, r.providers, 5, "app + apps + apps-search + calc + firefox-frequent")
 	require.Empty(t, r.byID[builtinFirefoxID].(*firefoxProvider).bangNames())
 	require.Empty(t, r.Errors())
 }

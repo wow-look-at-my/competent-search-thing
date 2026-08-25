@@ -4,16 +4,12 @@ on:
   push:
 
 permissions:
-  # id-token lets the buildhost actions (the deb steps and the publish job)
-  # mint the OIDC token they authenticate to pazer.build with.
+  # id-token: the buildhost actions (deb steps + publish job) mint their OIDC token from it (see .github/workflows/CI.md).
   id-token: write
-  # contents: write is required by go-toolchain's dependency-graph
-  # submission (a 403 from the Dependency Submission API fails the build).
+  # contents: go-toolchain's dependency-graph submission needs it; a 403 fails the build (see .github/workflows/CI.md).
   contents: write
   actions: read
-  # buildhost-publish-release records every artifact the publish makes public
-  # on the org's linked artifacts page; that recording is part of publishing,
-  # not optional, so the publish fails without this.
+  # artifact-metadata: the publish records artifacts on the org page; publishing fails without it (see .github/workflows/CI.md).
   artifact-metadata: write
 
 jobs:
@@ -23,14 +19,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Check sources are ASCII-only
-        # CLAUDE.md requires ASCII in every source file, and that rule
-        # has been broken twice by the same mechanism: gofmt applies
-        # typographic substitution inside DOC COMMENTS, so a comment
-        # containing a doubled straight quote gets rewritten to a curly
-        # one. The tree then carries a non-ASCII byte, and whichever
-        # gofmt build runs next may disagree about canonical form and
-        # fail the build with no obvious cause. A prose-only rule did
-        # not catch it; this does.
+        # ASCII gate: gofmt rewrites curly quotes inside doc comments (see .github/workflows/CI.md).
         uses: wow-look-at-my/actions@typescript#latest
         with:
           script: |
@@ -67,8 +56,7 @@ jobs:
 
       - name: Build frontend
         working-directory: frontend
-        # npm test is the vitest DOM-ordering gate (priority sections
-        # above file rows + the flat selection rules).
+        # npm test is the vitest DOM-ordering gate (see .github/workflows/CI.md).
         run: npm ci && npm run build && npm test
 
       - uses: wow-look-at-my/go-toolchain@v1
@@ -78,21 +66,11 @@ jobs:
           targets: linux/amd64,windows/amd64
           cgo: 'true'
           timeout: '20'
-          # The dedicated publish job is the SINGLE publish path. The
-          # action DEFAULTS autorelease to 'true', so it must be pinned
-          # off explicitly or this job publishes all of build/ (incl.
-          # the example color-http server binary) to buildhost itself.
+          # autorelease off: the publish job is the single publish path (see .github/workflows/CI.md).
           autorelease: 'false'
 
       - name: Hand off the linux binary to the publish job
-        # Org-standard cache-backed hand-off (the wow-look-at-my/actions
-        # cache-upload/cache-download trio) -- this org does not use the
-        # GitHub artifact service for job hand-offs. Only the app binaries
-        # ride to the publish job; the example color-http server binaries
-        # also land in build/ but are a dev sample, not a published
-        # deliverable. Distinct hand-off names keep the cache keys
-        # (cache-xfer-<name>-<run_id>-<run_attempt>) collision-free across
-        # jobs.
+        # Org-standard cache-backed hand-off, not GitHub artifacts (see .github/workflows/CI.md).
         uses: wow-look-at-my/actions@cache-upload#latest
         with:
           name: app-linux-amd64
@@ -105,15 +83,7 @@ jobs:
           path: build/competent-search-thing_windows_amd64.exe
 
       - name: Build Debian package (carries runtime lib Depends)
-        # buildhost's on-the-fly deb repackaging cannot declare package
-        # dependencies (its control file is Package/Version/Arch/Maintainer/
-        # Description only -- internal/repackage/deb.go), so a raw-binary or
-        # apt.pazer.build install lands without WebKitGTK and fails at the
-        # loader on any machine that never had the build deps. Build a real
-        # .deb here instead: same binary, plus a Depends line derived from the
-        # binary's direct NEEDED libs (objdump -p), package names verified on
-        # Ubuntu 24.04 and 22.04 (noble's t64 packages Provide the unsuffixed
-        # names, so one line covers both; glibc floor is GLIBC_2.34).
+        # Real .deb with a Depends line; buildhost's repackaging cannot declare deps (see .github/workflows/CI.md).
         uses: wow-look-at-my/actions@typescript#latest
         with:
           script: |
@@ -195,25 +165,17 @@ jobs:
           targets: darwin/arm64
           cgo: 'true'
           timeout: '30'
-          # Same pinning as the linux job: the publish job is the single
-          # publish path, and the action defaults autorelease to 'true'.
+          # Same autorelease pinning as the linux job (see .github/workflows/CI.md).
           autorelease: 'false'
 
       - name: GUI smoke (window + IPC round-trip)
-        # HARD GATE: a smoke failure fails the darwin job (and with it
-        # the required all-builds status). Every SMOKE id in the script
-        # is a hard pass/fail; screenshots are evidence, not checks.
+        # HARD GATE: a smoke failure fails darwin (see .github/workflows/CI.md).
         uses: wow-look-at-my/actions@typescript#latest
         with:
           file: .github/scripts/darwin-smoke.ts
 
       - name: Upload smoke screenshots
-        # Mirrors the linux job's Xvfb screenshots artifact: the smoke
-        # script drops its best-effort captures in smoke-shots/ at the
-        # workspace root. ignore (not warn): a failure before any
-        # capture -- or a TCC-restricted screencapture -- legitimately
-        # leaves nothing to upload, and the smoke step itself is the
-        # gate.
+        # Best-effort captures; the smoke step itself is the gate (see .github/workflows/CI.md).
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -229,25 +191,12 @@ jobs:
           path: build/competent-search-thing_darwin_arm64
 
   publish:
-    # ONE buildhost release per push, carrying every platform CI actually
-    # builds, so the app project's "latest" download is always a complete
-    # set. Runs on every branch unconditionally: branch pushes create
-    # branch releases (?branch=<name> downloads), while the bare "latest"
-    # URL only ever follows the default branch -- guaranteed by buildhost.
-    # The buildhost actions mint their own OIDC token (audience
-    # https://pazer.build) from the workflow's id-token: write grant.
-    # Deliberately NOT restored from the pre-#25 autorelease era: the
-    # color-http example server binary (project competent-search-thing/
-    # server) -- a dev sample, not a user-facing deliverable.
+    # One buildhost release per push, a complete platform set (see .github/workflows/CI.md).
     needs: [linux, darwin]
     runs-on: ubuntu-latest
     steps:
       - name: Download the linux binary hand-off
-        # Single-file hand-offs restore as <dest>/<basename>, so the three
-        # binaries land in binaries/ under their build/ names. A missing
-        # hand-off fails the job loudly (fail-if-missing defaults true),
-        # and on a "re-run failed jobs" the restore-keys prefix picks up
-        # the earlier attempt's uploads.
+        # Single-file hand-offs restore as <dest>/<basename> (see .github/workflows/CI.md).
         uses: wow-look-at-my/actions@cache-download#latest
         with:
           name: app-linux-amd64

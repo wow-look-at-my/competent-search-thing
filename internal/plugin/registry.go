@@ -303,9 +303,9 @@ func (b *builtinBase) preRanked() bool                            { return false
 
 // addBuiltins registers the builtin providers (bang suggestions, app
 // commands, installed-app launcher, untargeted app search,
-// open-windows search, frequent sites, open tabs, run-in-terminal)
-// unless individually disabled -- the open-windows search and the
-// run-in-terminal source additionally need their seams
+// open-windows search, frequent sites, open tabs, run-in-terminal,
+// calculator) unless individually disabled -- the open-windows search
+// and the run-in-terminal source additionally need their seams
 // (Options.OpenWindows, Options.Terminal), which are nil on sessions
 // that cannot enumerate windows / machines with no terminal
 // emulator. Builtins register BEFORE external plugins so a
@@ -326,6 +326,11 @@ func (r *Registry) addBuiltins(opts Options, disabled func(string) bool) {
 	}
 	if !disabled(builtinAppsSearchID) {
 		r.register(newAppsSearchProvider(opts.InstalledApps, opts.AppUsage))
+	}
+	// The calculator answers "=..." and !calc/!c queries out of the
+	// box -- a pure in-process evaluator, so it needs no seam.
+	if !disabled(builtinCalcID) {
+		r.register(newCalcProvider())
 	}
 	if opts.OpenWindows != nil && !disabled(builtinWindowsID) {
 		r.register(newWindowsProvider(opts.OpenWindows))

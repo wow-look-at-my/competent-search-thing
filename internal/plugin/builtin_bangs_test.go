@@ -125,10 +125,12 @@ func TestCheatSheetDefaultBuiltins(t *testing.T) {
 	require.Equal(t, "Commands", e.Name)
 	require.EqualValues(t, 0, e.Gen)
 
-	wantBangs := []string{"app", "config", "launch", "quit", "reload", "rescan", "version"}
+	wantBangs := []string{"app", "c", "calc", "config", "launch", "quit", "reload", "rescan", "version"}
 	subtitles := map[string]string{
 		"app":     "Launch",
 		"launch":  "Launch",
+		"c":       "Calculator",
+		"calc":    "Calculator",
 		"config":  "App Commands",
 		"quit":    "App Commands",
 		"reload":  "App Commands",

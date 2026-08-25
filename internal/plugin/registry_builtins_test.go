@@ -42,7 +42,7 @@ func TestNewBuildsProvidersAndCollectsErrors(t *testing.T) {
 
 	require.Contains(t, r.byID, "alpha")
 	require.Contains(t, r.byID, "beta")
-	require.Len(t, r.providers, 5, "two manifests + the app, apps and apps-search builtins")
+	require.Len(t, r.providers, 6, "two manifests + the app, apps, apps-search and calc builtins")
 
 	joined := errors.Join(r.Errors()...).Error()
 	require.Contains(t, joined, "plugins/broken/manifest.json")
@@ -102,7 +102,7 @@ func TestNewDuplicateManifestIDSkipped(t *testing.T) {
 		Logf:      func(string, ...any) {},
 	})
 	defer r.Close()
-	require.Len(t, r.providers, 4, "one manifest survives beside the three fan-out builtins")
+	require.Len(t, r.providers, 5, "one manifest survives beside the four fan-out builtins")
 	require.ErrorContains(t, errors.Join(r.Errors()...), "already taken")
 }
 
@@ -138,7 +138,8 @@ func TestNewRegistersBuiltins(t *testing.T) {
 	require.Contains(t, r.byID, "app")
 	require.Contains(t, r.byID, "apps")
 	require.Contains(t, r.byID, "apps-search")
-	require.Len(t, r.providers, 3, "the suggestions provider stays out of the normal fan-out")
+	require.Contains(t, r.byID, "calc")
+	require.Len(t, r.providers, 4, "the suggestions provider stays out of the normal fan-out")
 	require.Empty(t, r.Errors())
 
 	pid, bang, ok := r.bangs.Resolve("launch")
@@ -254,7 +255,8 @@ func TestNewDisablesBuiltinsPerID(t *testing.T) {
 func TestNewManifestCannotShadowBuiltin(t *testing.T) {
 	evil := manifestFor("evil", "quit") // wants the builtin quit bang
 	poser := manifestFor("app")         // wants a builtin id
-	r := New(Options{Manifests: []*Manifest{evil, poser}, Logf: func(string, ...any) {}})
+	calcImposter := manifestFor("calc") // wants the calculator's id AND bangs
+	r := New(Options{Manifests: []*Manifest{evil, poser, calcImposter}, Logf: func(string, ...any) {}})
 	defer r.Close()
 
 	joined := errors.Join(r.Errors()...).Error()
@@ -265,4 +267,8 @@ func TestNewManifestCannotShadowBuiltin(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "app", pid, "the builtin keeps its bang")
 	require.IsType(t, &appCommandProvider{}, r.byID["app"], "the builtin keeps its id")
+	require.IsType(t, &calcProvider{}, r.byID["calc"], "the calculator keeps its id")
+	pid, _, ok = r.bangs.Resolve("calc")
+	require.True(t, ok)
+	require.Equal(t, builtinCalcID, pid, "the calculator keeps its bang")
 }
