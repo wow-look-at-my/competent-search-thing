@@ -464,13 +464,7 @@ docs/index-engine.md, docs/ci.md, ...), one file per map entry.
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push (`on: push:`, no
-filters). Three jobs -- `linux` (frontend build + vitest, the
-go-toolchain build for linux/amd64 and a windows/amd64 cross-compile,
-the deb, the Xvfb screenshot capture), `darwin` (a mac runner: cgo
-build, the full unit-test suite, and the GUI smoke script) and
-`publish` (one buildhost release per push) -- plus the org-required
-`all-builds` commit status, which the required-builds-manager app
+`.github/workflows/ci.yml` runs on every branch push. Its `branches: ['**']` filter excludes only tag pushes, and go-toolchain fails a push trigger that names no filter. Three jobs -- `linux` (frontend build + vitest, the go-toolchain build, the deb, the Xvfb screenshot capture), `darwin` (a mac runner: cgo build, the full unit-test suite, and the GUI smoke script) and `publish` (one buildhost release per push) -- plus the org-required `all-builds` commit status, which the required-builds-manager app
 posts by tallying those jobs itself.
 
 - NEVER name a job, check run or workflow `all-builds`: it cannot
