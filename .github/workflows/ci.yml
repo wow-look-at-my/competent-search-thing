@@ -163,8 +163,6 @@ jobs:
       - uses: wow-look-at-my/go-toolchain@master
         env:
           GOFLAGS: "-tags=desktop,production"
-          # The cgo input only reaches --cgo, which the toolchain now ignores.
-          CGO_ENABLED: '1'
         with:
           cgo: 'true'
           timeout: '30'
