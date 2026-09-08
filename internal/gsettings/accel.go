@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
+	"github.com/wow-look-at-my/go-containers/set"
 )
 
 // accelMods maps the repo's OS-neutral modifiers to GTK accelerator
@@ -62,12 +63,12 @@ func ConvertHotkey(hk platform.Hotkey) (string, error) {
 		return "", fmt.Errorf("gsettings: hotkey key %q has no GNOME accelerator name", hk.Key)
 	}
 	var b strings.Builder
-	seen := make(map[platform.Mod]bool, len(hk.Mods))
+	seen := set.New[platform.Mod]()
 	for _, m := range hk.Mods {
-		if seen[m] {
+		if seen.Contains(m) {
 			continue
 		}
-		seen[m] = true
+		seen.Add(m)
 		tag, ok := accelMods[m]
 		if !ok {
 			return "", fmt.Errorf("gsettings: hotkey modifier %v has no GNOME accelerator name", m)

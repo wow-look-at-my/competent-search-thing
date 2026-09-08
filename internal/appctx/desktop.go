@@ -2,6 +2,7 @@ package appctx
 
 import (
 	"bufio"
+	"github.com/wow-look-at-my/go-containers/set"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,11 +39,11 @@ func DesktopDirs(getenv func(string) string) []string {
 		}
 	}
 	dirs := make([]string, 0, len(bases))
-	seen := make(map[string]bool, len(bases))
+	seen := set.New[string]()
 	for _, b := range bases {
 		dir := filepath.Join(b, "applications")
-		if !seen[dir] {
-			seen[dir] = true
+		if !seen.Contains(dir) {
+			seen.Add(dir)
 			dirs = append(dirs, dir)
 		}
 	}
@@ -62,7 +63,7 @@ func DesktopDirs(getenv func(string) string) []string {
 // a system-wide app). Unreadable dirs and files are skipped silently.
 func ScanDesktopDirs(dirs []string) []InstalledApp {
 	var apps []InstalledApp
-	seen := make(map[string]bool)
+	seen := set.New[string]()
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -70,10 +71,10 @@ func ScanDesktopDirs(dirs []string) []InstalledApp {
 		}
 		for _, e := range entries {
 			id := e.Name()
-			if e.IsDir() || !strings.HasSuffix(id, ".desktop") || seen[id] {
+			if e.IsDir() || !strings.HasSuffix(id, ".desktop") || seen.Contains(id) {
 				continue
 			}
-			seen[id] = true // earlier dirs shadow later ones by presence
+			seen.Add(id) // earlier dirs shadow later ones by presence
 			app, ok := parseDesktopFile(filepath.Join(dir, id))
 			if !ok {
 				continue

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/wow-look-at-my/go-containers/set"
 )
 
 // writeTheme drops a theme JSON into dir/themes/<name>.json.
@@ -28,14 +29,14 @@ func requireComplete(t *testing.T, tokens map[string]string) {
 
 func TestTokenNamesAreUniqueAndStable(t *testing.T) {
 	require.Len(t, TokenNames, 22, "the token set is a closed public contract")
-	seen := map[string]bool{}
+	seen := set.New[string]()
 	for _, k := range TokenNames {
-		require.False(t, seen[k], "duplicate token %s", k)
-		seen[k] = true
+		require.False(t, seen.Contains(k), "duplicate token %s", k)
+		seen.Add(k)
 	}
 	// Spot-pin a few names the plugin workstream depends on.
 	for _, k := range []string{"accent", "accent-fg", "badge-bg", "badge-fg", "highlight"} {
-		require.True(t, seen[k], "public token %s must exist", k)
+		require.True(t, seen.Contains(k), "public token %s must exist", k)
 	}
 }
 

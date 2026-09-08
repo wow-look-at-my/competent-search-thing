@@ -1,6 +1,7 @@
 package frecency
 
 import (
+	"github.com/wow-look-at-my/go-containers/set"
 	"math"
 	"os"
 	"path/filepath"
@@ -60,13 +61,13 @@ func DeriveCwd(tree ProcTree, rootPID int) (string, bool) {
 		}
 	}
 	best, bestDepth := "", -1
-	visited := map[int]bool{}
+	visited := set.New[int]()
 	var walk func(pid, depth int)
 	walk = func(pid, depth int) {
-		if visited[pid] || depth > maxProcDepth {
+		if visited.Contains(pid) || depth > maxProcDepth {
 			return
 		}
-		visited[pid] = true
+		visited.Add(pid)
 		if cwd, ok := meaningful(pid); ok && depth > bestDepth {
 			best, bestDepth = cwd, depth
 		}

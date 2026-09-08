@@ -1,9 +1,9 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -50,9 +50,17 @@ func TestPreviewWindowSize(t *testing.T) {
 		// migration resets to on (pinned in internal/config).
 		dir := t.TempDir()
 		t.Setenv(config.EnvConfigDir, dir)
-		raw := `{"rootsVersion":` + strconv.Itoa(config.CurrentRootsVersion()) +
-			`,"window":{"width":900,"height":640},"preview":{"enabled":false,"windowWidth":1440,"windowHeight":900}}`
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), []byte(raw), 0o644))
+		raw, err := json.Marshal(map[string]any{
+			"rootsVersion": config.CurrentRootsVersion(),
+			"window":       map[string]any{"width": 900, "height": 640},
+			"preview": map[string]any{
+				"enabled":      false,
+				"windowWidth":  1440,
+				"windowHeight": 900,
+			},
+		})
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.json"), raw, 0o644))
 		w, h, enabled := PreviewWindowSize()
 		require.False(t, enabled)
 		require.Equal(t, 900, w)

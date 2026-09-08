@@ -70,10 +70,13 @@ docs/index-engine.md, docs/ci.md, ...), one file per map entry.
 - `internal/index` -- the index engine: a compact column-oriented
   Store (interned dir table, one name blob, tombstone removals),
   sharded case-insensitive queries with per-shard top-K heaps, the
-  path/fuzzy/multi-term modes, the parallel Walk, and the Manager's
+  path/fuzzy/multi-term modes, and the Manager's
   RWMutex contract (queries RLock, mutations Lock; BuildFromDisk
   swaps a fresh store so queries never block). A bare Store is NOT
   thread-safe, and findChild MUTATES, so it stays write-path only.
+  The traversal is `github.com/wow-look-at-my/go-fs-tree-fast`
+  (package fstree): walk.go here holds the readDirFn seam, alias
+  re-exports of ProgressFunc/WalkStats/Excluder, and storeSink.
   See docs/index-engine.md.
 - `internal/config` -- config.json load/save under os.UserConfigDir()
   (`COMPETENT_SEARCH_CONFIG_DIR` overrides; `Dir()` exposes it). Load
@@ -461,13 +464,7 @@ docs/index-engine.md, docs/ci.md, ...), one file per map entry.
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push (`on: push:`, no
-filters). Three jobs -- `linux` (frontend build + vitest, the
-go-toolchain build for linux/amd64 and a windows/amd64 cross-compile,
-the deb, the Xvfb screenshot capture), `darwin` (a mac runner: cgo
-build, the full unit-test suite, and the GUI smoke script) and
-`publish` (one buildhost release per push) -- plus the org-required
-`all-builds` commit status, which the required-builds-manager app
+`.github/workflows/ci.yml` runs on every branch push. Its `branches: ['**']` filter excludes only tag pushes, and go-toolchain fails a push trigger that names no filter. Three jobs -- `linux` (frontend build + vitest, the go-toolchain build, the deb, the Xvfb screenshot capture), `darwin` (a mac runner: cgo build, the full unit-test suite, and the GUI smoke script) and `publish` (one buildhost release per push) -- plus the org-required `all-builds` commit status, which the required-builds-manager app
 posts by tallying those jobs itself.
 
 - NEVER name a job, check run or workflow `all-builds`: it cannot

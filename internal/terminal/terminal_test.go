@@ -6,17 +6,18 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/wow-look-at-my/go-containers/set"
 )
 
 // lookPath builds a LookPath seam resolving exactly the named
 // executables to /usr/bin/<name>, in the "found" set's spelling.
 func lookPath(found ...string) func(string) (string, error) {
-	set := map[string]bool{}
+	set := set.New[string]()
 	for _, f := range found {
-		set[f] = true
+		set.Add(f)
 	}
 	return func(name string) (string, error) {
-		if set[name] {
+		if set.Contains(name) {
 			return "/usr/bin/" + name, nil
 		}
 		return "", errors.New("not found")

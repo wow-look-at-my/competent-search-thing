@@ -3,6 +3,7 @@ package platform
 import (
 	"errors"
 	"fmt"
+	"github.com/wow-look-at-my/go-containers/set"
 	"strings"
 )
 
@@ -116,7 +117,7 @@ func ParseHotkey(s string) (Hotkey, error) {
 		}
 	}
 	var hk Hotkey
-	seen := map[Mod]bool{}
+	seen := set.New[Mod]()
 	for i, p := range parts {
 		if i == len(parts)-1 {
 			key, ok := keyAliases[p]
@@ -130,8 +131,8 @@ func ParseHotkey(s string) (Hotkey, error) {
 		if !ok {
 			return Hotkey{}, fmt.Errorf("hotkey: unknown modifier %q in %q", p, s)
 		}
-		if !seen[mod] {
-			seen[mod] = true
+		if !seen.Contains(mod) {
+			seen.Add(mod)
 			hk.Mods = append(hk.Mods, mod)
 		}
 	}

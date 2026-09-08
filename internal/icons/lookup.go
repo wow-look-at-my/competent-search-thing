@@ -1,6 +1,7 @@
 package icons
 
 import (
+	"github.com/wow-look-at-my/go-containers/set"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,13 +58,13 @@ func (s *Service) theme(name string) *themeIndex {
 // just the two fallbacks.
 func (s *Service) buildChain(detected string) []string {
 	var chain []string
-	seen := map[string]bool{}
+	seen := set.New[string]()
 	var add func(name string, depth int)
 	add = func(name string, depth int) {
-		if name == "" || depth > maxInheritDepth || seen[name] {
+		if name == "" || depth > maxInheritDepth || seen.Contains(name) {
 			return
 		}
-		seen[name] = true
+		seen.Add(name)
 		chain = append(chain, name)
 		if t := s.theme(name); t != nil {
 			for _, inh := range t.inherits {
@@ -73,8 +74,8 @@ func (s *Service) buildChain(detected string) []string {
 	}
 	add(detected, 0)
 	for _, fb := range []string{"Adwaita", "hicolor"} {
-		if !seen[fb] {
-			seen[fb] = true
+		if !seen.Contains(fb) {
+			seen.Add(fb)
 			chain = append(chain, fb)
 		}
 	}

@@ -1,7 +1,8 @@
 # internal/index
 
-Extracted from CLAUDE.md's architecture map, which keeps a one-line
-pointer here. Everything below is that entry, unchanged.
+Extracted from CLAUDE.md's architecture map, which keeps a one-line pointer here. Everything below is that entry, unchanged.
+
+CORRECTION, and read it before the `Walk` prose below. The traversal itself no longer lives here. It moved to `github.com/wow-look-at-my/go-fs-tree-fast`, package `fstree`. That module owns the worker pool, the LIFO queue, the `Excluder`, the root normalization and the per-worker scratch buffers. Its `docs/walker.md` carries the mechanism and the measurements. What stays here is `walk.go`. That file holds the `readDirFn` test seam and alias re-exports of `ProgressFunc`, `WalkStats` and `Excluder`, which internal/watch and internal/app build through. It also holds `storeSink`, which drains one directory's batch into the Store behind `growChildren`. The `Walk` paragraph below still describes the old in-package spelling. Correcting it in place is not a small edit. This file is one 300-line paragraph, and the prose lint now wants one-line paragraphs and short sentences.
 
 `internal/index` -- the index engine. `Store`: compact
 column-oriented data (interned parent-dir table; ONE original-case

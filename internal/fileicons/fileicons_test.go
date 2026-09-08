@@ -16,9 +16,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	binpazer "github.com/wow-look-at-my/bin-file-fmt/go"
+	"github.com/wow-look-at-my/go-containers/set"
 )
 
-var knownFonts = map[string]bool{"fi": true, "fa": true, "mf": true, "oct": true, "di": true}
+var knownFonts = set.Of[string]("fi", "fa", "mf", "oct", "di")
 
 func decodeCommitted(t *testing.T) *Table {
 	t.Helper()
@@ -42,7 +43,7 @@ func TestVendoringReceipts(t *testing.T) {
 	assert.Equal(t, Icon{Font: "oct", CP: 0xf016}, tab.DefDir, "octicons file-directory")
 	for _, r := range append(append([]Rule{}, tab.FileRules...), tab.DirRules...) {
 		assert.True(t, (r.Suffix != "") != (r.Regex != ""), "exactly one of suffix/regex: %+v", r)
-		assert.True(t, knownFonts[r.Font], "unknown font %q", r.Font)
+		assert.True(t, knownFonts.Contains(r.Font), "unknown font %q", r.Font)
 		assert.LessOrEqual(t, r.CP, 0x10ffff)
 		assert.Equal(t, r.Dark != "", r.Light != "", "colours come in pairs: %+v", r)
 		if r.Suffix != "" {
