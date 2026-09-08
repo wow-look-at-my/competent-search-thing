@@ -63,7 +63,6 @@ jobs:
         env:
           GOFLAGS: "-tags=webkit2_41,desktop,production"
         with:
-          targets: linux/amd64,windows/amd64
           cgo: 'true'
           timeout: '20'
           # The publish job is the single publish path, and this defaults on.
@@ -162,7 +161,6 @@ jobs:
         env:
           GOFLAGS: "-tags=desktop,production"
         with:
-          targets: darwin/arm64
           cgo: 'true'
           timeout: '30'
           # Same pinning as the linux job.
