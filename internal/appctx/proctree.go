@@ -2,6 +2,7 @@ package appctx
 
 import (
 	"bytes"
+	"github.com/wow-look-at-my/go-containers/set"
 	"os"
 	"path/filepath"
 	"sort"
@@ -128,15 +129,15 @@ func (t *ProcTree) Cwd(pid int) (string, error) {
 // plain GUI app: tpgid is -1 without a controlling terminal).
 func (t *ProcTree) Foreground(pid int) (int, bool) {
 	t.scan()
-	visited := map[int]bool{}
+	visited := set.New[int]()
 	queue := []int{pid}
-	for len(queue) > 0 && len(visited) < procTreeMaxVisited {
+	for len(queue) > 0 && visited.Len() < procTreeMaxVisited {
 		cur := queue[0]
 		queue = queue[1:]
-		if cur <= 0 || visited[cur] {
+		if cur <= 0 || visited.Contains(cur) {
 			continue
 		}
-		visited[cur] = true
+		visited.Add(cur)
 		if tp, known := t.tpgid[cur]; known && tp > 0 {
 			return tp, true
 		}

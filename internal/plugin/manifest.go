@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/wow-look-at-my/go-containers/set"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -28,11 +29,9 @@ const (
 var idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
 // contextParts are the app-context parts a manifest may declare.
-var contextParts = map[string]bool{
-	"focused":   true,
-	"running":   true,
-	"installed": true,
-}
+var contextParts = set.Of[string]("focused",
+	"running",
+	"installed")
 
 // Manifest describes one plugin, loaded from
 // <configDir>/plugins/<dir>/manifest.json. LoadDir fills defaults and
@@ -183,30 +182,30 @@ func (m *Manifest) validate() error {
 		return errors.New("no trigger and no bangs: the plugin would be unreachable")
 	}
 	bangs := make([]string, 0, len(m.Bangs))
-	seen := make(map[string]bool, len(m.Bangs))
+	seen := set.New[string]()
 	for _, b := range m.Bangs {
 		b = strings.ToLower(b)
 		if !idRe.MatchString(b) {
 			return fmt.Errorf("bang %q: must match %s", b, idRe)
 		}
-		if seen[b] {
+		if seen.Contains(b) {
 			continue
 		}
-		seen[b] = true
+		seen.Add(b)
 		bangs = append(bangs, b)
 	}
 	m.Bangs = bangs
 	if len(m.Context) > 0 {
 		ctx := make([]string, 0, len(m.Context))
-		seenCtx := make(map[string]bool, len(m.Context))
+		seenCtx := set.New[string]()
 		for _, c := range m.Context {
-			if !contextParts[c] {
+			if !contextParts.Contains(c) {
 				return fmt.Errorf("context %q: must be one of focused, running, installed", c)
 			}
-			if seenCtx[c] {
+			if seenCtx.Contains(c) {
 				continue
 			}
-			seenCtx[c] = true
+			seenCtx.Add(c)
 			ctx = append(ctx, c)
 		}
 		m.Context = ctx

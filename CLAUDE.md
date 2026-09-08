@@ -70,10 +70,13 @@ docs/index-engine.md, docs/ci.md, ...), one file per map entry.
 - `internal/index` -- the index engine: a compact column-oriented
   Store (interned dir table, one name blob, tombstone removals),
   sharded case-insensitive queries with per-shard top-K heaps, the
-  path/fuzzy/multi-term modes, the parallel Walk, and the Manager's
+  path/fuzzy/multi-term modes, and the Manager's
   RWMutex contract (queries RLock, mutations Lock; BuildFromDisk
   swaps a fresh store so queries never block). A bare Store is NOT
   thread-safe, and findChild MUTATES, so it stays write-path only.
+  The traversal is `github.com/wow-look-at-my/go-fs-tree-fast`
+  (package fstree): walk.go here holds the readDirFn seam, alias
+  re-exports of ProgressFunc/WalkStats/Excluder, and storeSink.
   See docs/index-engine.md.
 - `internal/config` -- config.json load/save under os.UserConfigDir()
   (`COMPETENT_SEARCH_CONFIG_DIR` overrides; `Dir()` exposes it). Load

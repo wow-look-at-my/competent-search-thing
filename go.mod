@@ -1,6 +1,6 @@
 module github.com/wow-look-at-my/competent-search-thing
 
-go 1.25.12
+go 1.26
 
 require (
 	github.com/andybalholm/brotli v1.2.2
@@ -11,13 +11,15 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/wailsapp/wails/v2 v2.13.0
-	github.com/wow-look-at-my/bin-file-fmt/go v0.0.0-20260709175544-18acffa53e3e
+	github.com/wow-look-at-my/bin-file-fmt/go v0.0.0-20260809003625-b41c22095858 // go-toolchain:auto-branch
 	golang.design/x/hotkey v0.6.1
 	golang.org/x/image v0.41.0
 	golang.org/x/sys v0.46.0
 	golang.org/x/term v0.43.0
 	modernc.org/sqlite v1.54.0
 )
+
+require github.com/wow-look-at-my/go-containers v0.0.0-20260826161058-40a3d1ef3d41 // go-toolchain:auto-branch
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
@@ -29,6 +31,7 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e // indirect
+	github.com/klauspost/compress v1.19.1 // indirect
 	github.com/labstack/echo/v4 v4.13.3 // indirect
 	github.com/labstack/gommon v0.4.2 // indirect
 	github.com/leaanthony/go-ansi-parser v1.6.1 // indirect
@@ -38,6 +41,7 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
@@ -50,6 +54,7 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
+	github.com/wow-look-at-my/go-fs-tree-fast v0.0.0-20260908054949-c562421e2298 // go-toolchain:auto-branch
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/text v0.37.0 // indirect

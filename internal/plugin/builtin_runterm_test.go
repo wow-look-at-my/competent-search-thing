@@ -9,19 +9,20 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/match"
+	"github.com/wow-look-at-my/go-containers/set"
 )
 
 // testRunner builds a TerminalRunner resolving the named executables
 // under /usr/bin and wrapping commands the way "xterm -e" does.
 func testRunner(found ...string) *TerminalRunner {
-	set := map[string]bool{}
+	set := set.New[string]()
 	for _, f := range found {
-		set[f] = true
+		set.Add(f)
 	}
 	return &TerminalRunner{
 		Name: "xterm",
 		LookPath: func(name string) (string, error) {
-			if set[name] {
+			if set.Contains(name) {
 				return "/usr/bin/" + name, nil
 			}
 			return "", errors.New("not found")

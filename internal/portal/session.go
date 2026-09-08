@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/wow-look-at-my/go-containers/set"
 )
 
 // Phase timeouts. CreateSession and ListShortcuts are non-interactive
@@ -285,13 +286,13 @@ func (c *caller) request(ctx context.Context, timeout time.Duration, method stri
 
 	// Very old portals predate predictable request paths: when the
 	// returned handle differs from the prediction, listen there too.
-	accept := map[dbus.ObjectPath]bool{predicted: true}
+	accept := set.Of[dbus.ObjectPath](predicted)
 	if handle != "" && handle != predicted {
 		if err := c.conn.AddMatchSignal(responseMatch(handle)...); err != nil {
 			return 0, nil, fmt.Errorf("portal: %s: subscribing for the response: %w", method, err)
 		}
 		defer func() { _ = c.conn.RemoveMatchSignal(responseMatch(handle)...) }()
-		accept[handle] = true
+		accept.Add(handle)
 	}
 
 	for {
@@ -302,7 +303,7 @@ func (c *caller) request(ctx context.Context, timeout time.Duration, method stri
 			if !ok {
 				return 0, nil, fmt.Errorf("portal: %s: connection closed while awaiting response", method)
 			}
-			if sig == nil || sig.Name != signalResponse || !accept[sig.Path] {
+			if sig == nil || sig.Name != signalResponse || !accept.Contains(sig.Path) {
 				continue
 			}
 			return parseResponse(sig)

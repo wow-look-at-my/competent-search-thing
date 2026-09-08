@@ -2,6 +2,7 @@ package preview
 
 import (
 	"fmt"
+	"github.com/wow-look-at-my/go-containers/set"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,20 +10,18 @@ import (
 
 // imageExts are the extensions the thumbnail provider accepts
 // (lowercased, no dot).
-var imageExts = map[string]bool{
-	"png":  true,
-	"jpg":  true,
-	"jpeg": true,
-	"gif":  true,
-	"webp": true,
-	"bmp":  true,
-}
+var imageExts = set.Of[string]("png",
+	"jpg",
+	"jpeg",
+	"gif",
+	"webp",
+	"bmp")
 
 // isImageExt reports whether path's extension names a supported image
 // format.
 func isImageExt(path string) bool {
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
-	return imageExts[ext]
+	return imageExts.Contains(ext)
 }
 
 // humanSize renders a byte count for humans: "512 B", "1.4 MB",

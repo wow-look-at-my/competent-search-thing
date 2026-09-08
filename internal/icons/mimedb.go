@@ -2,6 +2,7 @@ package icons
 
 import (
 	"bufio"
+	"github.com/wow-look-at-my/go-containers/set"
 	"os"
 	"path"
 	"path/filepath"
@@ -232,10 +233,10 @@ func (db *mimeDB) IconNames(mime string) []string {
 	}
 	names = append(names, class+"-x-generic")
 	out := names[:0]
-	seen := map[string]bool{}
+	seen := set.New[string]()
 	for _, n := range names {
-		if !seen[n] {
-			seen[n] = true
+		if !seen.Contains(n) {
+			seen.Add(n)
 			out = append(out, n)
 		}
 	}

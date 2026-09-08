@@ -16,6 +16,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"github.com/wow-look-at-my/go-containers/set"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -135,15 +136,15 @@ func resolve(name, configDir string) (map[string]string, error) {
 		name = DefaultName
 	}
 	var chain []themeFile
-	seen := map[string]bool{}
+	seen := set.New[string]()
 	for cur := name; ; {
 		if len(chain) >= maxChain {
 			return nil, fmt.Errorf("theme %q: extends chain longer than %d themes", name, maxChain)
 		}
-		if seen[cur] {
+		if seen.Contains(cur) {
 			return nil, fmt.Errorf("theme %q: extends cycle at %q", name, cur)
 		}
-		seen[cur] = true
+		seen.Add(cur)
 		tf, err := loadTheme(cur, configDir)
 		if err != nil {
 			return nil, err

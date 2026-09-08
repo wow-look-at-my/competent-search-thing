@@ -2,6 +2,7 @@ package launch
 
 import (
 	"context"
+	"github.com/wow-look-at-my/go-containers/set"
 	"path/filepath"
 	"strings"
 	"time"
@@ -57,13 +58,13 @@ type Identity struct {
 // (all lowercased, deduplicated, blanks dropped).
 func NewIdentity(pid int, cred Credential, h Handler, argv0 string) Identity {
 	id := Identity{PID: pid, StartupID: cred.ID}
-	seen := map[string]bool{}
+	seen := set.New[string]()
 	for _, hint := range []string{h.WMClass, filepath.Base(h.Exe), filepath.Base(argv0)} {
 		hint = strings.ToLower(strings.TrimSpace(hint))
-		if hint == "" || hint == "." || seen[hint] {
+		if hint == "" || hint == "." || seen.Contains(hint) {
 			continue
 		}
-		seen[hint] = true
+		seen.Add(hint)
 		id.Hints = append(id.Hints, hint)
 	}
 	return id

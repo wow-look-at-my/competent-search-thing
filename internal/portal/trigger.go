@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/platform"
+	"github.com/wow-look-at-my/go-containers/set"
 )
 
 // modNames maps the repo's OS-neutral modifiers to the shortcuts-spec
@@ -63,12 +64,12 @@ func TriggerString(hk platform.Hotkey) (string, error) {
 		return "", fmt.Errorf("portal: hotkey key %q has no shortcuts-spec keysym name", hk.Key)
 	}
 	parts := make([]string, 0, len(hk.Mods)+1)
-	seen := make(map[platform.Mod]bool, len(hk.Mods))
+	seen := set.New[platform.Mod]()
 	for _, m := range hk.Mods {
-		if seen[m] {
+		if seen.Contains(m) {
 			continue
 		}
-		seen[m] = true
+		seen.Add(m)
 		name, ok := modNames[m]
 		if !ok {
 			return "", fmt.Errorf("portal: hotkey modifier %v has no shortcuts-spec name", m)

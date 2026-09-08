@@ -26,6 +26,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/base64"
+	"github.com/wow-look-at-my/go-containers/set"
 	"log"
 	"net/http"
 	"os"
@@ -225,7 +226,7 @@ func (s *Service) Resolve(keys []string, size int) map[string]string {
 	s.once.Do(s.initialize)
 	out := make(map[string]string, len(keys))
 	var favKeys []string
-	favSeen := map[string]bool{}
+	favSeen := set.New[string]()
 	s.mu.Lock()
 	for _, key := range keys {
 		if _, done := out[key]; done {
@@ -235,8 +236,8 @@ func (s *Service) Resolve(keys []string, size int) map[string]string {
 			ck := key + "|" + strconv.Itoa(size)
 			if uri, ok := s.cache.get(ck); ok {
 				out[key] = uri
-			} else if _, neg := s.negative.get(ck); !neg && !favSeen[key] {
-				favSeen[key] = true
+			} else if _, neg := s.negative.get(ck); !neg && !favSeen.Contains(key) {
+				favSeen.Add(key)
 				favKeys = append(favKeys, key)
 			}
 			continue
@@ -465,10 +466,10 @@ func xdgDataDirs(getenv func(string) string) []string {
 // dedupe drops later duplicates, keeping first positions.
 func dedupe(in []string) []string {
 	out := in[:0]
-	seen := make(map[string]bool, len(in))
+	seen := set.New[string]()
 	for _, s := range in {
-		if !seen[s] {
-			seen[s] = true
+		if !seen.Contains(s) {
+			seen.Add(s)
 			out = append(out, s)
 		}
 	}

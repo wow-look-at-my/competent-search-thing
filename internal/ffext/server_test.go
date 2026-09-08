@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/wow-look-at-my/go-containers/set"
 )
 
 // testSocket returns a fresh, short socket path (the internal/ipc
@@ -354,15 +355,15 @@ func TestServerRequestIDsAreUniqueAcrossConns(t *testing.T) {
 	f1 := dialFakeHost(t, path)
 	f2 := dialFakeHost(t, path)
 	// Answer both on-connect lists and capture the request ids.
-	ids := map[int64]bool{}
+	ids := set.New[int64]()
 	for _, f := range []*fakeHost{f1, f2} {
 		require.NoError(t, f.conn.SetReadDeadline(time.Now().Add(2*time.Second)))
 		line, err := f.rd.ReadString('\n')
 		require.NoError(t, err)
 		var req request
 		require.NoError(t, json.Unmarshal([]byte(line), &req))
-		require.False(t, ids[req.ID], "request ids must never collide")
-		ids[req.ID] = true
+		require.False(t, ids.Contains(req.ID), "request ids must never collide")
+		ids.Add(req.ID)
 		f.reply(map[string]any{"id": req.ID, "ok": true, "tabs": []map[string]any{}})
 	}
 	_ = s

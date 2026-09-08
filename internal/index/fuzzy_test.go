@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/wow-look-at-my/competent-search-thing/internal/match"
+	"github.com/wow-look-at-my/go-containers/set"
 )
 
 // naiveSubseq is the reference subsequence check, INDEPENDENT of the
@@ -118,10 +119,10 @@ func naiveQueryFuzzy(entries []refEntry, q string, limit int) []Result {
 // as a substring and as a subsequence appears exactly once.
 func requireUniquePaths(t *testing.T, res []Result, label string) {
 	t.Helper()
-	seen := make(map[string]bool, len(res))
+	seen := set.New[string]()
 	for _, r := range res {
-		require.False(t, seen[r.Path], "%s: duplicate result %q", label, r.Path)
-		seen[r.Path] = true
+		require.False(t, seen.Contains(r.Path), "%s: duplicate result %q", label, r.Path)
+		seen.Add(r.Path)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/jezek/xgb/xproto"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/appctx"
+	"github.com/wow-look-at-my/go-containers/set"
 )
 
 // maxRunningApps caps one RunningApps snapshot; plugin payloads never
@@ -80,7 +81,7 @@ func (appSource) RunningApps() ([]appctx.AppInfo, bool) {
 		return nil, false
 	}
 	atoms := internAppAtoms(conn)
-	seen := make(map[int]bool)
+	seen := set.New[int]()
 	var apps []appctx.AppInfo
 	for i := 0; i+4 <= len(v) && len(apps) < maxRunningApps; i += 4 {
 		win := xproto.Window(xgb.Get32(v[i:]))
@@ -88,10 +89,10 @@ func (appSource) RunningApps() ([]appctx.AppInfo, bool) {
 			continue
 		}
 		info := windowAppInfo(conn, win, atoms)
-		if info.PID == 0 || seen[info.PID] {
+		if info.PID == 0 || seen.Contains(info.PID) {
 			continue
 		}
-		seen[info.PID] = true
+		seen.Add(info.PID)
 		apps = append(apps, info)
 	}
 	sort.Slice(apps, func(i, j int) bool {

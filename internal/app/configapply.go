@@ -21,6 +21,7 @@ import (
 	"reflect"
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/config"
+	"github.com/wow-look-at-my/go-containers/set"
 )
 
 // ApplyResult reports what one applyConfig pass did.
@@ -272,7 +273,7 @@ func (a *App) applyConfig(next *config.Config, origin string) ApplyResult {
 	a.cfgMu.Unlock()
 
 	var res ApplyResult
-	groups := make(map[string]bool)
+	groups := set.New[string]()
 	for _, s := range sectionAppliers {
 		if old != nil && !s.changed(old, next) {
 			continue
@@ -288,8 +289,8 @@ func (a *App) applyConfig(next *config.Config, origin string) ApplyResult {
 				failed = true
 			}
 		}
-		if s.group != "" && !groups[s.group] {
-			groups[s.group] = true
+		if s.group != "" && !groups.Contains(s.group) {
+			groups.Add(s.group)
 			if err := applyGroups[s.group](a, next); err != nil {
 				res.Errors = append(res.Errors, s.name+": "+err.Error())
 				failed = true

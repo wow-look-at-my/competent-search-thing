@@ -14,6 +14,7 @@ import (
 
 	"github.com/wow-look-at-my/competent-search-thing/internal/config"
 	"github.com/wow-look-at-my/competent-search-thing/internal/index"
+	"github.com/wow-look-at-my/go-containers/set"
 )
 
 // seedBaseline installs cfg as the applied-config baseline, the state
@@ -131,14 +132,14 @@ func TestApplyTableCoversEveryConfigSection(t *testing.T) {
 	// window.translucent is NOT excluded: the "window" section has a
 	// row, and the translucent knob's next-launch handling lives in
 	// applyConfig's ruled NextLaunch block.
-	excluded := map[string]bool{"rootsVersion": true, "$schema": true}
+	excluded := set.Of[string]("rootsVersion", "$schema")
 
-	rows := map[string]bool{}
-	subRows := map[string]bool{} // top-level keys applied at "key.sub" grain
+	rows := set.New[string]()
+	subRows := set.New[string]() // top-level keys applied at "key.sub" grain
 	for _, s := range sectionAppliers {
-		rows[s.name] = true
+		rows.Add(s.name)
 		if k, _, ok := strings.Cut(s.name, "."); ok {
-			subRows[k] = true
+			subRows.Add(k)
 		}
 	}
 
@@ -146,14 +147,13 @@ func TestApplyTableCoversEveryConfigSection(t *testing.T) {
 	for i := 0; i < ct.NumField(); i++ {
 		f := ct.Field(i)
 		tag, _, _ := strings.Cut(f.Tag.Get("json"), ",")
-		if tag == "" || tag == "-" || excluded[tag] {
+		if tag == "" || tag == "-" || excluded.Contains(tag) {
 			continue
 		}
-		if rows[tag] {
+		if rows.Contains(tag) {
 			continue // covered whole (one row diffs the section)
 		}
-		if !assert.True(t, subRows[tag],
-			"config section %q has no sectionAppliers row (live-apply is total; add an applier or an excluded ruling)", tag) {
+		if !assert.True(t, subRows.Contains(tag), "config section %q has no sectionAppliers row (live-apply is total; add an applier or an excluded ruling)", tag) {
 			continue
 		}
 		// Applied at per-knob grain: EVERY subfield needs its own row,
@@ -168,8 +168,7 @@ func TestApplyTableCoversEveryConfigSection(t *testing.T) {
 			if stag == "" || stag == "-" {
 				continue
 			}
-			assert.True(t, rows[tag+"."+stag],
-				"config knob %q has no sectionAppliers row while %q applies per-knob (the search.telemetry gap, PR #46)", tag+"."+stag, tag)
+			assert.True(t, rows.Contains(tag+"."+stag), "config knob %q has no sectionAppliers row while %q applies per-knob (the search.telemetry gap, PR #46)", tag+"."+stag, tag)
 		}
 	}
 }
