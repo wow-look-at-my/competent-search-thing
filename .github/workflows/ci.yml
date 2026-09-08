@@ -71,7 +71,7 @@ jobs:
         # above file rows + the flat selection rules).
         run: npm ci && npm run build && npm test
 
-      - uses: wow-look-at-my/go-toolchain@v1
+      - uses: wow-look-at-my/go-toolchain@master
         env:
           GOFLAGS: "-tags=webkit2_41,desktop,production"
         with:
@@ -188,7 +188,7 @@ jobs:
         working-directory: frontend
         run: npm ci && npm run build
 
-      - uses: wow-look-at-my/go-toolchain@v1
+      - uses: wow-look-at-my/go-toolchain@master
         env:
           GOFLAGS: "-tags=desktop,production"
         with:

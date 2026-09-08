@@ -105,6 +105,8 @@ github.com/wow-look-at-my/go-fs-tree-fast v0.0.0-20260908053029-30b42e38c1b8 h1:
 github.com/wow-look-at-my/go-fs-tree-fast v0.0.0-20260908053029-30b42e38c1b8/go.mod h1:uwoQearijxA4GbA8QBQeMCctiw473AqmJPF6A2ZLonw=
 github.com/wow-look-at-my/go-fs-tree-fast v0.0.0-20260908054949-c562421e2298 h1:jtwfvcLA18b+TKXCjAA56OTLtuxzge+3LT7Iwf9hKck=
 github.com/wow-look-at-my/go-fs-tree-fast v0.0.0-20260908054949-c562421e2298/go.mod h1:uwoQearijxA4GbA8QBQeMCctiw473AqmJPF6A2ZLonw=
+github.com/wow-look-at-my/go-fs-tree-fast v0.0.0-20260908063504-07655444d503 h1:0wYkf70M/ZFO0psGWCGEoGgAm2MTBz0UeD++XKEjB4Y=
+github.com/wow-look-at-my/go-fs-tree-fast v0.0.0-20260908063504-07655444d503/go.mod h1:uwoQearijxA4GbA8QBQeMCctiw473AqmJPF6A2ZLonw=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=
 github.com/xyproto/randomstring v1.0.5/go.mod h1:rgmS5DeNXLivK7YprL0pY+lTuhNQW3iGxZ18UQApw/E=
 go.yaml.in/yaml/v3 v3.0.4/go.mod h1:DhzuOOF2ATzADvBadXxruRBLzYTpT36CKvDb3+aBEFg=
