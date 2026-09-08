@@ -232,7 +232,9 @@ func TestWatcherBeforeGates(t *testing.T) {
 	}
 	before, ok = a.watcherBefore()
 	require.True(t, ok)
-	require.Equal(t, map[uint32]bool{7: true, 9: true}, before)
+	require.Len(t, before, 2)
+	require.True(t, before[7])
+	require.True(t, before[9])
 }
 
 func TestDispatchOpenSkipsEmptyExpandedExec(t *testing.T) {
