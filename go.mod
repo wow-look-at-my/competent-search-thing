@@ -54,7 +54,7 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
-	github.com/wow-look-at-my/go-fs-tree-fast v0.0.0-20260908063504-07655444d503 // go-toolchain:auto-branch
+	github.com/wow-look-at-my/go-fs-tree-fast v0.0.0-20260908063731-e43576231e88 // go-toolchain:auto-branch
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/text v0.37.0 // indirect

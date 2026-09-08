@@ -3,6 +3,7 @@ package index
 import (
 	"bufio"
 	"context"
+	"github.com/stretchr/testify/require"
 	"os"
 	"runtime"
 	"strconv"
@@ -50,25 +51,20 @@ func BenchmarkWalkCost(b *testing.B) {
 	runtime.ReadMemStats(&m0)
 	io0 := readProcIO(b)
 	var ru0, ru1 syscall.Rusage
-	require := func(err error) {
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-	require(syscall.Getrusage(syscall.RUSAGE_SELF, &ru0))
+	require.Nil(b, syscall.Getrusage(syscall.RUSAGE_SELF, &ru0))
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		st := NewStore()
 		stats, err := Walk(context.Background(), st, []string{root}, excludes, nil)
-		require(err)
+		require.Nil(b, err)
 		indexed, dirs = stats.Indexed, stats.Dirs
 		last = st
 	}
 	b.StopTimer()
 
-	require(syscall.Getrusage(syscall.RUSAGE_SELF, &ru1))
+	require.Nil(b, syscall.Getrusage(syscall.RUSAGE_SELF, &ru1))
 	io1 := readProcIO(b)
 	runtime.ReadMemStats(&m1)
 
